@@ -17,9 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <wayland-server-core.h>
 
 #include "recon_audio.h"
+#include "recon_loop.h"
 
 #ifdef RECON_HAVE_ALSA
 #include <alsa/asoundlib.h>
@@ -54,7 +54,7 @@ const char *recon_audio_last_error(void) {
 
 #ifndef RECON_HAVE_ALSA
 
-void recon_audio_init(struct wl_event_loop *loop) { (void)loop; }
+void recon_audio_init(struct recon_loop *loop) { (void)loop; }
 void recon_audio_finish(void) { }
 
 bool recon_audio_available(char *why_out, size_t why_size) {
@@ -104,14 +104,14 @@ struct recon_audio_stream {
     int16_t buffer[RECON_AUDIO_FRAMES_MAX * 2];
 };
 
-static struct wl_event_loop *g_loop;
-static struct wl_event_source *g_timer;
+static struct recon_loop *g_loop;
+static struct recon_timer *g_timer;
 static struct recon_audio_stream *g_stream;
 static char g_device[128];
 static bool g_looked;
 static bool g_have_device;
 
-void recon_audio_init(struct wl_event_loop *loop) {
+void recon_audio_init(struct recon_loop *loop) {
     g_loop = loop;
 }
 
@@ -239,15 +239,15 @@ static void top_up(struct recon_audio_stream *s) {
     }
 }
 
-static int on_timer(void *data) {
+static void on_timer(void *data) {
     (void)data;
     if (g_stream != NULL) {
         top_up(g_stream);
     }
     if (g_timer != NULL) {
-        wl_event_source_timer_update(g_timer, TOP_UP_MS);
+        recon_timer_after(g_timer, TOP_UP_MS);
     }
-    return 0;
+    return;
 }
 
 /* --- Starting one --- */
@@ -312,10 +312,10 @@ struct recon_audio_stream *recon_audio_play(int rate, int channels,
     g_stream = s;
 
     if (g_timer == NULL && g_loop != NULL) {
-        g_timer = wl_event_loop_add_timer(g_loop, on_timer, NULL);
+        g_timer = recon_timer_create(g_loop, on_timer, NULL);
     }
     if (g_timer != NULL) {
-        wl_event_source_timer_update(g_timer, TOP_UP_MS);
+        recon_timer_after(g_timer, TOP_UP_MS);
     }
 
     /* Filled once immediately, so the first sound is not a top-up away. */
@@ -392,7 +392,7 @@ void recon_audio_finish(void) {
         recon_audio_stop(g_stream);
     }
     if (g_timer != NULL) {
-        wl_event_source_remove(g_timer);
+        recon_timer_destroy(g_timer);
         g_timer = NULL;
     }
     g_loop = NULL;

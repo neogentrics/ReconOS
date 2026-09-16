@@ -10,8 +10,6 @@
 #include <string.h>
 #include <strings.h>   /* strcasecmp */
 
-#include <wlr/types/wlr_scene.h>
-#include <wlr/util/log.h>
 
 #include "ReconOS.h"
 #include "recon_access.h"
@@ -20,12 +18,13 @@
 #include "recon_icon_gen.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_loop.h"
 #include "recon_modules.h"
 #include "recon_error.h"
 #include "recon_firewall.h"
 #include "recon_registry.h"
 #include "recon_shell.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 #include "recon_widget.h"
@@ -217,7 +216,7 @@ static const struct update_step UPDATE_STEPS[] = {
 
 /* Defined with the rest of the update flow, further down; the timer that
  * drives it is created before that. */
-static int update_tick(void *data);
+static void update_tick(void *data);
 
 /*
  * --- The splash ---
@@ -462,7 +461,7 @@ static const struct boot_step BOOT_STEPS[] = {
 
 #define BOOT_STEP_COUNT ((int)(sizeof(BOOT_STEPS) / sizeof(BOOT_STEPS[0])))
 
-static int boot_tick(void *data);
+static void boot_tick(void *data);
 
 
 /*
@@ -519,7 +518,7 @@ struct recon_session {
     char stop_advice[256];
     /* How far the "collecting" counter has got, 0 to 100. */
     int stop_progress;
-    struct wl_event_source *stop_timer;
+    struct recon_timer *stop_timer;
     bool signed_in_flag;
 
     /* Setup and login share these; only one is showing at a time. */
@@ -575,13 +574,13 @@ struct recon_session {
     /* And whether any of them did, so the login screen can say so once
      * rather than the splash saying it and going away. */
     bool boot_had_problem;
-    struct wl_event_source *boot_timer;
+    struct recon_timer *boot_timer;
 
     /* The update screen: which step, what it found, and where it came from. */
     int update_step;
     char update_from[32];
     char update_detail[96];
-    struct wl_event_source *update_timer;
+    struct recon_timer *update_timer;
 
     /* Which account the login screen has selected. */
     int account;
@@ -2202,7 +2201,7 @@ struct recon_session *recon_session_create(struct recon_server *server,
     session->stage = STAGE_DONE;
     session->hover = -1;
 
-    session->panel = recon_panel_create(server->layer_system, width, height);
+    session->panel = recon_server_system_panel(server, width, height);
     if (session->panel == NULL) {
         free(session);
         return NULL;
@@ -2227,9 +2226,9 @@ struct recon_session *recon_session_create(struct recon_server *server,
      * font every surviving window was still drawing with. */
     session->heading = recon_font_system(recon_font_line_height(font) + 10);
 
-    struct wl_event_loop *loop = wl_display_get_event_loop(server->wl_display);
-    session->update_timer = wl_event_loop_add_timer(loop, update_tick, session);
-    session->boot_timer = wl_event_loop_add_timer(loop, boot_tick, session);
+    struct recon_loop *loop = recon_server_loop(server);
+    session->update_timer = recon_timer_create(loop, update_tick, session);
+    session->boot_timer = recon_timer_create(loop, boot_tick, session);
 
     return session;
 }
@@ -2239,10 +2238,10 @@ void recon_session_destroy(struct recon_session *session) {
         return;
     }
     if (session->boot_timer != NULL) {
-        wl_event_source_remove(session->boot_timer);
+        recon_timer_destroy(session->boot_timer);
     }
     if (session->update_timer != NULL) {
-        wl_event_source_remove(session->update_timer);
+        recon_timer_destroy(session->update_timer);
     }
     recon_panel_destroy(session->panel);
     free(session);
@@ -2276,11 +2275,11 @@ static void after_update(struct recon_session *session) {
  */
 #define STOP_TICK_MS 25
 
-static int stop_tick(void *data) {
+static void stop_tick(void *data) {
     struct recon_session *session = data;
 
     if (session->stage != STAGE_STOPPED) {
-        return 0;
+        return;
     }
 
     if (session->stop_progress < 100) {
@@ -2289,16 +2288,16 @@ static int stop_tick(void *data) {
             session->stop_progress = 100;
         }
         recon_session_refresh(session);
-        wl_event_source_timer_update(session->stop_timer, STOP_TICK_MS);
+        recon_timer_after(session->stop_timer, STOP_TICK_MS);
     }
-    return 0;
+    return;
 }
 
-static int boot_tick(void *data) {
+static void boot_tick(void *data) {
     struct recon_session *session = data;
 
     if (session->stage != STAGE_BOOTING) {
-        return 0;
+        return;
     }
 
     session->boot_phase++;
@@ -2314,7 +2313,7 @@ static int boot_tick(void *data) {
 
         if (session->boot_step >= BOOT_STEP_COUNT) {
             begin_after_splash(session);
-            return 0;
+            return;
         }
 
         int found = -1;
@@ -2357,8 +2356,8 @@ static int boot_tick(void *data) {
     }
 
     recon_session_refresh(session);
-    wl_event_source_timer_update(session->boot_timer, BOOT_TICK_MS);
-    return 0;
+    recon_timer_after(session->boot_timer, BOOT_TICK_MS);
+    return;
 }
 
 void recon_session_begin(struct recon_session *session) {
@@ -2386,20 +2385,20 @@ void recon_session_begin(struct recon_session *session) {
     session->boot_phase = 0;
     session->boot_detail[0] = '\0';
     go_to(session, STAGE_BOOTING);
-    wl_event_source_timer_update(session->boot_timer, BOOT_TICK_MS);
+    recon_timer_after(session->boot_timer, BOOT_TICK_MS);
 }
 
-static int update_tick(void *data) {
+static void update_tick(void *data) {
     struct recon_session *session = data;
 
     if (session->stage != STAGE_UPDATING) {
-        return 0;
+        return;
     }
 
     int index = session->update_step;
     if (index >= UPDATE_STEP_COUNT) {
         after_update(session);
-        return 0;
+        return;
     }
 
     /*
@@ -2425,8 +2424,8 @@ static int update_tick(void *data) {
     session->update_step++;
     recon_session_refresh(session);
 
-    wl_event_source_timer_update(session->update_timer, UPDATE_STEP_MS);
-    return 0;
+    recon_timer_after(session->update_timer, UPDATE_STEP_MS);
+    return;
 }
 
 /*
@@ -2487,7 +2486,7 @@ static void begin_after_last_stop(struct recon_session *session) {
         go_to(session, STAGE_UPDATING);
 
         if (session->update_timer != NULL) {
-            wl_event_source_timer_update(session->update_timer,
+            recon_timer_after(session->update_timer,
                 UPDATE_STEP_MS);
         } else {
             /* No timer means no way to advance it, so do not show a screen
@@ -3027,7 +3026,7 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
 static void show_stop_screen(struct recon_server *server,
         const struct recon_error_info *info, const char *detail) {
     struct recon_session *session =
-        (server != NULL) ? recon_shell_session(server->shell) : NULL;
+        (server != NULL) ? recon_shell_session(recon_server_shell(server)) : NULL;
 
     if (session == NULL || session->panel == NULL || session->font == NULL) {
         fprintf(stderr, "\nReconOS has stopped.\n\n  %s  %s\n\n%s\n%s%s\n\n",
@@ -3051,20 +3050,19 @@ static void show_stop_screen(struct recon_server *server,
      * walk the session on to the login while the stop is being read.
      */
     if (session->boot_timer != NULL) {
-        wl_event_source_timer_update(session->boot_timer, 0);
+        recon_timer_after(session->boot_timer, 0);
     }
     if (session->update_timer != NULL) {
-        wl_event_source_timer_update(session->update_timer, 0);
+        recon_timer_after(session->update_timer, 0);
     }
 
     session->stage = STAGE_STOPPED;
     session->stop_progress = 0;
 
-    struct wl_event_loop *loop =
-        wl_display_get_event_loop(session->server->wl_display);
-    session->stop_timer = wl_event_loop_add_timer(loop, stop_tick, session);
+    struct recon_loop *loop = recon_server_loop(session->server);
+    session->stop_timer = recon_timer_create(loop, stop_tick, session);
     if (session->stop_timer != NULL) {
-        wl_event_source_timer_update(session->stop_timer, STOP_TICK_MS);
+        recon_timer_after(session->stop_timer, STOP_TICK_MS);
     } else {
         /* No timer means nothing would ever finish the count, and a screen
          * stuck at nought per cent with no way out is worse than one that

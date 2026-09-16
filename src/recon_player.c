@@ -32,8 +32,9 @@
 #include "recon_codec.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_loop.h"
 #include "recon_movie.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_player.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
@@ -131,8 +132,8 @@ struct recon_player {
      * acquire a branch for the sake of the video one.
      */
     struct recon_movie *movie;
-    struct wl_event_source *ticker;
-    struct wl_event_loop *loop;
+    struct recon_timer *ticker;
+    struct recon_loop *loop;
 
     /* Where the picture was drawn, so the size it is decoded at can follow the
      * window rather than the file. */
@@ -439,19 +440,19 @@ static double clock_seconds(struct recon_player *p) {
  * yes, and a window that redrew on every tick would spend most of its effort
  * compositing a picture nobody had changed.
  */
-static int on_tick(void *data) {
+static void on_tick(void *data) {
     struct recon_player *p = data;
     int again = (p->movie != NULL) ? VIDEO_TICK_MS : AUDIO_TICK_MS;
 
     if (p->stream == NULL && p->movie == NULL) {
-        return 0;                      /* nothing is playing */
+        return;                      /* nothing is playing */
     }
 
     if (p->stream != NULL && recon_audio_paused(p->stream)) {
         /* Paused holds the picture where it is rather than freezing the clock
          * and letting it lurch forward on resume. */
-        wl_event_source_timer_update(p->ticker, again);
-        return 0;
+        recon_timer_after(p->ticker, again);
+        return;
     }
 
     bool changed = false;
@@ -477,13 +478,13 @@ static int on_tick(void *data) {
     if (changed) {
         recon_appwin_refresh(p->win);
     }
-    wl_event_source_timer_update(p->ticker, again);
-    return 0;
+    recon_timer_after(p->ticker, again);
+    return;
 }
 
 static void stop_ticking(struct recon_player *p) {
     if (p->ticker != NULL) {
-        wl_event_source_remove(p->ticker);
+        recon_timer_destroy(p->ticker);
         p->ticker = NULL;
     }
 }
@@ -492,9 +493,9 @@ static void start_ticking(struct recon_player *p) {
     if (p->loop == NULL || p->ticker != NULL) {
         return;
     }
-    p->ticker = wl_event_loop_add_timer(p->loop, on_tick, p);
+    p->ticker = recon_timer_create(p->loop, on_tick, p);
     if (p->ticker != NULL) {
-        wl_event_source_timer_update(p->ticker,
+        recon_timer_after(p->ticker,
             (p->movie != NULL) ? VIDEO_TICK_MS : AUDIO_TICK_MS);
     }
 }
@@ -1228,7 +1229,7 @@ struct recon_appwin *recon_player_create(struct recon_server *server,
     }
 
     p->font = font;
-    p->loop = wl_display_get_event_loop(server->wl_display);
+    p->loop = recon_server_loop(server);
     p->playing = -1;
     p->selected = 0;
     p->volume = 16;

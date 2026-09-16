@@ -345,7 +345,7 @@ const char *recon_net_machine_name(void) {
 
 /* --- Reaching --- */
 
-struct wl_event_loop *recon_net_event_loop(void) {
+struct recon_loop *recon_net_loop(void) {
     return g_loop;
 }
 

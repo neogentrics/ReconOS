@@ -83,6 +83,21 @@ void _exit(int code) __attribute__((noreturn));
 
 /* --- declared, and not yet linkable -------------------------------------- */
 
+/*
+ * Which session a process belongs to.
+ *
+ * ReconOS has no sessions to belong to -- there is one login and no notion of
+ * a process group leader -- so this is **declared and not defined**, which is
+ * this header's own rule for exactly this case: a caller fails to link,
+ * naming `getsid`, rather than receiving a plausible wrong number.
+ *
+ * The plausible wrong number matters here. `src/recon_taskmgr.c` asks
+ * `getsid(0)` to find out which session is its own, and then shows every
+ * process in *other* sessions differently. A stub answering 0 would make every
+ * process on the machine look like somebody else's.
+ */
+pid_t getsid(pid_t pid);
+
 int unlink(const char *path);
 int rmdir(const char *path);
 int access(const char *path, int how);

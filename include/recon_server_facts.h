@@ -98,4 +98,47 @@ struct recon_panel *recon_server_window_panel(struct recon_server *server,
  */
 void recon_damage_all(struct recon_server *server);
 
+/*
+ * Something for the system's own screens to draw on -- the login screen, the
+ * shutdown screen.
+ *
+ * The sibling of `recon_server_window_panel`, and separate because the *layer*
+ * differs: a login screen is above every window and a window is not. Which
+ * layer is a compositor idea, which is exactly why neither caller should be
+ * reaching for it.
+ */
+struct recon_panel *recon_server_system_panel(struct recon_server *server,
+    int width, int height);
+
+/*
+ * The loop to wait on.
+ *
+ * `include/recon_loop.h` is what a program does with it, and this is where one
+ * comes from when there is a compositor underneath. It was
+ * `wl_display_get_event_loop(server->wl_display)` at four call sites, which is
+ * two compositor ideas deep for something whose only use is "in 250
+ * milliseconds, call me".
+ *
+ * That reach is what kept six files -- eight thousand lines of session, player,
+ * photos, task manager, clock and audio -- off a compiler with no Linux under
+ * them.
+ */
+struct recon_loop *recon_server_loop(struct recon_server *server);
+
+/*
+ * Stop, and start again.
+ *
+ * Declared here as well as in `recon_server.h`, like `recon_damage_all`: one
+ * function with one definition, and what changes is which header a caller
+ * needs. The login screen offering Shut Down is not a compositor thing; it
+ * only looks like one because `main.c` is where the compositor happens to be.
+ *
+ * `recon_restart` ends the process with a status the thing that started it
+ * knows means "again" -- `scripts/run.sh` and the systemd unit both know it.
+ * A compositor that tore itself down and rebuilt in place would be a great
+ * deal of machinery for something its parent does trivially.
+ */
+void recon_quit(struct recon_server *server);
+void recon_restart(struct recon_server *server);
+
 #endif /* RECON_SERVER_FACTS_H */

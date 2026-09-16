@@ -9,6 +9,101 @@ way for the two to disagree.
 
 ---
 
+## v0.4.58 — waiting, as its own thing
+
+`scripts/port-blockers.sh` said it in one line last version: six files, 8,155
+lines, and between them they used **exactly one thing** from the compositor —
+the event loop. `recon_session.c` is three thousand lines about signing in and
+shutting down and mentioned wayland twice. `recon_player.c` is twelve hundred
+lines about playing a film and mentioned it not at all; it only held a
+`wl_event_source` so a frame could arrive on time.
+
+`include/recon_loop.h` is the seam, and it is the fifth this project has drawn
+— after the allocator, the screen, the panel and the kernel.
+
+**62 of 85 sources now build with no libc under them**, up from 58. Session,
+task manager, photos and player are among them.
+
+### The interface was written to what the callers already did
+
+A timer is **one-shot** and re-armed by its own callback, and **zero disarms**.
+That is not a simplification of wayland's — it *is* wayland's, and more to the
+point it is what all six files already assumed. `on_tick` in `recon_player.c`
+ends by re-arming itself, and so do the audio top-up, the boot progress and the
+task manager's refresh.
+
+Making it repeating instead would have been the quiet kind of wrong: every
+caller re-arms, so **every rate in the desktop would have doubled** — which
+reads as a machine that feels busy rather than one that is broken.
+
+### Two things it deliberately does not do
+
+**It does not read a clock.** `recon_loop_tick` takes the time. That is the
+same choice `screen.c` and `shell_frame.c` make, and it is what lets every
+interesting question be asked from a test rather than by watching a machine and
+counting: does it fire late, does it fire twice, does a callback that re-arms
+itself run away.
+
+**It does not poll.** There is no `poll` in the interface, because ReconOS has
+none — putting one in the shape of the header would have been describing a
+mechanism that does not exist, and the first implementation would have had to
+invent it. Whoever owns the loop knows how it finds out and says so with
+`recon_loop_readable`.
+
+### Two implementations, which is the point
+
+`src/recon_loop.c` is a fixed table and no system call. `src/recon_loop_wl.c`
+wraps the compositor's, and its mapping is close **because wayland's shape was
+the right one to copy** — a seam that had to translate between two different
+ideas of a timer would be a seam with a bug in it.
+
+The wayland half refuses the driving calls rather than omitting them, so a
+caller that wandered onto the wrong half gets a null pointer rather than a link
+error somebody silences by adding a file. And `recon_timer_is_armed` answers
+**-1** there, because wayland does not say and a guess would be worse than an
+admission.
+
+### 57 checks, 14 of 14 mutations caught — and one of them deleted a guard
+
+The first pass caught 12. One miss was a bad anchor. The other was the
+interesting one.
+
+**The clock-went-backwards guard was guarding against nothing.** Its comment
+said unsigned arithmetic would wrap and every timer would come due in half a
+billion years. Deleting it changed no output — so I looked at why, instead of
+writing a test that would have made it appear load-bearing. **Every use of the
+time is an addition or a comparison**, and the one subtraction is already
+guarded by the check above it. The failure it described cannot happen here.
+
+And it cost something real: with the clamp, a timer armed *after* a backward
+jump got a deadline relative to the old time and waited for the clock to catch
+up — fifty seconds late for a fifty-second jump. Gone, and the check that
+replaces it holds the behaviour that matters: **a timer is armed relative to
+the clock its caller is reading.**
+
+That is the third comment this session to claim a guard and have none. The rule
+holds, and so does the way of finding out: delete the line and see whether
+anything notices.
+
+### Four things the port turned up on the way
+
+- **`recon_clock.c` reads before it judges now.** Its handler took a mask and
+  decided *"the time server did not answer"* before reading anything. Reading
+  first tells apart the two cases that matter — nothing came back, and
+  something came back that is not SNTP — so the seam having no mask made the
+  diagnosis **sharper**, not poorer.
+- **`return 0;` in callbacks that now return nothing**, in five files. The
+  ordinary build reports that as a warning and lets it through; the
+  freestanding check refuses it. Stricter, and right to be.
+- **`recon_taskmgr.c` used `typeof`**, which is a GNU extension and not C11.
+  `__typeof__` is the spelling that is legal in strict mode. Pre-existing, and
+  invisible until something compiled that file strictly.
+- **`getsid` is declared and not defined** in `<unistd.h>` now. ReconOS has no
+  sessions, and a stub answering 0 would make the task manager show every
+  process on the machine as somebody else's.
+
+---
+
 ## v0.4.57 — what is left of the port, measured
 
 `scripts/check-userland.sh` says how many sources build with no Linux under

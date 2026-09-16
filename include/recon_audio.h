@@ -81,7 +81,12 @@ typedef void (*recon_audio_done_fn)(void *user);
  * The event loop is where the topping-up happens, so it is needed here rather
  * than at every open.
  */
-void recon_audio_init(struct wl_event_loop *loop);
+/* Named here so that every declaration of it is the same type. A struct
+ * introduced inside a parameter list is scoped to that parameter list, which
+ * the compiler reports and which turns one function into two. */
+struct recon_loop;
+
+void recon_audio_init(struct recon_loop *loop);
 void recon_audio_finish(void);
 
 /*

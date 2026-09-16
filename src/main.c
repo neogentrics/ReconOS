@@ -3071,7 +3071,7 @@ int main(int argc, char **argv) {
      * with the other subsystems above, because those run before the display
      * exists and this one cannot.
      */
-    recon_audio_init(wl_display_get_event_loop(server.wl_display));
+    recon_audio_init(recon_server_loop(&server));
 
     server.backend = wlr_backend_autocreate(server.wl_display, NULL);
     if (server.backend == NULL) {

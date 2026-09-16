@@ -187,6 +187,10 @@ src/recon_firewall.c
 src/recon_fonts.c
 src/recon_appwin.c
 src/recon_fs.c
+src/recon_photos.c
+src/recon_player.c
+src/recon_session.c
+src/recon_taskmgr.c
 src/recon_media.c
 src/recon_form.c
 src/recon_html.c

@@ -21,10 +21,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <wayland-server-core.h>
 
 #include "ReconOS.h"
 #include "recon_clock.h"
+#include "recon_loop.h"
 #include "recon_net.h"
 #include "recon_registry.h"
 
@@ -93,7 +93,7 @@ static struct {
     char detail[192];
     int64_t checked_at;      /* when, in our own seconds */
 
-    struct wl_event_source *source;
+    struct recon_watch *source;
     int fd;
 } g_sync = { .fd = -1 };
 
@@ -451,7 +451,7 @@ bool recon_clock_can_check(void) {
 
 static void sync_finish(void) {
     if (g_sync.source != NULL) {
-        wl_event_source_remove(g_sync.source);
+        recon_watch_destroy(g_sync.source);
         g_sync.source = NULL;
     }
     if (g_sync.fd >= 0) {
@@ -469,25 +469,39 @@ static void sync_finish(void) {
  * ReconOS has no oscillator to discipline -- it is asking what the time is,
  * once, because somebody pressed a button.
  */
-static int sync_readable(int fd, uint32_t mask, void *data) {
+static void sync_readable(int fd, void *data) {
     (void)data;
 
-    if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+    /*
+     * --- No mask, and the answer is better for it ---
+     *
+     * `include/recon_loop.h` reports a hangup or an error as readable, on the
+     * argument that a caller reads, gets nothing, and finds out the same way.
+     * This is the only caller of that interface, so the argument had to
+     * survive meeting it.
+     *
+     * It survives and sharpens. The version with a mask decided **before
+     * reading**, so it could tell apart exactly two things: a flag was set, or
+     * it was not. Reading first tells apart the two that matter -- *nothing
+     * came back* and *something came back that is not SNTP* -- which is what
+     * the two messages below actually say.
+     */
+    unsigned char packet[48];
+    ssize_t got = recv(fd, packet, sizeof(packet), 0);
+
+    if (got <= 0) {
         g_sync.state = RECON_CLOCK_UNREACHABLE;
         snprintf(g_sync.detail, sizeof(g_sync.detail),
             "The time server did not answer.");
         sync_finish();
-        return 0;
+        return;
     }
-
-    unsigned char packet[48];
-    ssize_t got = recv(fd, packet, sizeof(packet), 0);
     if (got < (ssize_t)sizeof(packet)) {
         g_sync.state = RECON_CLOCK_UNREACHABLE;
         snprintf(g_sync.detail, sizeof(g_sync.detail),
             "The time server sent something this does not understand.");
         sync_finish();
-        return 0;
+        return;
     }
 
     /* Transmit timestamp: seconds since 1900, big-endian, at byte 40. */
@@ -500,7 +514,7 @@ static int sync_readable(int fd, uint32_t mask, void *data) {
         snprintf(g_sync.detail, sizeof(g_sync.detail),
             "The time server gave a time before this system existed.");
         sync_finish();
-        return 0;
+        return;
     }
 
     int64_t theirs = (int64_t)(seconds_1900 - NTP_EPOCH_OFFSET);
@@ -530,7 +544,7 @@ static int sync_readable(int fd, uint32_t mask, void *data) {
 
     g_sync.checked_at = ours;
     sync_finish();
-    return 0;
+    return;
 }
 
 bool recon_clock_check(char *why_out, size_t why_size) {
@@ -599,7 +613,7 @@ bool recon_clock_check(char *why_out, size_t why_size) {
         return false;
     }
 
-    struct wl_event_loop *loop = recon_net_event_loop();
+    struct recon_loop *loop = recon_net_loop();
     if (loop == NULL) {
         close(fd);
         recon_text_copy(why_out, why_size, "Networking is not up.");
@@ -608,8 +622,7 @@ bool recon_clock_check(char *why_out, size_t why_size) {
 
     sync_finish();
     g_sync.fd = fd;
-    g_sync.source = wl_event_loop_add_fd(loop, fd, WL_EVENT_READABLE,
-        sync_readable, NULL);
+    g_sync.source = recon_watch_readable(loop, fd, sync_readable, NULL);
     g_sync.state = RECON_CLOCK_ASKING;
     snprintf(g_sync.detail, sizeof(g_sync.detail), "Asking %s...", server);
     return true;

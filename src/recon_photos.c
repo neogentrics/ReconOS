@@ -14,6 +14,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "recon_loop.h"
 #include "stb_image.h"
 
 #include "ReconOS.h"
@@ -24,7 +25,7 @@
 #include "recon_photos.h"
 #include "recon_image.h"
 #include "recon_png.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_shell.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
@@ -134,7 +135,7 @@ struct recon_photos {
     /* Kept rather than reached for through the window, because tearing down
      * has to cancel a question and must not depend on what is still alive. */
     struct recon_shell *shell;
-    struct wl_event_source *read_timer;
+    struct recon_timer *read_timer;
 
     /* Opened the first time somebody reads, and held. Parsing a typeface is
      * the expensive part of a small read, and it does not change. */
@@ -168,7 +169,7 @@ static void set_message(struct recon_photos *ph, bool warning,
 }
 
 /* Whether the name ends in something stb_image can decode. */
-static int on_read_tick(void *user);
+static void on_read_tick(void *user);
 static void begin_reading(struct recon_photos *ph);
 static void on_size_answer(void *user, int choice);
 
@@ -737,7 +738,7 @@ static void handle_result(struct recon_photos *ph, struct recon_ocr_result *r) {
         "guess", question, CHOICES, 2, on_guess_answer);
 }
 
-static int on_read_tick(void *user) {
+static void on_read_tick(void *user) {
     struct recon_photos *ph = user;
 
     int asked_for = ph->reading_at;
@@ -746,7 +747,7 @@ static int on_read_tick(void *user) {
     if (ph->pixels == NULL || asked_for != ph->at) {
         set_message(ph, true, "The picture changed, so nothing was read.");
         recon_appwin_refresh(ph->win);
-        return 0;
+        return;
     }
 
     if (ph->ocr == NULL) {
@@ -761,7 +762,7 @@ static int on_read_tick(void *user) {
         set_message(ph, true, "There is no typeface on this machine to read "
             "with.");
         recon_appwin_refresh(ph->win);
-        return 0;
+        return;
     }
 
     struct recon_ocr_result result;
@@ -770,12 +771,12 @@ static int on_read_tick(void *user) {
          * wrong and this does not. */
         set_message(ph, true, "%s", recon_ocr_match_last_error());
         recon_appwin_refresh(ph->win);
-        return 0;
+        return;
     }
 
     handle_result(ph, &result);
     recon_appwin_refresh(ph->win);
-    return 0;
+    return;
 }
 
 static void begin_reading(struct recon_photos *ph) {
@@ -786,7 +787,7 @@ static void begin_reading(struct recon_photos *ph) {
     set_message(ph, false, "Reading.");
     recon_appwin_refresh(ph->win);
 
-    wl_event_source_timer_update(ph->read_timer, READ_SETTLE_MS);
+    recon_timer_after(ph->read_timer, READ_SETTLE_MS);
 }
 
 static void on_size_answer(void *user, int choice) {
@@ -1112,7 +1113,7 @@ static void photos_destroy(void *user) {
         recon_ocr_result_free(&ph->held);
     }
     if (ph->read_timer != NULL) {
-        wl_event_source_remove(ph->read_timer);
+        recon_timer_destroy(ph->read_timer);
     }
     if (ph->ocr != NULL) {
         recon_ocr_font_close(ph->ocr);
@@ -1170,7 +1171,7 @@ struct recon_appwin *recon_photos_create(struct recon_server *server,
         return NULL;
     }
 
-    ph->shell = server->shell;
+    ph->shell = recon_server_shell(server);
 
     /*
      * Named after the window exists, not while it is being loaded.
@@ -1182,8 +1183,8 @@ struct recon_appwin *recon_photos_create(struct recon_server *server,
      * arrow keys and the file dialog call and those do have a window.
      */
     retitle(ph);
-    ph->read_timer = wl_event_loop_add_timer(
-        wl_display_get_event_loop(server->wl_display), on_read_tick, ph);
+    ph->read_timer = recon_timer_create(recon_server_loop(server),
+        on_read_tick, ph);
 
     return ph->win;
 }

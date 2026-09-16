@@ -158,7 +158,9 @@ enum recon_net_result recon_net_resolve(const char *host, char *out,
  * check, so far -- and would otherwise need the loop passed down to it
  * separately from wherever the server is. NULL before `recon_net_init`.
  */
-struct wl_event_loop *recon_net_event_loop(void);
+struct recon_loop;
+
+struct recon_loop *recon_net_loop(void);
 
 /*
  * Ask whether a host answers on a port, and call back when the answer is

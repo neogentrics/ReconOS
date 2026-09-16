@@ -17,15 +17,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <wayland-server-core.h>
-#include <wlr/util/log.h>
 
 #include "ReconOS.h"
 #include "recon_apps.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
+#include "recon_loop.h"
 #include "recon_procinfo.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_service.h"
 #include "recon_modules.h"
 #include "recon_shell.h"
@@ -240,7 +239,7 @@ struct recon_taskmgr {
     bool running_task;
     struct recon_edit task_name;
 
-    struct wl_event_source *timer;
+    struct recon_timer *timer;
     char status[128];
 };
 
@@ -333,12 +332,12 @@ static void sample(struct recon_taskmgr *tm) {
     update_status(tm);
 }
 
-static int on_timer(void *data) {
+static void on_timer(void *data) {
     struct recon_taskmgr *tm = data;
     sample(tm);
     recon_appwin_refresh(tm->win);
-    wl_event_source_timer_update(tm->timer, REFRESH_MS);
-    return 0;
+    recon_timer_after(tm->timer, REFRESH_MS);
+    return;
 }
 
 /* Kernel workers are not programs ReconOS started or can act on. */
@@ -888,10 +887,10 @@ static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
     int count = 0;
 
     if (tm->tab == TAB_USERS) {
-        buttons[count++] = (typeof(buttons[0])){ "Manage Accounts",
+        buttons[count++] = (__typeof__(buttons[0])){ "Manage Accounts",
             HIT_MANAGE_USERS };
-        buttons[count++] = (typeof(buttons[0])){ "Disconnect", HIT_DISCONNECT };
-        buttons[count++] = (typeof(buttons[0])){ "Run New Task", HIT_RUN_TASK };
+        buttons[count++] = (__typeof__(buttons[0])){ "Disconnect", HIT_DISCONNECT };
+        buttons[count++] = (__typeof__(buttons[0])){ "Run New Task", HIT_RUN_TASK };
     } else if (tm->tab == TAB_SERVICES) {
         /*
          * Start or Stop, not both: one of the two is always meaningless for
@@ -902,15 +901,15 @@ static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
         bool have = tm->selected_row >= 0 &&
             recon_service_at(tm->selected_row, &svc);
 
-        buttons[count++] = (typeof(buttons[0])){ "Restart", HIT_SVC_RESTART };
+        buttons[count++] = (__typeof__(buttons[0])){ "Restart", HIT_SVC_RESTART };
         if (have && svc.state == RECON_SERVICE_RUNNING) {
-            buttons[count++] = (typeof(buttons[0])){ "Stop", HIT_SVC_STOP };
+            buttons[count++] = (__typeof__(buttons[0])){ "Stop", HIT_SVC_STOP };
         } else {
-            buttons[count++] = (typeof(buttons[0])){ "Start", HIT_SVC_START };
+            buttons[count++] = (__typeof__(buttons[0])){ "Start", HIT_SVC_START };
         }
     } else {
-        buttons[count++] = (typeof(buttons[0])){ "End Task", HIT_END_TASK };
-        buttons[count++] = (typeof(buttons[0])){ "Run New Task", HIT_RUN_TASK };
+        buttons[count++] = (__typeof__(buttons[0])){ "End Task", HIT_END_TASK };
+        buttons[count++] = (__typeof__(buttons[0])){ "Run New Task", HIT_RUN_TASK };
     }
 
     int bx = x + w - PADDING;
@@ -1203,7 +1202,7 @@ static void run_typed_task(struct recon_taskmgr *tm) {
     tm->running_task = false;
     recon_edit_end(&tm->task_name);
 
-    recon_shell_open_named(tm->server->shell, found);
+    recon_shell_open_named(recon_server_shell(tm->server), found);
     snprintf(tm->status, sizeof(tm->status), "Started '%s'.", found);
 }
 
@@ -1419,7 +1418,7 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
 
     case HIT_MANAGE_USERS:
         /* This one is real: it is where accounts are managed. */
-        recon_shell_open_named(tm->server->shell, "Control Panel");
+        recon_shell_open_named(recon_server_shell(tm->server), "Control Panel");
         snprintf(tm->status, sizeof(tm->status), "Opened the Control Panel.");
         return true;
     case HIT_SORT_NAME:
@@ -1499,12 +1498,12 @@ static void taskmgr_visibility(void *user, bool visible) {
         sample(tm);
         sample(tm);
         if (tm->timer != NULL) {
-            wl_event_source_timer_update(tm->timer, REFRESH_MS);
+            recon_timer_after(tm->timer, REFRESH_MS);
         }
     } else {
         tm->menu = MENU_NONE;
         if (tm->timer != NULL) {
-            wl_event_source_timer_update(tm->timer, 0);
+            recon_timer_after(tm->timer, 0);
         }
     }
 }
@@ -1512,7 +1511,7 @@ static void taskmgr_visibility(void *user, bool visible) {
 static void taskmgr_destroy(void *user) {
     struct recon_taskmgr *tm = user;
     if (tm->timer != NULL) {
-        wl_event_source_remove(tm->timer);
+        recon_timer_destroy(tm->timer);
     }
     recon_proc_snapshot_destroy(tm->snapshot);
     free(tm);
@@ -1604,8 +1603,7 @@ struct recon_appwin *recon_taskmgr_create(struct recon_server *server,
         return NULL;
     }
 
-    struct wl_event_loop *loop = wl_display_get_event_loop(server->wl_display);
-    tm->timer = wl_event_loop_add_timer(loop, on_timer, tm);
+    tm->timer = recon_timer_create(recon_server_loop(server), on_timer, tm);
 
     tm->win = recon_appwin_create(server, font, &TASKMGR_IMPL, tm);
     if (tm->win == NULL) {

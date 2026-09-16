@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.57
+    VERSION 0.4.58
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -193,6 +193,7 @@ add_executable(ReconOS
     src/recon_wallpaper.c
     src/recon_appwin.c
     src/recon_appwin_wlr.c
+    src/recon_loop_wl.c
     src/recon_cmd.c
     src/recon_calendar.c
     src/recon_clock.c
@@ -512,6 +513,11 @@ target_link_libraries(recon_tls_verify_tests PRIVATE
 add_executable(recon_clock_tests
     tests/test_clock.c
     src/recon_clock.c
+    # The plain half of the event-loop seam, not the wayland one. A suite that
+    # had to link a compositor to check how an SNTP reply is read would be a
+    # suite nobody could run headless -- which is the whole reason the seam
+    # exists.
+    src/recon_loop.c
     # The clock asks recon_net whether there is a way out before it offers to
     # check the time, and recon_net asks the firewall before it opens
     # anything -- so both come along, the same way the network tests take them.
@@ -1082,6 +1088,24 @@ target_include_directories(recon_init_screen_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/boot/include")
 
 add_test(NAME first_screen COMMAND recon_init_screen_tests)
+
+# Waiting.
+#
+# src/recon_loop.c reads no clock and makes no system call -- the time arrives
+# as an argument -- so every interesting question about a timer can be asked
+# here instead of by watching a machine and counting. Eight thousand lines of
+# session, player, photos, task manager, clock and audio sit on it.
+#
+# One source and one test, because that is all it needs: the wayland half is
+# the compositor's own loop and is exercised by the desktop running.
+add_executable(recon_loop_tests
+    tests/test_loop.c
+    src/recon_loop.c)
+
+target_include_directories(recon_loop_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_test(NAME event_loop COMMAND recon_loop_tests)
 
 # The desktop program itself, run.
 #
