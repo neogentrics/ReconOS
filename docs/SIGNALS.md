@@ -57,6 +57,39 @@ Enough that the reply can be yes or no without a conversation:
 
 ---
 
+---
+
+## Fixed here, not yet on `origin/kernel`
+
+**Read this before planning around a fault.** Kernel work is gated on a full
+matrix run -- twenty-eight boot paths, about forty minutes -- so a fix can be
+verified on hardware and still be hours from being published. Nothing in git
+says so, and that gap has already cost something real.
+
+**16 September:** the Bluetooth session read `origin/kernel`, found KF-242
+recording that USB ports 7 and 8 fail on every Gateway boot, and nearly ruled
+out the laptop's adapter as unreachable. The statement was accurate about the
+pushed kernel and wrong about the actual one -- KF-243 had fixed it, verified on
+the machine, and was sitting unpushed. They did everything right, including
+refusing to assume two "port 7"s were the same without a boot showing it, and
+were still working from a fact that had stopped being true.
+
+**So this section exists, and it is this session's job to keep it honest.** If
+it is stale, that is a fault in this file rather than a detail.
+
+| fixed | state | what it changes for you |
+|-------|-------|--------------------------|
+| **KF-245** — the boot menu cleared the whole screen once a second to change one countdown digit, which on a real panel is a visible flash | written and builds; **not matrix-tested**, so not pushed | Nothing, unless you are looking at a Gateway boot and wondering whether the flicker is yours. It is the loader's, and it is fixed. |
+
+**The rule:** an entry goes in the moment something is fixed and verified, and
+comes out when the commit is pushed. **Empty means `origin/kernel` is the
+truth**, which is the normal state and should be the common one.
+
+**What this is not.** It is not a reason to build against unpushed work, and it
+is not a shortcut around the matrix. It is a list of facts you may need before
+the code carrying them arrives -- *"port 7 works now, pick on merit"* is
+actionable a long time before the commit that makes it true is safe to publish.
+
 ## Signals
 
 ### 15 September 2026 — kernel → graphics
