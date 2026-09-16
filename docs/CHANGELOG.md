@@ -9,6 +9,71 @@ way for the two to disagree.
 
 ---
 
+## v0.4.50 — the host must not show through
+
+`coverage.sh --zero` named five functions of `recon_fs.c` that no suite ran,
+and the board's row for it said what was left was *"the trash, copying and
+listing"*. **The trash landed in v0.4.39 and the other two were covered
+already** — the row had been describing finished work. What was actually left
+is the volume layer, and the one function underneath every error message.
+
+`recon_fs.c` at **48.94% to 58.25%**, and nothing in it at zero.
+
+### `guest_path`, and a test that proved nothing
+
+The rule this file opens with:
+
+> *"ReconOS is the only thing on screen and Linux is underneath it."*
+
+`guest_path` strips the host root off a path before it reaches a sentence
+somebody reads, and its comment records the day that broke: deleting something
+that was not there reported `cannot read
+'/tmp/lookroot/Users/Joshua/Documents/x'`. **That path exists on no ReconOS
+machine**, and it is invisible to every check that looks at a return value —
+the call failed exactly as it should have. Only the sentence was wrong.
+
+**My first test for it proved nothing.** It asked `recon_fs_remove` about a
+file that was not there — which reports with the *ReconOS* path it was handed
+and never reaches `guest_path` at all. The check passed, and a mutation making
+`guest_path` return the host path unchanged did not move it.
+
+That is BG-162's lesson in a new place: *a test written against a path you
+assumed passes and proves nothing.* The sites that do reach it handle a host
+path directly — the recursive delete and the file copy — so the check copies a
+file it has made unreadable, and reads the sentence. Mutated, it now fails.
+
+### And the mutation harness could not tell a crash from a pass
+
+A third mutation removed the range guard from `recon_volume_usage`, so an
+out-of-range volume indexes past the table. The suite **crashed**, produced no
+result line, and the harness reported it as *MISSED* — because it looks for a
+failure count and found none.
+
+That is the same family as a mutation that silently matches nothing: **a
+harness that cannot tell a crash from a pass reports the sharpest result it
+will ever get as the weakest.** A suite that did not reach its own last line
+is a suite that found something.
+
+### And it found a real hole while doing it
+
+The out-of-range checks asked `recon_volume_name`, `_root` and `_detail` and
+**not `recon_volume_usage`** — which is the one where it matters most, because
+the other three return a fixed string for a volume that does not exist and this
+one indexes a table with it. Added, and the mutation now crashes rather than
+passing.
+
+### The rest of what moved
+
+Three volumes — System, Programs, User — with their names, roots and the line
+each shows on the Storage page, held against the header rather than against
+what the code happens to return. And usage **walked rather than cached**, which
+the header promises: write a second file, and both the count and the byte total
+move by exactly one file and exactly ten bytes.
+
+**34 checks**, 109 to 143.
+
+---
+
 ## v0.4.49 — a file field was a text box
 
 `<input type="file">` fell through the input dispatch to the default, so the

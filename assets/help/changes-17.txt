@@ -1,71 +1,47 @@
-The first entry in docs/KERNEL-WANTS.md is answered. SYS_MAP with an fd
-of -1 returns a demand-paged anonymous range, and userland/libc/mem_recon.c
-has been sending exactly that call since the allocator was written. Nothing in
-userland/ was rebuilt or relinked for it: the program on the disk already
-linked the allocator, and the call it had always made started working.
+The checkpoint board asked for *"the seven error codes that have sites"* to be
+wired: B-001, B-002, B-005, D-002, F-001, J-002, L-003.
 
-An installed disk, booted by itself, running a program loaded off its own
-volume, now says:
+They were wired already. git log -S puts every one of them in 2b45b53,
+on 12 September, under the commit message *"Wire the seven error codes that had
+sites and no callers"* — and the board went on calling them work for three days
+afterwards, because the figure beside them, *34 of 43 reachable*, was counted
+once by hand and never counted again.
 
+So the work was not the wiring. The work was the thing that would have said
+so.
 
-  the heap: 64 blocks and 512 KiB written, read back and freed;
-            1536 KiB from the kernel
+### What the measurement found on its first run
 
+scripts/check-errors.py reads every code out of include/recon_errors.def,
+finds every recon_error_raise in src/, and refuses when the two disagree.
+The true figure is 41 of 43, and the two without a site are exactly the two
+that were always meant to be:
 
-recon_init allocates sixty-four blocks, frees every other one and takes them
-again -- so the free lists and the coalescing do work rather than a bump upwards
-through fresh memory -- takes one block large enough to need a second range from
-the kernel, reads every one of them back, and audits the heap. The kernel half
-is in docs/KERNEL-CHANGELOG.md under 0.2.39.
+| | |
+|---|---|
+| A-006 | the startup checks it reports on do not exist yet |
+| E-005 | uninstalling is written not to fail, so no path could raise it |
 
-The first ReconOS program that allocates. What its header used to say is
-worth keeping: *"It allocates nothing. There is no allocator on this kernel and
-that is the first entry in docs/KERNEL-WANTS.md."*
+And it found three more (BG-204). The start sequence runs eight checks; two
+of them raise their fault *and* show it on the splash, and three show it only.
+VT-L001, VT-L002 and VT-E001 reached a person's eyes and never reached
+/System/Logs — so somebody who watched a start, saw a code and then typed
+errors log would not find it. All three are FAULTs, which the table defines as
+*reported where it happened*.
 
-### Three functions nothing in ReconOS calls
+A code that is shown looks wired from every angle except the log. It is in
+the enumeration, it is in docs/ERRORS.md, errors VT-L001 describes it, and a
+person really does see it. The one question that separates the two cases is
+*can this be found again tomorrow*, and nothing was asking it.
 
-sincos, sqrtf and strtoll appear in no line of this source. The compiler
-writes them. At -O2 and above GCC fuses a sin(x) and a cos(x) of one
-argument into a single sincos, rewrites atoll(s) as strtoll(s, 0, 10) *in
-the caller* — reaching past whatever atoll the library defines — and narrows a
-sqrt whose argument and result are both floats into sqrtf.
+### Checked in both directions, because that is how the last one went stale
 
-So a release of the desktop needed three symbols that a debug build did not, and
-the coverage measurement had been reading whichever build happened to be in
-build/. That is BG-203, and it is the third time this library has been
-measured by an instrument sharing a premise with it.
+An exception list nobody re-reads is the same fault in a new file. So the
+script refuses four more things besides a code with no site: an excused code
+that has since gained one, an excused code that no longer exists, a code raised
+that nothing defines, and a number defined twice. Five mutations, five distinct
+messages, each caught.
 
-The number it changes. v0.4.32 published 3,043 of 3,134 call sites. The
-release build — the one a machine would actually run — says 2,998 of 3,089.
-The measurement now reads the build type out of CMakeCache.txt, prints it with
-the result, and refuses a build that is not a release.
-
-### Two warnings are errors now, and only two
-
-recon_libc_math_tests reported sqrtf(0) as 1. The square root was right; the
-suite had no prototype for it, so C assumed it returned int and read a
-floating-point register as an integer.
-
-The compiler had said so, twice, in a build with no -Werror — two lines among
-a few thousand. -Werror=implicit-function-declaration and
--Werror=implicit-int are errors now. Not -Werror in general, which is a
-policy change across a tree two sessions are working in; these two can only ever
-mean a wrong answer, and the whole tree compiles with no instance of either.
-
-### Where it leaves things
-
-| | before | now |
-|---|---|---|
-| call sites answered | 3,043 of 3,134 *(debug build)* | 2,998 of 3,089 *(release)* |
-| symbols outstanding | 40 | 37 |
-| the installed-disk boot test | 8 of 8 | 9 of 9 |
-
-The two call-site figures are not a regression and not comparable: the left one
-counts a build nobody ships. The maths suite runs 3,614,012 checks and the file
-suite 438,496, both clean.
-
-The 91 call sites still missing all need the kernel: 35 for sockets that open
-something, 31 for stat and its relatives, 12 for dlopen, 11 for processes and
-signals, 2 for an environment.
+The sixth pass of scripts/check.sh.
 
 ---

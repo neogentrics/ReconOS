@@ -650,6 +650,195 @@ static void test_reading_the_front_of_a_file(void) {
         "a file that is not there reads as nothing");
 }
 
+/*
+ * The host directory this suite was given, so the checks below can look for
+ * it in a message. Set once by main, before anything runs.
+ */
+static const char *g_host_root_for_test = "";
+
+static void test_an_error_names_a_reconos_path(void) {
+    printf("an error message says where ReconOS thinks it is\n");
+
+    /*
+     * **The host must not show through.** `recon_fs.c` opens with the rule
+     * this holds: *"ReconOS is the only thing on screen and Linux is
+     * underneath it"* -- and the comment on `guest_path` records the day it
+     * broke, when deleting something that was not there reported
+     * `cannot read '/tmp/lookroot/Users/Joshua/Documents/x'`.
+     *
+     * That path exists on no ReconOS machine. It is also invisible to every
+     * check that looks at a return value, because the call failed exactly as
+     * it should have -- only the sentence was wrong.
+     *
+     * **This has to go through a call that handles a host path.** The first
+     * version of this test asked `recon_fs_remove` about a file that was not
+     * there, which reports with the ReconOS path it was handed and never
+     * reaches `guest_path` at all: the check passed, and a mutation making
+     * `guest_path` return the host path unchanged did not move it. A test
+     * against a path you assumed proves nothing.
+     *
+     * A copy whose source cannot be opened does reach it, and is the one such
+     * failure a test can arrange without privileges.
+     */
+    const char *body = "something";
+    check(recon_fs_write("/", "/Users/unreadable.txt", body, 9),
+        "a file is written");
+
+    char host[RECON_PATH_MAX];
+    check(recon_fs_resolve("/", "/Users/unreadable.txt", host, sizeof(host),
+        NULL, 0), "and can be found on the host");
+
+    if (chmod(host, 0) != 0) {
+        /*
+         * Running as root, most likely, where nothing is unreadable. Said out
+         * loud rather than passed: a check that quietly does not run is worse
+         * than one that is not there.
+         */
+        printf("        (skipped: this account can read anything)\n");
+        recon_fs_remove("/", "/Users/unreadable.txt");
+        return;
+    }
+
+    check(!recon_fs_copy("/", "/Users/unreadable.txt", "/Users/copy.txt"),
+        "copying a file that cannot be opened fails");
+
+    const char *said = recon_fs_last_error();
+    check(said != NULL && said[0] != '\0', "and says something");
+
+    if (said != NULL) {
+        /*
+         * The suite's root is a temporary directory under /tmp, so its name is
+         * the host's fingerprint. Any part of it in the message means the host
+         * has shown through.
+         */
+        check(strstr(said, "/tmp/") == NULL,
+            "and the message names no host directory");
+        check(g_host_root_for_test[0] == '\0' ||
+                strstr(said, g_host_root_for_test) == NULL,
+            "and none of the root this suite was given");
+        check(strstr(said, "/Users/unreadable.txt") != NULL,
+            "and it does name the ReconOS path");
+
+        if (strstr(said, "/tmp/") != NULL) {
+            printf("        it said: %s\n", said);
+        }
+    }
+
+    chmod(host, 0600);
+    recon_fs_remove("/", "/Users/unreadable.txt");
+    recon_fs_remove("/", "/Users/copy.txt");
+}
+
+static void test_the_three_volumes(void) {
+    printf("what each space is called, and where it starts\n");
+
+    /*
+     * Three, and the split is not cosmetic -- the header says why: *"deleting
+     * a program and deleting a system file are not the same act, and one bin
+     * holding both makes emptying it a decision nobody can make safely."*
+     */
+    check(RECON_VOLUME_COUNT == 3, "there are three spaces");
+
+    const struct {
+        enum recon_volume volume;
+        const char *root;
+    } EXPECTED[] = {
+        { RECON_VOLUME_SYSTEM,   "/System" },
+        { RECON_VOLUME_PROGRAMS, "/Apps" },
+        { RECON_VOLUME_USER,     "/Users" },
+    };
+
+    for (size_t i = 0; i < sizeof(EXPECTED) / sizeof(EXPECTED[0]); i++) {
+        const char *name = recon_volume_name(EXPECTED[i].volume);
+        const char *root = recon_volume_root(EXPECTED[i].volume);
+        const char *detail = recon_volume_detail(EXPECTED[i].volume);
+
+        check(name != NULL && name[0] != '\0', "it has a name");
+        check(detail != NULL && detail[0] != '\0',
+            "and a line saying what lives there");
+        check(root != NULL && strcmp(root, EXPECTED[i].root) == 0,
+            "and its root is where the header says");
+        if (root != NULL && strcmp(root, EXPECTED[i].root) != 0) {
+            printf("        wanted %s, got %s\n", EXPECTED[i].root, root);
+        }
+    }
+
+    /*
+     * And a volume that is not one.
+     *
+     * Asked because these take an enum and C will hand them any int. A page
+     * drawing a storage list off a loop that ran one too far would otherwise
+     * read past the table -- which is a crash on a good day and somebody
+     * else's string on a bad one.
+     */
+    check(recon_volume_name(RECON_VOLUME_COUNT) != NULL,
+        "a volume that does not exist still answers with something");
+    check(recon_volume_root(RECON_VOLUME_COUNT) != NULL,
+        "and so does its root");
+    check(recon_volume_detail(RECON_VOLUME_COUNT) != NULL,
+        "and its detail");
+    check(recon_volume_name((enum recon_volume)-1) != NULL,
+        "and so does one below the start");
+
+    /*
+     * And usage *refuses* it rather than answering, which is the difference
+     * that matters: the three above return a fixed string for a volume that
+     * does not exist, and this one would index a table with it.
+     *
+     * Added because a mutation found it missing -- removing the upper bound
+     * from `recon_volume_usage` failed nothing, because every check here
+     * asked the other three.
+     */
+    unsigned long long nowhere_bytes = 1234;
+    int nowhere_files = 5678;
+    check(!recon_volume_usage(RECON_VOLUME_COUNT, &nowhere_bytes,
+        &nowhere_files), "measuring a volume that does not exist is refused");
+    check(!recon_volume_usage((enum recon_volume)-1, NULL, NULL),
+        "and so is one below the start");
+}
+
+static void test_what_is_in_a_volume(void) {
+    printf("how much is in a space, walked rather than remembered\n");
+
+    /* Something of a known size, in a known place. */
+    const char *body = "0123456789";
+    check(recon_fs_write("/", "/Users/counted.txt", body, 10),
+        "a file is written into the user space");
+
+    unsigned long long bytes = 0;
+    int files = 0;
+    check(recon_volume_usage(RECON_VOLUME_USER, &bytes, &files),
+        "the user space can be measured");
+    check(files >= 1, "and it holds at least the file just written");
+    check(bytes >= 10, "and at least its bytes");
+
+    /*
+     * Adding to it moves both numbers. **Walked rather than cached**, which
+     * the header says and which is the property worth holding: a cached total
+     * is right until something writes a file, and nothing here would notice.
+     */
+    unsigned long long before = bytes;
+    int files_before = files;
+    check(recon_fs_write("/", "/Users/counted2.txt", body, 10),
+        "a second file is written");
+    check(recon_volume_usage(RECON_VOLUME_USER, &bytes, &files),
+        "and it is measured again");
+    check(files == files_before + 1, "one more file");
+    check(bytes == before + 10, "and ten more bytes");
+
+    /* Either answer may be left out by a caller that wants only the other. */
+    check(recon_volume_usage(RECON_VOLUME_USER, NULL, NULL),
+        "a caller may ask for neither number");
+
+    unsigned long long only_bytes = 0;
+    check(recon_volume_usage(RECON_VOLUME_USER, &only_bytes, NULL),
+        "or for just the bytes");
+    check(only_bytes == bytes, "which is the same answer");
+
+    recon_fs_remove("/", "/Users/counted.txt");
+    recon_fs_remove("/", "/Users/counted2.txt");
+}
+
 int main(void) {
     char root[] = "/tmp/reconos-test-XXXXXX";
     if (mkdtemp(root) == NULL) {
@@ -659,11 +848,16 @@ int main(void) {
 
     printf("ReconOS filesystem tests, root %s\n\n", root);
 
+    g_host_root_for_test = root;
+
     if (!recon_fs_init(root)) {
         printf("could not set up the test filesystem: %s\n", recon_fs_last_error());
         return 1;
     }
 
+    test_an_error_names_a_reconos_path();
+    test_the_three_volumes();
+    test_what_is_in_a_volume();
     test_unique_names();
     test_rename();
     test_copy();
