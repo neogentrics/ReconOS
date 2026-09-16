@@ -8376,6 +8376,10 @@ regenerated after that tree is pushed.
 
 ### BG-206 — An empty cell took no column, so every heading sat under the wrong one
 
+[#479](https://github.com/neogentrics/ReconOS/issues/479)
+
+[#479](https://github.com/neogentrics/ReconOS/issues/479)
+
 - **Found in** v0.4.40, by photographing a table whose header has two rows —
   while building `colspan`, which is not what is broken here.
 - **Was** A cell boundary is carried by a run, and a cell with nothing in it
