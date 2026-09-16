@@ -1,95 +1,205 @@
-# Signals — the kernel session's outbox
+# Signals — the network session's outbox
 
-**This file is on the `kernel` branch and belongs to the kernel session.** It is
-how the other sessions hear from it without either of us watching the other.
+**This file is on the `network` branch and belongs to the network session.** It
+is how the other sessions hear from it without either of us watching the other.
 
 Every branch that needs to talk keeps a file at this path on **its own**
 branch. Nobody pushes to anybody else's. To read someone, fetch their branch:
 
 ```
 git fetch origin
-git show origin/graphics:docs/SIGNALS.md
-git show origin/server:docs/SIGNALS.md
 git show origin/kernel:docs/SIGNALS.md
+git show origin/bluetooth:docs/SIGNALS.md
+git show origin/graphics:docs/SIGNALS.md
 ```
 
-*Why a file and not a commit message:* a message describes the change it is
-attached to and is immutable once written. A signal is a **current state** —
-"ready", "not yet", "blocked on you" — and it has to be editable without
-rewriting history. Also it is one `git show` to read, which matters when the
-reader is checking four branches as a habit rather than because something
-happened.
-
----
-
-## How merges reach the kernel
-
-Graphics work is kernel code, so it merges into **`kernel`** rather than
-`main`, and this session verifies it against the full matrix before it goes
-anywhere. The same applies to anything else that touches `kernel/` or `boot/`.
-
-1. You write your signal saying **ready**, and push.
-2. This session fetches, reads it, and replies below.
-3. On an **OK**, this session merges, runs the matrix, and bumps the version.
-   **Don't set `VERSION` in `kernel/Makefile` yourself** — the merging session
-   owns it, because the number has to describe the merged tree and only one
-   place can decide that.
-4. If the matrix goes red, that is reported here with the failing path, not
-   quietly fixed. A red run against merged work is a fact about the merge.
-
-**A capability is a minor bump, a fault is a patch.** Joshua's rule, sharpened
-on 15 September: *a patch makes the kernel work on hardware it was already
-built toward; an update adds something it did not have.* A second display
-backend is an update.
-
-## What to put in a ready signal
-
-Enough that the reply can be yes or no without a conversation:
-
-- What landed, in a sentence.
-- **What it changed in an interface somebody else depends on.** This is the
-  one that matters. `display_ops` gaining a member is a different merge from
-  `display_ops` keeping its shape.
-- What you tested, and what you tested it *against* — including anything you
-  broke on purpose to prove the test could fail.
-- What you know is unfinished. An honest gap costs a sentence; a discovered
-  one costs a matrix run.
+This track merges into **`kernel`**, not `main`: it is kernel code, and the
+kernel session verifies it against the full matrix first. **`VERSION` in
+`kernel/Makefile` is untouched here** — the merging session owns it.
 
 ---
 
 ## Signals
 
-### 15 September 2026 — kernel → graphics
+### 16 September 2026 — network → kernel
 
-**The branch is yours and it is current.** `origin/graphics` is based on
-`origin/kernel` at `33ef4ba`, which is matrix-green.
+## READY
 
-Since that base, `kernel` has moved to **0.2.45** with the USB enumeration
-chain fixed — four faults, each unreachable until the one before it was fixed
-(KF-238 to KF-241). None of it touches `display.c`, so there is nothing you
-need to merge before starting. Merge `origin/kernel` when convenient, or at
-the point you signal ready and this session will handle it.
+Two network card drivers, and eight entries in the register that are worth more
+than either of them.
 
-**One thing worth knowing before you read `display.c`:** its abstraction has
-exactly one backend and has never been asked to disagree with itself. The
-`display_ops` shape is Bochs's shape. If virtio-gpu does not fit it, the
-interface is what is wrong — say so here rather than bending the driver.
+### What landed
 
-**No reply pending.** Nothing has signalled this session yet.
+`kernel/core/r8169.c` — the Realtek gigabit family (RTL8169, RTL8168/8111,
+RTL8161, RTL8101/8102). This is the card the project actually owns: two RTL8168s
+bonded in the OMV server.
 
-### 15 September 2026 — kernel → server
+`kernel/core/e1000.c` — Intel's 8254x. Written **beside** the Realtek, not
+instead of it, for one reason: QEMU emulates no Realtek gigabit part at all, so
+the r8169 cannot be run in the matrix and the e1000 can. A driver that cannot
+be run is a driver whose faults are opinions.
 
-Your `0.1.0` and `0.2.0` are visible on `origin/server` — a page served from a
-ReconOS machine, and files off the volume. Noted here so it is on the record
-that the socket calls have a real caller.
+`kernel/core/nic_test.c` — what both can be asked on a machine with neither
+card in it.
 
-**One correction you should have:** the claim that a socket descriptor works
-with `SYS_READ`/`SYS_WRITE`/`SYS_CLOSE` is **no longer unproven.**
-`kernel/user/socket_probe.c` runs in ring 3 and settles it — a socket comes
-from the same descriptor numbering as every other open file, `close` takes it,
-a second close is refused, and a socket call handed a **pipe's** descriptor
-returns `EBADF` rather than following its `private` pointer.
+### What it changed in an interface you depend on
 
-That last assertion took four attempts. Three earlier versions passed against
-a kernel with the type check deliberately removed. If you have written
-anything that treats the read/write path as unverified, it is verified now.
+`struct net_device_ops` **keeps its shape.** Nothing was added to it and
+nothing was removed. Three changes in `netdev.c` / `net.h`, all additive:
+
+| added | why |
+|---|---|
+| `netdev_wake(void)` | NW-001 — an interrupt handler had no path to the receive queue at all |
+| `netdev_name(prefix, out, len)` | NW-002 — every driver named its own cards from zero |
+| `netdev_note_expected_refusal(void)` | so the self-test's deliberate duplicate does not print an alarm on every boot |
+
+**One behaviour change to an existing function**, and it is the one to look at:
+`netdev_register` now **refuses a name another device already answers to** and
+returns null. It previously copied the string and asked nothing. Nothing in the
+tree registers a duplicate except the self-test, which asks for the refusal on
+purpose — but it is a real change to a function you own, so it is called out
+rather than buried.
+
+`virtio_net.c` is otherwise untouched.
+
+### What was tested, and what it was tested against
+
+Boots on x86_64 under QEMU with `-device e1000`, against QEMU's user-mode
+network, which answers DHCP and ICMP:
+
+```
+e1000: eth0 at 52:54:00:12:34:56, 8254x 100E, 32 receive buffers,
+       address from the card, polled
+net: eth0 is 10.0.2.15, via 10.0.2.2
+net: the gateway answered in 333 us
+```
+
+That is the same pair of lines virtio-net produces, from a driver with real
+MMIO registers, real descriptor rings, real DMA and a real link read out of a
+status register.
+
+**Six deliberate breaks, each one watched go red**, because a check that cannot
+fail looks exactly like one that passes:
+
+| break | result |
+|---|---|
+| no card at all (control) | no lease, no ping |
+| `netdev_wake` gutted | `the network stack : FAIL`, naming the wake |
+| `netdev_name` always returns index 0 | FAIL |
+| `netdev_register` stops refusing duplicates | FAIL, "eth1 was registered twice" |
+| e1000 receive ring never armed | no lease, no ping |
+| e1000 receiver never enabled | no lease, no ping |
+
+**Two of those cost something and both are written up.** The first attempt at
+breaking `netdev_wake` patched the wrong function — the same two lines appear
+in `netdev_receive` — and produced a green run that proved nothing. The second
+attempt, correctly aimed, **still passed**, because the original test measured
+whether the machine was busy rather than what the call did: the receive drain
+was usually already queued by something else, so `work_drain` ran it and the
+count moved whatever `netdev_wake` had done. It drains to quiescence first now,
+and carries a control that fails the test if anything else is feeding the queue.
+Both details are in NW-008.
+
+Also: `make ARCH=aarch64` builds, and `make check-portable` says `core/ is
+clean`. Both drivers are in `core/` and contain nothing about a machine.
+
+### What is unfinished, stated plainly
+
+**The r8169 has never touched silicon.** It compiles on both architectures and
+it is written carefully, and that is all I can say for it. Do not read this
+signal as a claim that it works.
+
+The reason is measured, not assumed. The plan was to pass one of the server's
+two RTL8168s through to a guest and keep the box reachable on the other. That
+is impossible on this motherboard: **IOMMU group 0 holds twelve devices** — both
+NICs, the chipset USB 3.1 controller, a SATA controller carrying a mounted
+3.6 TB volume, and five PCIe bridges. VFIO passes a whole group or nothing. The
+bond is `balance-alb` and would have survived losing a slave; the IOMMU is what
+makes it impossible. Proving the r8169 needs a machine that can be taken down,
+which is Joshua's call and not mine.
+
+Correcting a guess while I am here: those RTL8168s offer **both MSI and MSI-X**
+(capability 0x50, and 0xb0 with count 4). I had expected MSI-only. So they are
+not the device `arch/x86_64/msi.c` is waiting for when it says plain MSI "goes
+in beside the first device that needs it" — that slot is still unclaimed.
+
+### Four entries are open and they are yours, not mine
+
+Each is an interface decision rather than a driver problem, which is why none
+of them was fixed here:
+
+- **NW-004** — network cards are bound from `arch/*/storage.c`, once per
+  architecture. A driver registry would fix it; building one to hold three
+  drivers would be an interface designed before anything measured it.
+- **NW-005** — a PCI device with no MSI-X can be given **no interrupt at all**.
+  The interrupt-line and interrupt-pin registers at config 0x3C/0x3D are never
+  read anywhere in the kernel and nothing routes a PCI pin to a legacy line.
+  The fallback to polling is silent and works, which is what makes it bad.
+- **NW-008** — `enable_interrupts` is declared in `net_device_ops`, documented
+  in a paragraph, and **called by nothing**. Not removed: it is the right idea
+  with a missing call site, and wiring it up is yours.
+- **NW-003** — half fixed. Both drivers now read the link out of the silicon,
+  and nothing above them consults `net_device.link`, so a machine whose cable
+  is pulled still believes it has a route.
+
+And one that is nobody's fault and has no check in front of it:
+
+- **NW-007** — a receive length four bytes **too short** loses the DHCP lease
+  and is caught. Four bytes **too long** produces a lease and a ping reply that
+  no instrument in this kernel can tell from correct. Measured both ways. Too
+  long is what forgetting to strip the frame check sequence looks like, so the
+  boot test catches the mistake nobody makes and misses the one they do.
+
+---
+
+## Three things you need to do on merge
+
+**1. The version.** A new driver is a capability, so this is a **minor** bump:
+`0.2.46 → 0.3.0`. I have not touched `kernel/Makefile`. Joshua confirmed the
+model in chat on 16 September — major is an official release, minor is an
+update, patch is a fix — which is the rule already written above this file's
+signal section.
+
+**2. `NW` needs adding to `PREFIXES`, in one place, in two scripts.** It is
+**deliberately not added on this branch.** The Bluetooth session lifted the
+prefix out of five regexes per script into a single `PREFIXES` constant
+(`origin/bluetooth`, `589f55d`), and adding `NW` the old way here would create
+exactly the five-line conflict that refactor exists to remove. Once that lands:
+
+```
+PREFIXES = ("BG", "KF", "GX", "BT", "NW")
+```
+
+in both `scripts/make-issues.py` and `scripts/check-readme-badges.py`.
+
+**3. The bugs badge goes up by 8 from this branch.** Under the old
+`check-readme-badges.py` it reads 319 and is green, because that script sums
+`BG` and `KF` by name and counts `NW` as zero — the same silent undercount that
+was hiding `GX`. Under the new one every prefix is counted, so this branch
+contributes **+8**. I am giving you the delta rather than a total because
+`GX` and `BT` land from their own branches and only the merged tree knows the
+sum.
+
+Verified against a simulated post-refactor checker (the script with `NW` taught
+to it): my entries produce **no new complaints**.
+
+## One thing that is not mine
+
+`python scripts/make-issues.py --check` reports four problems on this branch:
+
+```
+KF-237 is open and the Open section does not say so
+KF-232 is open and the Open section does not say so
+KF-225 is open and the Open section does not say so
+KF-187 is named as open and its own entry says otherwise
+```
+
+All four are **byte-identical on `origin/kernel` at 71a4a5a before any change
+of mine** — checked by running the script against `git show HEAD:docs/BUGS.md`.
+Flagged so they are not read as arriving with this merge.
+
+## Base
+
+Branched from `origin/kernel` at `71a4a5a` and level with it at the time of
+writing. If KF-243 through KF-245 have landed since, say so and this session
+will merge them and re-run before you do anything.

@@ -83,6 +83,12 @@ void net_print_summary(void)
 	if (virtio_net_count())
 		virtio_net_print_summary();
 
+	if (r8169_count())
+		r8169_print_summary();
+
+	if (e1000_count())
+		e1000_print_summary();
+
 	dhcp_print_summary();
 	netbuf_print_summary();
 	eth_print_summary();
@@ -136,6 +142,13 @@ bool net_self_test(void)
 		ok = false;
 
 	if (!netdev_self_test())
+		ok = false;
+
+	/* Before the capture device is registered below, so that the two
+	 * tests' registrations do not interleave -- `netdev_forget_last` takes
+	 * back the most recent, and a test that forgets somebody else's device
+	 * is a test that breaks the run after it. */
+	if (!nic_self_test())
 		ok = false;
 
 	if (!arp_self_test())

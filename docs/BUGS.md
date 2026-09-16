@@ -135,11 +135,49 @@ Kernel faults from here take the next free `KF-` number; desktop faults the next
 free `BG-`. Neither track can take the other's, so neither has to look at the
 other's file first.
 
+### The network track's prefix, 16 September 2026
+
+**`NW-` is the network track's** — a session working on `network`, whose subject
+is network card drivers and the device interface underneath them.
+
+The two letters mean network to a reader who has not been told what they mean,
+which is the same argument `BT-` made for itself. What is worth recording is
+the two that were rejected, because both rejections are the rule rather than
+taste.
+
+**Not `RX` or `TX`.** A network driver prints `rx` and `tx` as counter labels,
+and it prints them *in the very summaries these numbers appear in* — the line
+above this paragraph's own driver reads `4 in, 4 out`, and the device summary
+reads `rx : 4 packets`. That is precisely the argument `KF-` made against
+`KB-`: this kernel prints KB for kilobytes. A prefix that is also a unit or a
+label in the same output is a prefix that stops being a name.
+
+**Not `NF`.** It is one character from `KF`, and both would appear in the same
+file and in the same kernel-branch commit messages, because this track merges
+into `kernel`. This register already carries one deliberate renumbering —
+BG-082 through BG-093 became KF-114 through KF-125 — caused by two tracks whose
+numbers could not be told apart. `NF-201` and `KF-201` would be two different
+real faults separated by one keystroke, which is that same hazard reintroduced
+with a typo in place of a merge. The lesson of the renumbering was not "do not
+renumber"; it was that a name has to be unambiguous at the point it is read.
+
+Network faults from here take the next free `NW-` number.
+
+**A note on the scripts, and it is deliberate that they are untouched.**
+`scripts/make-issues.py` and `scripts/check-readme-badges.py` carried the
+prefix in five separate regexes each, so every session claiming one edited the
+same five lines and conflicted with every other session doing the same. The
+Bluetooth track lifted that into a single `PREFIXES` constant. `NW` is
+therefore **not added here** — it goes in one place, once that refactor reaches
+this branch, and adding it the old way in the meantime would create exactly the
+five-line conflict the refactor exists to remove. `docs/SIGNALS.md` carries the
+one-line instruction and the badge arithmetic that goes with it.
+
 ---
 
 ## Open
 
-8, and each entry says why. They are listed because a register that only
+13, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -152,10 +190,225 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-154** — The page allocator scans, and a terabyte is a billion pages
 - **KF-192** — The kernel boots from a disk over BIOS and then cannot see it
 - **KF-187** — Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
+- **NW-003** — Half fixed: the link state is read from the card now, and still nothing consults it
+- **NW-004** — Network cards are bound from a file called storage.c, once per architecture
+- **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
+- **NW-007** — The boot test catches the frame-length mistake nobody makes and misses the one they do
+- **NW-008** — `enable_interrupts` is declared and documented in `net_device_ops` and called by nothing
 
 ---
 
 ## Fixed
+
+### The network track's first eight, 16 September 2026
+
+All eight below were found in one pass: writing a **second** driver behind
+`net.h`, which had exactly one. They are numbered in the order they were
+written up rather than the order they surfaced, because they were registered in
+a single commit and no number has ever been quoted anywhere else. From NW-009
+on, a number is taken when the fault is found.
+
+Four are fixed, four are open, and the open ones are open because **the fix is
+an interface decision that belongs to the kernel session**, not because nobody
+got to them.
+
+The common shape, and it is the reason this was worth doing at all: an
+interface with one implementation cannot tell which of its choices were about
+networking and which were about virtio. Every entry here is a place where that
+turned out to be true.
+
+### NW-001 — A card's interrupt had no way to ask to be collected from
+
+- **Found in** kernel 0.2.46, by the network session, writing the interrupt
+  handler for the first card that has one.
+- **Was** `netdev_service()` — the function that drains the receive queue — had
+  four callers, and every one of them was inside a loop that was *already
+  waiting* for a packet: DHCP's wait, the boot echo's wait, a socket read, a
+  socket accept. The fifth was `rx_work_fn`, scheduled only by
+  `netdev_receive`, which a driver can only call once it holds a `netbuf`.
+
+  `irq.h` forbids a handler from allocating. So an interrupt handler could not
+  build a buffer, could not call `netdev_receive`, and could not reach
+  `work_schedule` — there was no path at all from "the card says it has a
+  frame" to "the worker thread runs". There is no timer driving it either, and
+  the idle loop does not touch it.
+- **Why it survived** virtio-net sets `enable_interrupts` to null and is
+  polled, and every path that needs it to receive is a loop that calls
+  `netdev_service()` itself. The only driver there was never needed the door,
+  so nobody noticed the door was missing.
+- **Fixed in** kernel 0.2.46 on `network`, by `netdev_wake()`: schedules the
+  drain and does nothing else, which is all a handler is allowed to do.
+  Asserted by `nic_self_test`, and the assertion was **broken on purpose and
+  watched go red** — see NW-008 for what that first attempt was worth.
+
+### NW-002 — Two drivers, and both of them called their first card eth0
+
+- **Found in** kernel 0.2.46, by the network session, the moment a second
+  driver registered a device.
+- **Was** every driver composed its own name from a count of its own cards —
+  `virtio_net.c` does `name[3] = '0' + device_count`. That is correct while
+  there is one driver, because then a driver's count of its cards *is* the
+  machine's count of its cards. With two drivers both start at zero, and
+  `netdev_register` only copied the string: it asked nothing.
+
+  The result is two devices answering to `eth0`, `netdev_by_name` returning
+  whichever registered first, and a boot summary printing one name twice with
+  two different sets of counters under it.
+- **Fixed in** kernel 0.2.46 on `network`. The name is the device layer's to
+  issue — `netdev_name()` hands back the next unused one, because the device
+  layer is the only thing that can see all the devices — and
+  `netdev_register` refuses a duplicate rather than accepting it. Both halves
+  are asserted, and both assertions were broken on purpose and seen to fail.
+
+### NW-003 — Half fixed — A field for what the cable is doing that nothing ever read
+
+- **Found in** kernel 0.2.46, by the network session, by grep, before a line of
+  driver was written.
+- **Was** `struct net_device` carries `bool link`, commented *"what the device
+  says about the cable"*. It is assigned in exactly one place in the whole
+  kernel — `virtio_net.c` setting it to `true` at attach — and read in none.
+  Nothing prints it, nothing routes on it, nothing re-runs DHCP when it
+  changes.
+- **Why it survived** it is not a field about a cable, it is a field about
+  virtio-net, and for virtio-net the honest value is a constant. A card with a
+  PHY has a link that genuinely comes and goes, and "the device is up" and
+  "there is a cable in it" are two different facts about a real machine.
+- **Status:** half fixed, and half reads as open here — the same call KF-127
+  makes about itself, for the same reason.
+
+  The half that is done: both new drivers read the real state out of the
+  silicon, report it at attach in either direction, and report every change. So
+  the field now holds a fact.
+
+  The half that is not: **nothing reads it.** A machine whose cable is pulled
+  still believes it has a route, still answers `netdev_route`, and still
+  reports the device up. Making `link` mean something to the layer above is a
+  routing decision and belongs to whoever owns routing — and writing a value
+  nobody consults is exactly the state this entry was opened about, moved one
+  step along rather than closed.
+
+### NW-004 — Open — Network cards are bound from a file called storage.c
+
+- **Found in** kernel 0.2.46, by the network session, looking for where to put
+  a probe.
+- **Is** there is no device-probe layer. `arch_storage_probe()` in
+  `arch/x86_64/storage.c` and `arch/aarch64/storage.c` is the whole of device
+  binding, it exists once per architecture, and it is where network cards are
+  attached — so a driver that lives in portable `core/` and contains nothing
+  about any machine cannot be reached without editing two `arch/` files.
+- **Open because** the fix is a driver registry, and building one to hold three
+  drivers would be an interface designed before anything measured what it
+  needs — which is the fault this whole set of entries is about. Adding two
+  lines to a list is cheap and honest; the entry exists so the cost is
+  recorded rather than absorbed silently each time.
+
+### NW-005 — Open — A PCI device without MSI-X cannot be given an interrupt at all
+
+- **Found in** kernel 0.2.46, by the network session, when the emulated Intel
+  card was refused a vector and fell back to polling.
+- **Is** `arch_pci_request_interrupt()` returns false for any device with no
+  MSI-X capability, and there is no other path: the PCI interrupt-line and
+  interrupt-pin registers at configuration offsets 0x3C and 0x3D are **never
+  read anywhere in the kernel**, and nothing maps a PCI interrupt pin to a
+  legacy line. `arch/x86_64/msi.c` says plain MSI "goes in beside the first
+  device that needs it"; nothing has needed it yet, and the 82540EM offers
+  neither, so it is polled.
+
+  Measured rather than assumed, and the measurement corrected a guess: the
+  RTL8168s in the server offer **both** MSI and MSI-X (capability 0x50 and
+  capability 0xb0, count 4), so that card does get a vector. It is the
+  emulated Intel that gets none.
+- **Why it matters more than it looks** the fallback is silent and polling
+  works. A driver that believes it is interrupt-driven and is being carried
+  entirely by a poll loop is indistinguishable from one that is not — so both
+  new drivers print which one is in force, and print it again in the summary
+  if a card holds a vector and has never been interrupted.
+- **Open because** whether to add legacy INTx routing, plain MSI, or neither is
+  a decision about the interrupt layer, which is the kernel session's.
+
+### NW-006 — A receive ring handed the card a buffer the stack was reading
+
+- **Found in** kernel 0.2.46, by the network session, reading the boot summary
+  it had just added. Before it could ever have fired.
+- **Was** the Intel driver's receive tail register names the last descriptor the
+  card may write, and everything from the card's head up to it is available. The
+  first version advanced it to the last descriptor it had *successfully*
+  re-stocked — which under memory pressure can be a later index than one whose
+  allocation failed. Slot 1 fails, slot 2 succeeds, the tail goes to 2, and the
+  card is now free to write descriptor 1, which still holds the physical
+  address of the buffer just handed up to IP.
+
+  That is not a dropped packet. It is a card writing a new frame into one the
+  stack is parsing.
+- **Why it is worth an entry despite never running** because the Realtek
+  **cannot have this fault**, and the contrast is the finding. That card has no
+  tail register: a descriptor is available if and only if its ownership bit is
+  set, and the only place that bit is set is after an allocation succeeded — so
+  availability and having-a-buffer are one fact. On the Intel they are two
+  facts kept in step by hand, and hands slip.
+- **Fixed in** kernel 0.2.46 on `network`: the tail is computed by walking the
+  run of descriptors that all have a buffer, and stops at the first that does
+  not.
+
+### NW-007 — Open — The boot test catches the length mistake nobody makes
+
+- **Found in** kernel 0.2.46, by the network session, breaking its own driver
+  on purpose to find out what the test could see.
+- **Is** a received frame's length is the one number the two cards disagree
+  about: the Realtek's includes the four-byte frame check sequence and the
+  Intel's does not, because the Intel is told to strip it. Getting it wrong is
+  the likeliest single fault in either driver.
+
+  Booting with the card was assumed to cover it. **It covers half.** Measured,
+  by breaking the length in each direction and booting each one:
+
+  | the receive length | result |
+  |---|---|
+  | correct | DHCP lease, ping answered |
+  | four bytes too short | no lease, no ping — caught at once |
+  | four bytes too long | lease and ping, indistinguishable from correct |
+
+  Too short fails UDP's checksum, so DHCP's reply is discarded. Too long is
+  invisible because every layer reads its own length field and ignores whatever
+  trails it — Ethernet has no length at all, IP and UDP have their own, and
+  four stray bytes of somebody's CRC sit past the end where nothing looks.
+
+  **And too long is the direction a driver errs in**, because it is what
+  forgetting the subtraction looks like.
+- **Open because** there is no check in front of it. Testing the arithmetic
+  off-hardware means lifting it out of the receive loop, and then the test
+  proves the lifted copy while the loop goes on being the thing that runs.
+  Recorded as a known hole rather than an assumed cover.
+
+### NW-008 — A hook in the device interface that nothing has ever called
+
+- **Found in** kernel 0.2.46, by the network session, by grep, looking for how
+  to turn a card's interrupts on.
+- **Was** `struct net_device_ops` declares
+  `bool (*enable_interrupts)(struct net_device *dev)` with a paragraph of
+  comment explaining when a driver should implement it. All three
+  implementations set it to `NULL`, and **no code in the kernel ever calls
+  it** — there is no `ops->enable_interrupts` anywhere. A driver that filled it
+  in would sit there never being asked.
+- **Why it survived** it is null in every implementation, so a missing call
+  site and a correctly-skipped optional hook look identical from every angle
+  except grepping for the call.
+- **Not removed here, and that is the finding.** It is the member the interface
+  *should* have — a card's interrupts genuinely need turning on at a moment the
+  device layer chooses, which is why NW-001's `netdev_wake` exists on the
+  driver's side of the same wire. Deleting it would throw away the right idea
+  because of a missing call; wiring it up is a device-layer decision. Both new
+  drivers leave it null and arm their own interrupts at attach, and say so.
+- **Status:** open. Left so deliberately, for the kernel session.
+
+  This is also the entry that nearly did not get written. The first version of
+  NW-001's test **passed with `netdev_wake` gutted** — it measured whether the
+  machine was busy rather than what the call did, because the receive drain was
+  usually already queued by something else. It took breaking the function on
+  purpose to find that out, and then a second attempt at the break, because the
+  first one patched the wrong function and produced a green run that proved
+  nothing. A check that cannot fail looks exactly like one that passes, and it
+  looks that way twice.
 
 ### BG-105 — A register that says nothing until the port is already running
 

@@ -63,6 +63,21 @@ static void rx_hold_drain(bool held)
 	spin_unlock_irq(&rx_lock, flags);
 }
 static u64 rx_serviced;
+
+/* How many times a driver said it had something, whether or not a drain was
+ * already queued. Printed, because a card whose interrupt never arrives and a
+ * card that is simply quiet produce identical frame counts -- and this is the
+ * only number that tells the two apart. */
+static u64 rx_wakes;
+
+/* How many registrations were refused for a name already in use, and how many
+ * of those the self-test asked for on purpose. Both, for the reason the
+ * interrupt layer keeps both: a number that is never zero stops being read,
+ * and a suppressed message that is never counted stops being a fact. */
+static u64 name_refusals;
+static u64 suppressed_refusals;
+static unsigned expected_name_refusals;
+
 static bool initialised;
 
 void netdev_init(void)
@@ -88,6 +103,39 @@ struct net_device *netdev_register(const char *name,
 		return NULL;
 	}
 
+	/* Refused rather than accepted as a second device with the same name.
+	 *
+	 * This used to copy the string and ask nothing, which was correct for
+	 * as long as there was one driver -- a driver numbering its own cards
+	 * from zero is numbering every card on the machine. The second driver
+	 * makes that false, and the failure is quiet: two `eth0`s in the
+	 * device table, `netdev_by_name` answering with whichever registered
+	 * first, and a summary that prints one name twice with two different
+	 * sets of counters under it. NW-002.
+	 *
+	 * Refusing is the right half of the fix and `netdev_name` is the
+	 * other: a driver that asks for a name it cannot be given should be
+	 * told, not quietly given a name that already means something else. */
+	if (netdev_by_name(name)) {
+		name_refusals++;
+
+		/* The self-test registers a duplicate on purpose -- that is
+		 * the assertion -- so without this every boot prints a line
+		 * that reads like a collision and is not one. A message that
+		 * is always there is a message a reader stops seeing, and the
+		 * one that mattered would go past with it. Same bargain as
+		 * `irq_note_expected_refusals`, and deliberately the same
+		 * shape so there is one idiom for this and not two. */
+		if (expected_name_refusals) {
+			expected_name_refusals--;
+			suppressed_refusals++;
+			return NULL;
+		}
+
+		kprintf("net: %s is already registered; refused\n", name);
+		return NULL;
+	}
+
 	d = &devices[device_count++];
 	kmemset(d, 0, sizeof(*d));
 
@@ -108,6 +156,42 @@ struct net_device *netdev_register(const char *name,
 	suspend_declare(d->name, 0);
 
 	return d;
+}
+
+void netdev_note_expected_refusal(void)
+{
+	expected_name_refusals++;
+}
+
+bool netdev_name(const char *prefix, char *out, unsigned len)
+{
+	unsigned n;
+	unsigned plen = 0;
+
+	if (!prefix || !out || len < 3)
+		return false;
+
+	while (prefix[plen])
+		plen++;
+
+	/* Room for the prefix, one digit and the terminator. Checked rather
+	 * than assumed: kstrlcpy would truncate the prefix and then every
+	 * candidate would collide with the one before it, and the loop below
+	 * would report that every index is taken on a machine with one card. */
+	if (plen + 2 > len)
+		return false;
+
+	for (n = 0; n < NET_MAX_DEVICES; n++) {
+		kstrlcpy(out, prefix, len);
+		out[plen] = (char)('0' + n);
+		out[plen + 1] = 0;
+
+		if (!netdev_by_name(out))
+			return true;
+	}
+
+	out[0] = 0;
+	return false;
 }
 
 void netdev_forget_last(void)
@@ -303,6 +387,23 @@ static void rx_work_fn(void *arg)
 	netdev_service();
 }
 
+void netdev_wake(void)
+{
+	/* Counted before the refusal, not after.
+	 *
+	 * The number worth having is "how many times did a card say it had
+	 * something", and `work_schedule` returns false for a drain already
+	 * queued -- which is the common case under load and is not a failure.
+	 * Counting only the successes would make a busy card look like a
+	 * silent one, which is the exact reading this counter exists to
+	 * prevent: a machine whose interrupt never fires must not look like a
+	 * machine whose interrupt fires constantly. */
+	rx_wakes++;
+
+	if (rx_work_ready)
+		work_schedule(&rx_work);
+}
+
 bool netdev_transmit(struct net_device *dev, struct netbuf *b)
 {
 	if (!dev || !dev->up || !dev->ops->transmit) {
@@ -368,8 +469,33 @@ void netdev_print_summary(void)
 			(unsigned)d->tx_dropped, (unsigned)d->tx_errors);
 	}
 
-	kprintf("  queue        : %u waiting, %u serviced, %u overflowed\n",
-		rx_queued, (unsigned)rx_serviced, (unsigned)rx_overflow);
+	kprintf("  queue        : %u waiting, %u serviced, %u overflowed, "
+		"%u woken by a card\n",
+		rx_queued, (unsigned)rx_serviced, (unsigned)rx_overflow,
+		(unsigned)rx_wakes);
+
+	/* Said only when there were any, and said differently depending on
+	 * whether any were real. A refusal the test asked for is not news; one
+	 * it did not is two cards claiming one name, which is NW-002 coming
+	 * back. */
+	if (name_refusals) {
+		kprintf("  names        : %u refused as already taken",
+			(unsigned)name_refusals);
+
+		/* The two are counted separately rather than one being
+		 * inferred from the other. "Every refusal was expected" and
+		 * "the expected budget is spent" are different statements, and
+		 * they stop agreeing the moment a real collision happens after
+		 * the test has run -- which is exactly the case this line
+		 * exists to report. */
+		if (suppressed_refusals == name_refusals)
+			kputs(" -- every one the self-test proving a "
+			      "duplicate is refused\n");
+		else
+			kprintf(", %u of them a real collision\n",
+				(unsigned)(name_refusals -
+					   suppressed_refusals));
+	}
 }
 
 void net_init(void)
