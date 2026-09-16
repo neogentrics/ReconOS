@@ -484,7 +484,18 @@ bool socket_syscall_test(void);
 bool socket_bind(struct socket *s, ipv4_addr addr, u16 port);
 bool socket_listen(struct socket *s, unsigned backlog);
 struct socket *socket_accept(struct socket *s);
+/* How far a connection attempt has got. Three answers, not two: a caller
+ * that polls on WAITING and one that gives up on FAILED are the same caller,
+ * and collapsing them makes it spin on a connection the peer refused. */
+enum socket_progress {
+	SOCKET_PROGRESS_WAITING,
+	SOCKET_PROGRESS_DONE,
+	SOCKET_PROGRESS_FAILED
+};
+
 bool socket_connect(struct socket *s, ipv4_addr addr, u16 port);
+enum socket_progress socket_connect_progress(struct socket *s);
+bool socket_connect_done(struct socket *s);
 i64 socket_send(struct socket *s, const void *data, u32 len);
 i64 socket_recv(struct socket *s, void *data, u32 len);
 i64 socket_sendto(struct socket *s, const void *data, u32 len,

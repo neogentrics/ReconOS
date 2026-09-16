@@ -16,17 +16,24 @@ morning: *a figure on a board is a claim, and a claim needs an instrument.*
 So this is the instrument. It reads the numbers out of the tree and compares
 them against what the README asserts, and `--fix` writes them back.
 
---- what it deliberately does not do ----------------------------------------
+--- one number it will not invent ---------------------------------------------
 
-**It does not invent the test counts.** `1971 checks` cannot be derived from
-the repository -- it is a figure from a run, and a run is a thing that
-happened rather than a thing a file contains. Reading it from a log lying
-around would be worse than leaving it: the log might be from any commit, and a
-badge sourced from whatever last ran is a badge that lies quietly.
+`1971 checks` cannot be derived from the repository -- it is a figure from a
+run, and a run is a thing that happened rather than a thing a file contains.
+Reading it from whatever log was lying around would be worse than leaving it:
+the log might be from any commit, and a badge sourced that way lies quietly
+instead of loudly. It is printed as unchecked on every run, so it is visibly
+uncheckable rather than silently green.
 
-Those two are reported as *unverifiable from here* rather than silently
-passed, which is the honest state. A count nobody can check should be visibly
-uncheckable, not quietly green.
+**The suite count beside it is a different matter, and this file said
+otherwise for a day.** It claimed both halves were underivable and checked
+neither -- while `add_test(` in CMakeLists.txt was sitting there countable, and
+the badge drifted 34 to 45 behind a note that excused looking. The desktop
+session split the two and was right to.
+
+*A wrong claim of impossibility is worse than no claim*, because it stops the
+next person looking. Kept as a comment rather than quietly corrected, since
+this file exists to argue that unchecked numbers rot.
 """
 import io
 import os
@@ -48,14 +55,21 @@ def bug_counts():
 
 
 def suite_count():
-    """How many suites there are, which the tree does know.
+    """How many test suites CMake registers.
 
-    `add_test(` in CMakeLists.txt, counted. The check count beside it in the
-    same badge genuinely cannot be derived -- it is a figure from a run -- but
-    this one is a fact the repository holds, and it had drifted from 34 to 45
-    while sitting next to a number that excused it.
+    `add_test(`, counted. This was reported as not derivable along with the
+    check count beside it, and only one of the two actually is -- the desktop
+    session caught that, having watched the number drift from 34 to 45 behind
+    a note that excused looking at it.
+
+    Returns None where there is no CMakeLists to read, rather than zero: a
+    tree without one has no answer, which is a different fact from a tree with
+    no tests.
     """
-    return len(re.findall(r"^add_test\(", read("CMakeLists.txt"), re.M))
+    try:
+        return read("CMakeLists.txt").count("add_test(")
+    except IOError:
+        return None
 
 
 def desktop_version():
@@ -105,22 +119,22 @@ def main():
         fixed = re.sub(r"(latest_release-v)[\d.]+(-)", r"\g<1>%s\g<2>" % dv, fixed)
         fixed = re.sub(r"(releases/tag/v)[\d.]+(\))", r"\g<1>%s\g<2>" % dv, fixed)
 
-    # --- the half that can be checked, and the half that cannot --------
-    #
-    # The suite count is `add_test(` counted. The check count is a figure from
-    # a run and stays unchecked -- reading it from a log lying around would be
-    # worse than leaving it, because the log might be from any commit.
+    # --- the tests badge, which is two numbers and only one of them
+    # --- can be checked here ------------------------------------------
     m = re.search(r"tests-(\d+)_suites,_(\d+)_checks", readme)
     if m:
         suites = suite_count()
-        if int(m.group(1)) != suites:
-            problems.append("tests badge says %s suites, CMakeLists.txt "
-                            "registers %d" % (m.group(1), suites))
-        fixed = re.sub(r"(tests-)\d+(_suites,)", r"\g<1>%d\g<2>" % suites,
-                       fixed)
 
-        print("  note: the tests badge's %s checks is a figure from a run, "
-              "not something the tree holds -- left alone" % m.group(2))
+        if suites is not None and int(m.group(1)) != suites:
+            problems.append("tests badge says %s suites, CMakeLists registers "
+                            "%d" % (m.group(1), suites))
+        if suites is not None:
+            fixed = re.sub(r"(tests-)\d+(_suites)",
+                           r"\g<1>%d\g<2>" % suites, fixed)
+
+        print("  note: the badge's %s checks is a figure from a run, not from "
+              "the tree, so it stays unchecked -- the suite count beside it "
+              "is not" % m.group(2))
 
     if fix and fixed != readme:
         io.open(os.path.join(ROOT, "README.md"), "w", encoding="utf-8",
