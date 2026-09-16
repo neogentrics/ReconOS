@@ -148,6 +148,110 @@ above -- so it is worth having, second.
 
 ---
 
+## Nothing can ask what a file is
+
+**Where:** `userland/libc/`, 15 September 2026, immediately after the socket
+calls landed. With sockets answered this is **the largest group left** in the C
+library, and it is the one standing between the desktop and its own filesystem
+layer: eight of the eleven symbols are called from `src/recon_fs.c`.
+
+**What the desktop does today, measured with `nm` over its objects rather than
+with a grep** -- a grep counts the word and the linker counts the call:
+
+| | call sites | where |
+|---|---|---|
+| `unlink` | 9 | recon_fs.c, recon_control.c |
+| `stat` | 5 | recon_fs.c, recon_net.c |
+| `access` | 5 | recon_fs.c, recon_error.c, recon_cmd.c |
+| `chmod` | 4 | recon_modules.c, recon_fs.c, recon_control.c |
+| `rmdir` | 3 | recon_fs.c |
+| `lstat` | 2 | recon_fs.c |
+| `umask` | 2 | recon_control.c |
+| `rename` | 1 | recon_fs.c |
+| `fstat`, `mmap`, `munmap` | 0 written | referenced through glibc's own macros |
+
+**Thirty-one call sites, and nothing can be derived from what exists.**
+`SYS_LIST` hands back *names* -- a buffer of them, which is what `readdir` is
+built on -- and nothing else. Not a kind, not a size, not a time. So there is
+no way to write `stat` on top of it, and no way to tell a directory from a file
+without opening it and finding out.
+
+### What would answer it, smallest first
+
+**One call answers twelve of the thirty-one.**
+
+```
+SYS_STAT(path, path_len, out, out_len) -> SYS_OK, or the size it needs
+```
+
+filling the four facts the VFS already holds -- **kind, size, when it last
+changed, and the mode it already stores and already enforces**. That is
+`stat`, `lstat` and `fstat`-by-path at once, because there are no symbolic
+links for `lstat` to differ about.
+
+And it makes `access` library code: `stat` the path, compare the mode against
+`SYS_GETUID`. **Approximate, and worth saying so** -- it would not account for
+the capabilities a process holds, so a privileged caller could be told no and
+then succeed. For the desktop's five sites, which ask *"is this file there and
+can I read it"*, that is the right answer; if it ever needs to be exact, that is
+a call of its own and not a reason to delay this one.
+
+**A second call answers twelve more.**
+
+```
+SYS_REMOVE(path, path_len) -> SYS_OK
+```
+
+`unlink` and `rmdir` together, refusing a directory that is not empty -- which
+is the one rule that makes them one call rather than two. A caller that wants
+the directory gone empties it first, which is what every one of the three
+`rmdir` sites already does.
+
+**And one that cannot be built from anything else:**
+
+```
+SYS_RENAME(from, from_len, to, to_len) -> SYS_OK
+```
+
+One call site, and it is here because renaming is the operation that has to be
+*atomic*. Copy-then-remove is not a rename: it is twice the disk, and a power
+cut in the middle leaves two files or none. ReconFS is copy-on-write, so it is
+the one filesystem where this ought to be cheap.
+
+`chmod` and `umask` are four and two sites and are the least urgent: the kernel
+already stores a mode and already refuses on it, so `chmod` is a setter for
+something that exists, and `umask` is a number on the process.
+
+### What it does not need, so that it does not get built
+
+- **Not POSIX's `struct stat`.** It carries a device number, an inode number, a
+  link count, three separate timestamps and a block count, and this system has
+  none of them. The same argument as the socket calls, which took an address as
+  a number rather than a `sockaddr`: a shape with fields that do not exist is a
+  shape every caller has to be told to ignore.
+- **No symbolic links**, which is why `lstat` and `stat` are one call. If links
+  arrive, they arrive as a decision about what a path *means*, and that is a
+  bigger conversation than a flag.
+- **No `atime`.** It is a write on every read, and nothing in the desktop asks
+  for it.
+- **Not `mmap` of a file.** It is in the table above because glibc's headers
+  put it there, not because anything calls it. `SYS_MAP` already maps a file
+  when the file has memory to map.
+
+**Whose side:** `core/`. The VFS has every one of these facts already -- it
+enforces the mode bits, it knows the size, and `reconfs` carries the times. What
+is missing is a way for a program to ask.
+
+**And there is no caller waiting yet, deliberately.** The memory entry had one
+-- `mem_recon.c` asked and was refused for a week, which is what made the day it
+worked a day with nothing to rebuild. The same would be worth doing here, and
+it needs a number first: **no syscall number has been taken for any of these**,
+because a number claimed by the half that does not own `core/` is a number
+claimed twice, which has happened and is in `docs/BUGS.md`. Name the numbers and
+`posix.c` gains the callers the same afternoon.
+
+---
+
 ## There is no way for a program to give memory back
 
 **Where:** the other half of the entry above, left open when that one was
@@ -749,7 +853,30 @@ question from *buggy*.
 
 ---
 
-## The one gap that blocks the most work: sockets
+## ~~The one gap that blocks the most work: sockets~~ -- answered, 15 September 2026
+
+> **Answered in kernel 0.2.41 / v0.4.38.** Five calls -- `SYS_SOCKET`,
+> `SYS_BIND`, `SYS_LISTEN`, `SYS_ACCEPT`, `SYS_CONNECT` -- and the design
+> underneath them is why there are only five: **a socket is a `struct file`**,
+> so `SYS_READ`, `SYS_WRITE` and `SYS_CLOSE` already serve a connection and
+> `posix.c` took no changes at all.
+>
+> `userland/libc/socket.c` is the caller, held against the host's sockets by
+> `recon_libc_socket_tests`. The kernel's own half -- that a socket really is a
+> descriptor -- could not be tested kernel-side, because a kernel thread has no
+> process and `fd_install` fails there for sockets exactly as it does for pipes.
+> `recon_init` settles it on the machine, and the installed-disk test asserts
+> the line: *a descriptor, closed once, refused twice; listening, and accept
+> says EAGAIN.*
+>
+> **Two limits are deliberate and are not gaps in this entry.** `accept` does
+> not block -- a listener has no wait queue, so a server polls -- and there is
+> no `sendto`/`recvfrom`, so an unconnected datagram is refused rather than
+> half-served. Both are written into `userland/include/sys/socket.h` where a
+> caller will find them.
+>
+> The rest of this entry is what it said before it was answered.
+
 
 Recorded at the top because it is the answer to "what can the OS side build
 next", and the answer is smaller than it looks.
