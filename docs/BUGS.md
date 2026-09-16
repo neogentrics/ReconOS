@@ -7109,6 +7109,164 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-241 - A disk that arrives late is never read
+
+- **Found:** 15 September 2026, on the Gateway, in the boot after KF-240:
+
+  ```
+  usb0   : 14.4 GB, 30277632 blocks of 512 bytes, removable
+  mmc0   : 58.2 GB, 122159104 blocks of 512 bytes
+  mmc0p1 : 976.0 MB ...
+  ```
+
+  The eMMC lists its partitions. The stick lists none -- and the `boot log`
+  line printed nothing at all, not even its refusal, because with no partitions
+  there was no volume for `klog_save_to_medium` to find.
+
+- **What it was.** Partition tables were read by a one-time sweep in
+  `block_init`, over a snapshot of the device list taken the instant
+  `arch_storage_probe()` returned. That is every disk the *architecture* can
+  find. **USB enumerates later**, so `usb0` registered after the sweep had run
+  and nothing ever looked at it.
+
+- **USB is not a special case**, which is why the fix is not "scan USB too". It
+  is the first device to arrive late and not the last: a hot-plugged disk
+  arrives later still, and any driver that probes asynchronously arrives
+  whenever it finishes. `block_register` scans now, as each disk arrives, and
+  the sweep is gone -- one rule that needs no list of which arrivals count.
+
+- **And the recursion the old comment warned about is real.** That sweep
+  explained itself as iterating a snapshot *because reading a table registers
+  slices and would otherwise walk into the partitions it is creating*. Moving
+  the scan into `block_register` reintroduced exactly that, and the first run
+  produced `virtio0p2p1` -- a one-megabyte slice of a slice, from a boot sector
+  that happened to look plausible.
+
+  **I had written the opposite in a comment before testing it**: that slices
+  come from `block_register_slice`, *"a different function that does not come
+  through here."* `block_register_slice` calls `block_register`. Two entry
+  points, one implementation -- ten seconds of reading past the signature would
+  have shown it, and instead it was asserted in the most durable place to be
+  wrong. Guarded with a flag now, and the comment says what is true.
+
+  It survived only because the virtio case was run as well as the USB one and
+  compared against earlier logs. `virtio0p2p1` looks entirely reasonable if
+  nobody checks whether it used to be there.
+
+- **Status:** fixed, kernel 0.2.45.
+
+### KF-240 - A device is addressed before it is allowed to answer
+
+- **Found:** 15 September 2026, the moment KF-239 let a root port reach the
+  enabled state: `xhci: port 6 would not take an address (completion code 4)`.
+
+- **Completion code 4 is USB Transaction Error** -- not a refusal, a device
+  that did not answer at all. USB requires **TRSTRCY, ten milliseconds of
+  recovery** after a port reset before a device need respond to anything, and
+  a control transfer sent inside that window gets no reply.
+
+  `reset_port` spun on `PORTSC`, saw `PRC`, returned, and `port_arrived` called
+  `address_device` immediately. Zero delay.
+
+- **The hub path already waited, by accident of shape.** `hub_reset_port`'s
+  polling loop opens with `busy_ms(10)`, so ten milliseconds have always passed
+  before it can return. Same operation, two implementations, one of them
+  correct for a reason nobody chose.
+
+- **This is the third borrowed idea this file has moved one direction.** The
+  boot walk's own comment says it: *"this is the hub code's reasoning two
+  hundred lines up, applied to the ports it was never applied to"* -- written
+  about the power-and-settle by somebody who noticed the gap once and fixed the
+  instance rather than the class. Then the reset itself. Now the recovery
+  interval. Two implementations of one operation is two places for the next
+  improvement to be made in one of, and `port_arrived` exists precisely to stop
+  that happening between the boot and hot-plug paths. The root/hub split has
+  the same problem and is still open.
+
+- **Fixed** inside `reset_port`, after the reset completes, so neither caller
+  can forget it. Addressed devices went from 1 to 2 on the next boot.
+
+- **Status:** fixed, kernel 0.2.45.
+
+### KF-239 - The port reset disables the port it has just enabled
+
+- **Found:** 15 September 2026, by printing the raw port registers on the
+  Gateway -- three snapshots in one boot, against Linux reading the same
+  silicon minutes later:
+
+  ```
+  as the controller came up   port 4  0x000002a0  empty
+  after powering and 100 ms   port 4  0x000206e1  connected, disabled, speed 1
+  after resetting each port   port 4  0x000006e1  connected, disabled, speed 1
+  Linux, same port            port 4  0x00000e63  connected, ENABLED,  speed 3
+  ```
+
+  Only bit 17 moved across the reset. It ran, reported completion, and enabled
+  nothing.
+
+- **What it was.** `PED` -- bit 1 -- was missing from `PORTSC_RW1CS`, the mask
+  of write-one-to-clear bits that every read-modify-write masks out. The
+  sequence destroyed its own work:
+
+  1. write `PR`; the controller resets the port and **sets `PED`**
+  2. wait for `PRC`; it appears, so no timeout is ever reported
+  3. acknowledge `PRC` with `(read & ~RW1CS) | PRC` -- and that read now carries
+     `PED`, which is written straight back
+  4. **writing one to `PED` disables the port**
+  5. `return (PORTSC & PED) != 0` -- false
+
+  It enabled the port and disabled it one line apart, then reported that the
+  reset had failed.
+
+- **The rule was right and the list was short.** The comment above that mask
+  states it correctly. Bits 17 to 23 are the change flags and were swept as a
+  block; `PED` sits alone at bit 1 doing the same thing for a different reason.
+  Every other bit in the mask *reports* something. `PED` **commands**
+  something. `CEC` at bit 23 was outside the sweep too and is added with it.
+
+- **Invisible under emulation**, and not by luck: an emulated port comes out of
+  reset enabled, so the accidental disable-write lands on a port already where
+  the driver wants it. It needs hardware that obeys.
+
+- **What it cost, which is the part worth keeping.** `0 connected` sent three
+  separate hypotheses -- a wrong register base, unpowered ports, a debounce too
+  short -- and a fix was nearly shipped to a `busy_ms(20)` that is not even on
+  this code path. All three are theories about why nothing was *detected*, and
+  detection had been working perfectly the whole time. See KF-238.
+
+- **Status:** fixed, kernel 0.2.45. Four ports came up `0x00000e63` -- byte for
+  byte what Linux reads -- and the kernel addressed a device on real hardware
+  for the first time.
+
+### KF-238 - The USB summary counts enabled ports and calls them connected
+
+- **Found:** 15 September 2026, while failing to explain KF-239.
+
+- **What it was.** One line:
+
+  ```c
+  kprintf("... %u connected, %u addressed", enabled, x->device_count);
+  ```
+
+  `enabled` printed under the word `connected`. `xhci_ports_connected()`
+  computes the real figure and sits unused in the same file.
+
+- **Cost: most of a day.** On the first machine where the two differed it read
+  `0 connected` while four devices were plugged in, detected, powered and
+  waiting -- including the stick the kernel had booted from. It was reporting a
+  **reset** failure using the word **connected**, which sent the investigation
+  into the wrong subsystem three times over.
+
+- **Worse than KF-231 and KF-236**, which are numbers printed in a form nobody
+  can look up. An unlookupable GUID sends you to another tool. A confidently
+  mislabelled zero sends you to debug something that was working.
+
+- **Fixed:** three numbers where there was one -- `N connected, M enabled,
+  K addressed`. On the Gateway that read `4 connected, 0 enabled` and named the
+  fault outright.
+
+- **Status:** fixed, kernel 0.2.45.
+
 ### KF-237 - A power cut inside a rename left no valid superblock, once
 
 - **Found:** 15 September 2026, matrix 57, one round of six:

@@ -195,7 +195,7 @@
 # kernel branch; the other saw it there, stepped over it, and took 0.2.39 for
 # SYS_MAP's anonymous mapping. Both numbers stand and mean what their entries
 # say. The merged tree is the later of the two.
-VERSION := 0.2.41
+VERSION := 0.2.45
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

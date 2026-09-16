@@ -89,9 +89,37 @@
 
 /* Bits that are cleared by writing a one. Preserving them on a read-modify-
  * write clears them by accident, which loses the very change the driver is
- * waiting for -- so every write masks them out unless it means to clear one. */
-#define PORTSC_RW1CS		(PORTSC_CSC | PORTSC_PRC | (1u << 18) | \
-				 (1u << 19) | (1u << 20) | (1u << 22))
+ * waiting for -- so every write masks them out unless it means to clear one.
+ *
+ * **PED is one of them, and it was missing.** (KF-239)
+ *
+ * The rule above was right and the list was short. Bits 17 to 23 are the
+ * change flags and they were swept as a block; PED sits alone at bit 1, does
+ * the same thing for a different reason, and was left out. Every other bit
+ * here *reports* something. PED **commands** something: writing a one to it
+ * does not acknowledge that the port is enabled, it disables the port.
+ *
+ * So `reset_port` destroyed its own work. It set PR, the controller reset the
+ * port and set PED, and then the acknowledgement of PRC -- `(read & ~RW1CS) |
+ * PRC` -- carried that fresh PED bit straight back into the register and
+ * turned the port off. The function then read PED, found it clear, and
+ * reported that the reset had failed to enable the port. It had enabled it and
+ * then disabled it, one line apart.
+ *
+ * Measured on the Gateway rather than reasoned about: `0x000206e1` before and
+ * `0x000006e1` after, with Linux reading `0x00000e03` on the same port minutes
+ * later. Only the connect-change bit moved.
+ *
+ * Invisible under emulation, because an emulated port comes out of reset
+ * enabled and a disable-write lands on a port already where the driver wants
+ * it. It needs hardware that actually obeys.
+ *
+ * CEC at bit 23 is added with it -- also write-one-to-clear, also outside the
+ * 18-to-22 sweep, and wrong for the same reason even though nothing has
+ * tripped over it yet. */
+#define PORTSC_RW1CS		(PORTSC_PED | PORTSC_CSC | PORTSC_PRC | \
+				 (1u << 18) | (1u << 19) | (1u << 20) | \
+				 (1u << 22) | (1u << 23))
 
 /* --- runtime registers, relative to BAR0 + RTSOFF -------------------------- */
 
@@ -589,6 +617,33 @@ static bool reset_port(struct xhci *x, unsigned port)
 	/* Acknowledge the reset-complete bit. */
 	op32_set(x, XHCI_PORTSC(port),
 		 (op32(x, XHCI_PORTSC(port)) & ~PORTSC_RW1CS) | PORTSC_PRC);
+
+	/* **Ten milliseconds before anybody speaks to it.** (KF-240)
+	 *
+	 * USB calls this TRSTRCY and it is not advice: a device coming out of
+	 * reset is not obliged to answer a transaction until it has passed,
+	 * and a control transfer sent inside it gets no reply at all. That is
+	 * completion code 4 -- a transaction error rather than a refusal,
+	 * which reads like broken addressing and is a device that was not
+	 * listening yet.
+	 *
+	 * Here rather than at the call site, because both callers need it and
+	 * only one of them has ever had it. The hub path waits already, by
+	 * accident of shape -- `hub_reset_port`'s polling loop opens with
+	 * `busy_ms(10)`, so ten milliseconds pass before it can return. The
+	 * root path spun on PORTSC with no delay and went straight to
+	 * `address_device`.
+	 *
+	 * **That is the third borrowed idea this file has moved one way.** The
+	 * boot walk's own comment says it: *this is the hub code's reasoning
+	 * two hundred lines up, applied to the ports it was never applied to*
+	 * -- written about the power-and-settle, by somebody who noticed the
+	 * gap once and fixed the instance rather than the class. Two
+	 * implementations of one operation is two places for the next
+	 * improvement to be made in one of, which is the reason `port_arrived`
+	 * exists at all. Putting this after the reset completes means neither
+	 * caller can forget it. */
+	busy_ms(10);
 
 	return (op32(x, XHCI_PORTSC(port)) & PORTSC_PED) != 0;
 }
@@ -1988,6 +2043,9 @@ bool xhci_attach(const struct pci_device *d)
 				(op32(x, XHCI_PORTSC(p)) & PORTSC_CCS) != 0;
 	}
 
+	if (boot_cmdline_has("noinit"))
+		print_portsc(x, "after resetting each port");
+
 	x->ports_enabled = enabled;
 
 	/* Declared to the suspend layer with no ops, which is the honest
@@ -1999,11 +2057,28 @@ bool xhci_attach(const struct pci_device *d)
 
 	controller_count++;
 
+	/* **Three numbers, and they used to be two.**
+	 *
+	 * This printed `enabled` under the word `connected`, and
+	 * `xhci_ports_connected` sat unused in this same file computing the
+	 * real thing. On the first machine where the two differed it read
+	 * `0 connected` while four devices were plugged in and detected --
+	 * including the stick the kernel had booted from.
+	 *
+	 * That cost three hypotheses: a wrong register base, unpowered ports,
+	 * and a debounce too short. All three are theories about why nothing
+	 * was *detected*, and detection was working perfectly. The kernel was
+	 * reporting a **reset** failure using the word **connected**.
+	 *
+	 * KF-231 and KF-236 are numbers printed in a form nobody can look up.
+	 * This is worse: a number that reads correctly and means something
+	 * else. An unlookupable GUID sends you to another tool; a confidently
+	 * mislabelled zero sends you to debug the wrong subsystem. (KF-238) */
 	kprintf("  xhci         : %u slots, %u ports, %u scratchpad page%s, "
-		"%u connected, %u addressed\n",
+		"%u connected, %u enabled, %u addressed\n",
 		x->max_slots, x->max_ports, x->scratchpads,
 		x->scratchpads == 1 ? "" : "s",
-		enabled, x->device_count);
+		xhci_ports_connected(x), enabled, x->device_count);
 
 	return true;
 }
