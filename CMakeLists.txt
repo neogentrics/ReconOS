@@ -921,6 +921,7 @@ add_executable(recon_server_files_tests
     server/http/serve.c
     server/http/files.c
     server/http/cache.c
+    server/http/range.c
     server/tests/test_http_files.c)
 
 add_test(NAME server_http_files COMMAND recon_server_files_tests)
@@ -987,6 +988,22 @@ add_executable(recon_server_service_tests
     server/tests/test_service.c)
 
 add_test(NAME server_service COMMAND recon_server_service_tests)
+
+# Asking for part of a file, and the ways that hands over the wrong part.
+#
+# Three failures matter and they are not equally visible. A range refused that
+# should have been honoured costs a whole body -- wasteful and self-correcting.
+# A range honoured *wrongly* hands over bytes nobody asked for with a 206
+# beside them. And a range honoured across a changed file stitches two
+# different files together, which has no symptom until somebody opens it.
+#
+# One range only: a few hundred bytes of header can ask for ten thousand
+# one-byte ranges, each needing its own boundary and its own seek.
+add_executable(recon_server_range_tests
+    server/http/range.c
+    server/tests/test_http_range.c)
+
+add_test(NAME server_http_range COMMAND recon_server_range_tests)
 
 # sscanf, against the host's.
 #

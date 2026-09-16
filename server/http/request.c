@@ -640,28 +640,14 @@ int http_status_for(int verdict)
 
 const char *http_reason(int status)
 {
+	/* Built from the one table in `http.h`. See the comment there: this
+	 * function and the suite each kept their own list once, and the two
+	 * drifted twice -- `304 Unknown`, then `206 Unknown` and `416 Unknown`
+	 * on the same day a case had been added for every status then known. */
+#define RECON_STATUS_CASE(code, phrase) case code: return phrase;
 	switch (status) {
-	case 200: return "OK";
-	case 204: return "No Content";
-
-	/* 304 was missing until the first conditional request went out and the
-	 * status line read `HTTP/1.1 304 Unknown`. Harmless to a client, which
-	 * reads the number -- but the phrase is what a person reads in a log,
-	 * and "Unknown" beside a status this server sends deliberately is a
-	 * server that does not know what it is doing. */
-	case 304: return "Not Modified";
-	case 400: return "Bad Request";
-	case 403: return "Forbidden";
-	case 404: return "Not Found";
-	case 405: return "Method Not Allowed";
-	case 408: return "Request Timeout";
-	case 413: return "Content Too Large";
-	case 414: return "URI Too Long";
-	case 431: return "Request Header Fields Too Large";
-	case 500: return "Internal Server Error";
-	case 501: return "Not Implemented";
-	case 503: return "Service Unavailable";
-	case 505: return "HTTP Version Not Supported";
+	HTTP_STATUSES(RECON_STATUS_CASE)
 	default:  return "Unknown";
 	}
+#undef RECON_STATUS_CASE
 }

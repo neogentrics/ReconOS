@@ -284,22 +284,23 @@ int main(void)
 	ok(http_status_for(HTTP_EBODY_LONG) == 413, "an over-long body answers 413");
 	ok(http_status_for(HTTP_OK) == 0, "a good request has no error status");
 	ok(http_status_for(HTTP_PARTIAL) == 0, "an incomplete request has no status");
-	ok(strcmp(http_reason(404), "Not Found") == 0, "404 has its phrase");
+	/*
+	 * Every status in the table has its phrase, walked from the table
+	 * itself rather than listed again here.
+	 *
+	 * Listing them by hand is what failed twice: `304 Unknown` went out the
+	 * first time a conditional request was answered, and then `206 Unknown`
+	 * and `416 Unknown` went out a day later -- after a case had been added
+	 * for every status then known. The hand-written list could only ever
+	 * cover what somebody remembered, and the thing it needed to catch was
+	 * a status somebody had just added.
+	 */
+#define RECON_CHECK_STATUS(code, phrase) 	ok(strcmp(http_reason(code), phrase) == 0, "status " #code " " phrase);
+	HTTP_STATUSES(RECON_CHECK_STATUS)
+#undef RECON_CHECK_STATUS
 
-	/* Every status this server actually sends needs one. 304 was missing,
-	 * and the first conditional request put `304 Unknown` on the wire. */
-	ok(strcmp(http_reason(304), "Not Modified") == 0, "304 has its phrase");
-	ok(strcmp(http_reason(200), "OK") == 0, "200 has its phrase");
-	ok(strcmp(http_reason(405), "Method Not Allowed") == 0,
-	   "405 has its phrase");
-	ok(strcmp(http_reason(413), "Content Too Large") == 0,
-	   "413 has its phrase");
-	ok(strcmp(http_reason(431), "Request Header Fields Too Large") == 0,
-	   "431 has its phrase");
-	ok(strcmp(http_reason(501), "Not Implemented") == 0,
-	   "501 has its phrase");
-	ok(strcmp(http_reason(505), "HTTP Version Not Supported") == 0,
-	   "505 has its phrase");
+	ok(strcmp(http_reason(599), "Unknown") == 0,
+	   "a status not in the table says so rather than inventing a phrase");
 	ok(strcmp(http_reason(999), "Unknown") != 0 ? 0 : 1,
 	   "an unknown status still has a phrase");
 

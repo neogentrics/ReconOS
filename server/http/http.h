@@ -108,9 +108,42 @@ int http_request_parse(const char *buf, size_t len, struct http_request *into);
  * no status and return 0, which a caller must not send. */
 int http_status_for(int verdict);
 
-/* The reason phrase for a status this server sends. Never NULL: an unknown
- * status is a bug in the caller, and "Unknown" on the wire is easier to find
- * than a crash. */
+/*
+ * Every status this server can send, with its reason phrase.
+ *
+ * **One list, because two drifted.** `http_reason` used to carry its own switch
+ * and the suite its own hand-written checks, and the two got out of step twice:
+ * 304 went out as `304 Unknown` the first time a conditional request was
+ * answered, and 206 and 416 did exactly the same a day later -- *after* a case
+ * had been added to the suite for every status then known. Enumerating by hand
+ * in two places is not a thing that can be done carefully enough.
+ *
+ * So the list is here and both read it. Adding a status without a phrase is now
+ * impossible rather than merely discouraged, and the suite walks the same table
+ * the function is built from.
+ */
+#define HTTP_STATUSES(X)                                       \
+	X(200, "OK")                                           \
+	X(204, "No Content")                                   \
+	X(206, "Partial Content")                              \
+	X(304, "Not Modified")                                 \
+	X(400, "Bad Request")                                  \
+	X(403, "Forbidden")                                    \
+	X(404, "Not Found")                                    \
+	X(405, "Method Not Allowed")                           \
+	X(408, "Request Timeout")                              \
+	X(413, "Content Too Large")                            \
+	X(414, "URI Too Long")                                 \
+	X(416, "Range Not Satisfiable")                        \
+	X(431, "Request Header Fields Too Large")              \
+	X(500, "Internal Server Error")                        \
+	X(501, "Not Implemented")                              \
+	X(503, "Service Unavailable")                          \
+	X(505, "HTTP Version Not Supported")
+
+/* The reason phrase for a status. Never NULL: a status not in the table above
+ * gives "Unknown", which is easier to find on a wire than a crash -- and is
+ * what the suite looks for to prove the table covers what is sent. */
 const char *http_reason(int status);
 
 /* Look a header up by name. `name` must be lower-case. NULL when absent. */

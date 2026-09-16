@@ -36,9 +36,11 @@
 
 #include "files.h"
 #include "cache.h"
+#include "range.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>	/* snprintf, for Content-Range */
 #include <unistd.h>
 
 /*
@@ -281,6 +283,12 @@ int http_files_handler(const struct http_request *request,
 	 * it means when they do not. */
 	unsigned long long expected = 0, actual = 0;
 
+	/* Which part, if any, was asked for -- and how much is left to send. */
+	struct http_range part = { 0, 0 };
+	int ranged = HTTP_RANGE_NONE;
+	unsigned long remaining;
+	static char content_range[64];
+
 	const struct http_files *files = (const struct http_files *)ctx;
 	const char *target;
 	size_t tl;
@@ -360,6 +368,7 @@ int http_files_handler(const struct http_request *request,
 		}
 		http_etag_format(etag, sizeof(etag), (unsigned long)size, h);
 		expected = h;
+		remaining = (unsigned long)size;
 	}
 
 	/*
@@ -396,6 +405,56 @@ int http_files_handler(const struct http_request *request,
 	 * throw away the revalidation the ETag above exists to enable.
 	 */
 	http_stream_header(sink, "Cache-Control", CACHING);
+	http_stream_header(sink, "Accept-Ranges", "bytes");
+
+	/*
+	 * Part of the file, if that is what was asked for.
+	 *
+	 * `If-Range` is consulted first and it is not a nicety. A client
+	 * resuming a download sends the range it still needs; if the file
+	 * changed since the first half was fetched, the two halves are from
+	 * different files and what lands on disk is neither -- with a 206
+	 * beside it saying all is well. A mismatch therefore sends the whole
+	 * representation, which is always a correct answer.
+	 */
+	{
+		const char *ifr = http_header_get(request, "if-range");
+		const char *hdr = http_header_get(request, "range");
+
+		if (hdr && (!ifr || http_if_range(ifr, etag)))
+			ranged = http_range_parse(hdr, (unsigned long)size,
+			                          &part);
+	}
+
+	if (ranged == HTTP_RANGE_UNSATISFIABLE) {
+		/*
+		 * 416, and the length with it.
+		 *
+		 * `Content-Range: bytes` followed by the real length is what
+		 * lets a client recover: it asked from a length it got
+		 * somewhere else, and this tells it the right one. A bare 416
+		 * would leave it guessing.
+		 */
+		close(fd);
+		snprintf(content_range, sizeof(content_range), "bytes */%lu",
+		         (unsigned long)size);
+		http_stream_header(sink, "Content-Range", content_range);
+		return say_status(sink, 416,
+		                  "416 Range Not Satisfiable\n");
+	}
+
+	if (ranged == HTTP_RANGE_OK) {
+		if (lseek(fd, (off_t)part.first, SEEK_SET) != (off_t)part.first) {
+			close(fd);
+			return say_status(sink, 404, "404 Not Found\n");
+		}
+		remaining = part.last - part.first + 1;
+
+		snprintf(content_range, sizeof(content_range),
+		         "bytes %lu-%lu/%lu", part.first, part.last,
+		         (unsigned long)size);
+		http_stream_header(sink, "Content-Range", content_range);
+	}
 
 	/*
 	 * The length is declared from what `lseek` said, and the promise is
@@ -404,18 +463,27 @@ int http_files_handler(const struct http_request *request,
 	 * `http_stream_end` turns that into a closed connection rather than a
 	 * header that quietly disagrees with its body.
 	 */
-	if (http_stream_begin(sink, 200, http_content_type(path), size)
-	    != HTTP_OK) {
+	if (http_stream_begin(sink,
+	                      ranged == HTTP_RANGE_OK ? 206 : 200,
+	                      http_content_type(path),
+	                      (long)remaining) != HTTP_OK) {
 		close(fd);
 		return HTTP_EMALFORMED;
 	}
 
 	actual = HTTP_HASH_SEED;
-	for (;;) {
-		ssize_t n = read(fd, block, sizeof(block));
+	while (remaining > 0) {
+		size_t want = sizeof(block);
+		ssize_t n;
+
+		if ((unsigned long)want > remaining)
+			want = (size_t)remaining;
+
+		n = read(fd, block, want);
 
 		if (n > 0) {
 			actual = http_hash(actual, block, (size_t)n);
+			remaining -= (unsigned long)n;
 			if (http_stream_write(sink, block, (size_t)n)
 			    != HTTP_OK) {
 				close(fd);
@@ -453,7 +521,21 @@ int http_files_handler(const struct http_request *request,
 	 * which at least means the client does not go on to reuse it -- and
 	 * leaves a fault visible rather than silent.
 	 */
-	if (etag[0] && actual != expected)
+	/*
+	 * Only when the whole file was sent.
+	 *
+	 * A 206 hashes the part it sent, which cannot equal the hash of the
+	 * whole -- so comparing them would close every ranged connection. The
+	 * guard a partial response has instead is `If-Range`: a client
+	 * resuming across a changed file is sent the whole thing rather than a
+	 * piece that would not fit what it already holds.
+	 *
+	 * That is a genuinely weaker guarantee and it is written down rather
+	 * than left implied. A client that sends a `Range` and no `If-Range`
+	 * gets no protection from this at all, which is the client having
+	 * declined it.
+	 */
+	if (etag[0] && ranged != HTTP_RANGE_OK && actual != expected)
 		return HTTP_EMALFORMED;
 
 	return HTTP_OK;

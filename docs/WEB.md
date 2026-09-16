@@ -38,6 +38,7 @@ Nothing is marked built on the strength of having been written.
 | Form decoding, and the write side | **built** | `form.c` — 39 checks; `POST /api/name` renames the machine |
 | Conditional requests and caching | **built** | `cache.c` — ETag, `If-None-Match`, 304, `Cache-Control` |
 | Service registry | **built** | `service.c` — the web server is one service; `/api/services` reports them |
+| Range requests and `If-Range` | **built** | `range.c` — 206, 416, `Accept-Ranges`, and a stale `If-Range` sends the whole file |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
@@ -70,7 +71,7 @@ fixed.
 | HTTP/1.1 keep-alive | **built** | 64 requests per connection, then closed |
 | Pipelining | **partial** | queued requests are answered in order; not tested under load |
 | Chunked transfer (`Transfer-Encoding`) | **refused** | see below — this is deliberate |
-| Range requests (`206`) | specified | needed before the file handler is useful for media |
+| Range requests (`206`) | **built** | `range.c` — 45 checks. One range only; a list is ignored and the whole file served |
 | Conditional requests (`ETag`, `If-None-Match`, `304`) | **built** | `cache.c` — 31 checks; a strong validator, because there is no `stat` for `Last-Modified` |
 | `Expect: 100-continue` | specified | a client that waits for it currently stalls until timeout |
 | HTTP/2 | specified | needs TLS and ALPN first |
@@ -115,7 +116,7 @@ can run, not by what it can send.
 | **JSON / REST APIs** | **built** | demonstrated in the serving suite: a handler returning `application/json` with the raw query string. Needs a JSON writer and parser next. |
 | **Form submission** | **built** | `server/http/form.c` — `urlencoded` decoded, 39 checks. A field given twice has **no** value: see below. `multipart/form-data` is still specified, not written. |
 | **File upload** | specified | needs `multipart/form-data` and streaming to disk; the 64 KiB body cap exists because nothing streams yet. |
-| **File download** | **built** | streams from the volume in 8 KiB blocks. Range requests are still specified, not written. |
+| **File download** | **built** | streams from the volume in 8 KiB blocks, and resumes: `Range`, `If-Range`, 206 and 416. |
 | **Server-sent events** | **unblocked** | the sink it needed now exists; the event framing is not written. |
 | **WebSocket** | specified | needs the `Upgrade` handshake, SHA-1 for the accept key, and a framing layer. The connection stops being HTTP after the handshake, so it needs its own loop. |
 | **Long-polling** | **blocked** | needs a request to be parked without occupying the only process. See concurrency below. |
@@ -207,6 +208,44 @@ broken length promise gets, for the same reason.
 `no-cache`, not `no-store`. The first means *keep it and ask before using it*,
 which is what the ETag exists to enable. The second forbids keeping it and
 would throw all of that away.
+
+---
+
+### One range, and why a list is refused
+
+The standard allows `bytes=0-99,200-299,5000-5099`, answered as a
+`multipart/byteranges` body. This serves the whole file instead, which is
+explicitly allowed — a server **may** ignore a `Range` it does not wish to
+honour.
+
+It is refused because a list costs the server far more than it costs the
+client. A few hundred bytes of header can ask for ten thousand one-byte ranges,
+each needing its own boundary, its own headers and its own seek: a small
+request, an enormous response, and a great deal of work. That has been used as
+an amplification attack against more than one well-known server, and the
+multipart writer it needs exists only to serve that shape.
+
+A client that genuinely wants several pieces can ask several times.
+
+### `If-Range` is not optional
+
+A client resuming a download sends the range it still needs. If the file changed
+since the first half was fetched, the two halves are from different files and
+what lands on disk is neither — with a 206 beside it saying all is well.
+
+`If-Range` is the guard: honour the range only if the representation is
+unchanged, otherwise send the whole thing. It is cheap here because the
+validator already exists, and leaving it out would be shipping the
+silent-corruption case on purpose.
+
+**Its comparison is strong, and it is the only one here that is.** A weak
+validator means "near enough the same representation" — fine for deciding
+whether to re-send a body, and not fine for stitching half a file onto another
+half. Two weakly-equal representations may differ byte for byte, which is
+exactly what a range depends on.
+
+A `Range` sent *without* an `If-Range` gets no protection from any of this,
+which is the client having declined it.
 
 ---
 
