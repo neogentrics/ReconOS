@@ -16,6 +16,60 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## `accept` cannot say who connected, so nothing can be restricted or attributed
+
+**Where:** guarding the server role's writing endpoints, 16 September 2026.
+
+*Filed from the server role.*
+
+### What is missing
+
+`SYS_ACCEPT` takes a descriptor and returns a descriptor. There is no argument
+for a peer address and no other call that would report one -- no
+`getpeername`, no `getsockname`. The C library is explicit about it:
+
+> Zeroed rather than filled in, because the kernel does not report who
+> connected.
+
+So `accept(fd, &addr, &len)` fills `addr` with 0.0.0.0 port 0. That is the
+right thing for the library to do with nothing to report, and it means a server
+cannot learn anything at all about the other end of a connection it is already
+talking to.
+
+### Three things it costs, all of them live today
+
+**Access control by source.** The obvious guard for a management endpoint is
+"only from this subnet", and it cannot be written. `POST /api/name` renames the
+machine and `POST /api/upload` writes to its volume; both had no protection at
+all until a boot token was added instead, and a token in clear over HTTP is a
+weaker thing than an address check would have been.
+
+**Attribution in the log.** `GET /api/log` reports every request answered,
+including every refusal -- and cannot say who made any of them. An access log
+that records a hundred 401s and cannot tell one client from a hundred is an
+access log that cannot answer the question it exists for.
+
+**Knowing what to sweep.** The discovery entry below needs this machine's own
+address to know what range to look at. A peer address does not give that
+directly, but a connection from 10.0.2.2 says a great deal about which network
+this machine is on -- which is more than is known now, which is nothing.
+
+### What would fix it
+
+Either shape works:
+
+- `SYS_ACCEPT` taking an optional buffer, filled with the peer's address and
+  port, the way the POSIX call this library implements already expects. The
+  library has the parameters already and throws them away.
+- A separate call taking a connected descriptor and answering with its peer,
+  and ideally a second answering its local end -- which would settle the
+  discovery entry outright.
+
+The first is less work and unblocks two of the three. The second unblocks all
+three.
+
+---
+
 ## A burst of more than about 2880 bytes stalls, and then trickles in at a kilobyte a second
 
 **Where:** building file upload for the server role, 16 September 2026. Found

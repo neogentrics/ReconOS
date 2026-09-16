@@ -243,6 +243,23 @@ struct http_route {
 	 * holding both, which is two unrelated things kept together because of
 	 * a limitation in the thing that calls them. */
 	void        *ctx;
+
+	/*
+	 * Whether this route requires the site's permission before it runs.
+	 *
+	 * **The check lives in the server rather than in each handler**, for
+	 * the same reason the security headers and the access log do: a check
+	 * every handler must remember is a check the next handler will not do.
+	 * A route is marked here once, and forgetting to mark one is a
+	 * visible omission in a table rather than an invisible one inside a
+	 * function.
+	 *
+	 * A guarded route on a site with no `allow` answers **500**, not 200.
+	 * See `serve.c`: a site that asks for a guard it did not supply is
+	 * misconfigured, and serving the request anyway would be the one
+	 * outcome nobody wanted.
+	 */
+	int          guarded;
 };
 
 struct http_site {
@@ -347,6 +364,20 @@ struct http_site {
 	 * call that differs on the side that knows which system it is.
 	 */
 	void (*unblock)(int fd);
+
+	/*
+	 * May this request run a route marked `guarded`? May be NULL.
+	 *
+	 * The policy is the site's -- this server knows only that some routes
+	 * need permission and that it must ask. `server_init.c` answers with
+	 * the boot token in `server/auth.c`.
+	 *
+	 * Returns non-zero to allow. A refusal is answered 401 with a
+	 * `WWW-Authenticate` header, and logged, so a locked-out client is an
+	 * entry somebody can find rather than a silence.
+	 */
+	int (*allow)(const struct http_request *r, void *ctx);
+	void *allow_ctx;
 };
 
 /* Open a listening socket on `port`, bound to every address.

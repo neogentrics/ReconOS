@@ -301,7 +301,7 @@ must be able to reach them rather than keeping its own parallel user list.
 |---|---|---|
 | HTTP Basic | specified | **over TLS only.** Basic without TLS puts the password on the wire in clear, so this must refuse to be enabled on a cleartext listener rather than warn. |
 | Session cookies | specified | needs a random source — `SYS_RANDOM` exists — plus `HttpOnly`, `Secure`, `SameSite` |
-| Bearer tokens for the API | specified | |
+| Bearer tokens for the API | **built, for writes** | `server/auth.c` — 33 checks. A random token made at boot and printed on the console; `POST /api/name` and `POST /api/upload` refuse without it. See the amended rule below. |
 | LDAP directory bind | **blocked** | no LDAP client |
 | Kerberos / SPNEGO | **blocked** | no KDC, no GSSAPI |
 | POSIX ACLs for served files | specified | the kernel has `SYS_GETUID`/`SYS_GETGID` and caps |
@@ -311,6 +311,37 @@ must be able to reach them rather than keeping its own parallel user list.
 listener. A login form served over HTTP is a credential given away, and a
 server that offers one is worse than a server that offers nothing, because the
 form is a claim that it is safe to type into.
+
+### The rule, amended 16 September 2026, because something now breaks it
+
+The boot token in `server/auth.c` **is** an authentication mechanism, and it
+ships enabled on a cleartext listener. Rather than quietly excuse it, here is
+the distinction and where it runs out.
+
+The rule's reasoning is about *a credential given away*: a password belongs to
+a person, is reused elsewhere, and a form asking for it over HTTP is a claim
+that typing it is safe. None of that applies here. The token is made by the
+machine, never chosen by anybody, never reused anywhere, shown only on the
+serial console, and gone at the next boot. There is no form, and nothing is
+being invited to type a secret it already had.
+
+**And the comparison that actually mattered was not token-versus-TLS.** It was
+token-versus-nothing. `POST /api/name` renamed the machine and
+`POST /api/upload` wrote to its volume for anyone who could reach port 80. The
+alternative on offer was not a safer login; it was leaving the writes open
+until TLS exists, which is not scheduled.
+
+**Where it runs out**, stated so nobody has to discover it: the token travels
+in a header in clear on every guarded request. Anyone who can read the traffic
+takes it once and holds it until reboot. This stops a passer-by on the network
+and does not stop an attacker on the path. It is a lock on a door with a window
+beside it, and it is still better than the door standing open.
+
+So the rule stands for **passwords and login forms**, which is what it was
+written about, and it now says explicitly that a machine-generated, console-
+delivered, boot-scoped capability is a different thing. When TLS arrives this
+becomes worth what it claims to be worth, and Basic auth becomes possible for
+the first time.
 
 ---
 

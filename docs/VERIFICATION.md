@@ -379,3 +379,58 @@ None.
   this is a capability described as absent while the code depended on it
   working. **Reading what is written down is not the same as checking it**, and
   a limitation nobody tests is a limitation nobody has to be right about.
+
+### VF-015 -- the same patch-script fault, four times, finally made impossible
+
+- **Found in** this seat's own working habits, across several days.
+- **What it was** A Python patch script turning an escaped newline inside a C
+  string literal into a real newline, splitting the literal across two lines
+  and breaking the build. It happened four times. Each time the conclusion
+  written down was *stop using scripts for C string literals*; each time it
+  happened again within hours.
+- **The fourth time was the checker.** The tool written to catch this fault was
+  itself written by a patch script, and that script broke the newline
+  comparisons inside its own scanner. The check existed for ten minutes before
+  it could run clean, because the thing it detects had already happened to it.
+- **Why it belongs here** A resolution that has failed four times is not a rule,
+  it is a hope. This register is full of entries where the answer was a
+  structural change rather than more care -- the X-macro that stopped the status
+  table drifting, the stamp file that stopped `ROLE` building the wrong image,
+  the runner that stopped the suites being run from memory. **This is the same
+  answer applied to the person rather than the code.**
+- **`scripts/check-c-literals.py`** walks every C source in the role's tree and
+  reports a literal left open, and `scripts/server-tests.sh` runs it first --
+  before anything is compiled, because a broken literal makes every suite below
+  it fail for a reason that has nothing to do with the code.
+- **Watched failing, both ways**: clean across 45 files, and against a
+  deliberately split literal it names the file and both lines. It also caught a
+  real one on its first run after being wired in -- a `printf` broken by the
+  very next patch script, before the compiler ever saw it.
+- **A false-positive pass mattered here.** The first version walked each line in
+  isolation and reported twenty, every one a quotation mark inside a multi-line
+  block comment. A checker with twenty false positives is a checker somebody
+  switches off, which is worse than no checker because it also looks like
+  diligence.
+
+### VF-016 -- two smaller faults, both found by writing a test rather than by running one
+
+- **The connection pool could guard one site with another's secret.** Found
+  while writing the check that a guarded route with no policy answers 500,
+  which needed a second site to exist. `CONNS` is one static array and
+  `conn_step` took the site as an argument, so a connection accepted for one
+  site and stepped during another's call would be routed by the wrong table and
+  guarded by the wrong policy.
+
+  Nothing did that yet -- the server serves one site. It is four bytes in the
+  slot to make impossible, against a paragraph telling the next person not to,
+  and it is what virtual hosts will need anyway.
+
+- **A counter the child incremented and the parent read.** The new check that
+  the guard policy was *actually consulted* used a plain `int`, which `fork`
+  copies -- so the parent read its own zero and reported the policy as never
+  asked, on a server asking it correctly every time.
+
+  `test_http_serve.c` carries a comment two hundred lines above explaining
+  exactly this trap, about its byte counter, written by this seat. **Reading a
+  warning is not the same as applying it**, which is the same shape as VF-010
+  and VF-014, and is now three entries in this register.

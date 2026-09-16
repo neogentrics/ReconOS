@@ -157,6 +157,7 @@ int http_status_for(int verdict);
 	X(206, "Partial Content")                              \
 	X(304, "Not Modified")                                 \
 	X(400, "Bad Request")                                  \
+	X(401, "Unauthorized")                                 \
 	X(403, "Forbidden")                                    \
 	X(404, "Not Found")                                    \
 	X(405, "Method Not Allowed")                           \

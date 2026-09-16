@@ -50,6 +50,7 @@
 #include "../http/escape.h"
 #include "../http/json.h"
 #include "../http/multipart.h"
+#include "../auth.h"
 #include "../include/recon_server.h"
 #include "../service.h"
 #include "../log.h"
@@ -130,6 +131,29 @@ struct server_facts {
 };
 
 static struct server_facts FACTS;
+
+/*
+ * The secret that the two writing endpoints require.
+ *
+ * Made once at boot from `SYS_RANDOM` and printed on the serial console. See
+ * `server/auth.h` for what it is, what it is not, and why source-address
+ * restriction was not available instead.
+ */
+static struct auth GUARD;
+
+/*
+ * The site's policy, asked by `serve.c` before any route marked `guarded`.
+ *
+ * Only the `Authorization` header is read. A token in a query string would be
+ * written into this server's own access log and sent onward by a browser in
+ * `Referer`, which is the one place a secret must not go -- `auth.c` says so at
+ * more length.
+ */
+static int may_write(const struct http_request *r, void *ctx)
+{
+	return auth_ok((const struct auth *)ctx,
+	               http_header_get(r, "authorization"));
+}
 
 /*
  * What the supervisor holds on this machine.
@@ -764,18 +788,18 @@ static int handle_upload(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS },
-	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS },
-	{ "GET",  "/health",      1, handle_health,    0, 0 },
-	{ "GET",  "/api/services", 1, handle_services,  0, &SUPERVISOR },
-	{ "GET",  "/api/log",     1, handle_log,       0, &LOGBOOK },
-	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS },
-	{ "POST", "/api/upload",  1, handle_upload,    0, 0 },
+	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS, 0 },
+	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS, 0 },
+	{ "GET",  "/health",      1, handle_health,    0, 0, 0 },
+	{ "GET",  "/api/services", 1, handle_services,  0, &SUPERVISOR, 0 },
+	{ "GET",  "/api/log",     1, handle_log,       0, &LOGBOOK, 0 },
+	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS, 1 },
+	{ "POST", "/api/upload",  1, handle_upload,    0, 0, 1 },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
 	 * the volume can serve something larger than this program's memory. */
 	{ "GET", "",              0, 0, http_files_handler,
-	  (void *)&SITE_FILES },
+	  (void *)&SITE_FILES, 0 },
 };
 
 /* --- the web server, as a service ------------------------------------------ */
@@ -1188,6 +1212,43 @@ int main(void)
 	 */
 	site.idle = recon_yield;
 	site.now_ms = clock_ms;
+	site.allow = may_write;
+	site.allow_ctx = &GUARD;
+
+	/*
+	 * --- the secret, made once ------------------------------------------
+	 *
+	 * Printed on the serial console, because that is the whole of what it
+	 * asserts: whoever can read this machine's console may write to it.
+	 *
+	 * **A failure to get randomness leaves the guard closed, not open.** If
+	 * `SYS_RANDOM` gives fewer bytes than asked for, `auth_arm` refuses and
+	 * every guarded route answers 401 until the machine is restarted. That
+	 * is the right way round: a server that cannot make a secret cannot
+	 * keep one, and the alternative is a machine that reports itself as
+	 * guarded while accepting anything.
+	 */
+	{
+		unsigned char seed[AUTH_TOKEN_BYTES];
+		long got = (long)recon_call6(SYS_RANDOM,
+		                             (u64)(unsigned long)seed,
+		                             sizeof(seed), 0, 0, 0, 0);
+
+		if (got < 0 || !auth_arm(&GUARD, seed, (size_t)got)) {
+			snprintf(line, sizeof(line),
+			         "  the guard: NO SECRET (SYS_RANDOM gave %ld)"
+			         " -- every write is refused until reboot\n",
+			         got);
+			say(line);
+		} else {
+			snprintf(line, sizeof(line),
+			         "  the guard: writes need"
+			         " `Authorization: Bearer %s`\n", GUARD.token);
+			say(line);
+			say("  the guard: reads are open;"
+			    " this token is new on every boot\n");
+		}
+	}
 
 	/* --- the services ------------------------------------------------------ */
 

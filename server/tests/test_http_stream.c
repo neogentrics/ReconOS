@@ -148,12 +148,12 @@ static int both_handler(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET", "/known",    1, 0, stream_known,   0 },
-	{ "GET", "/unknown",  1, 0, stream_unknown, 0 },
-	{ "GET", "/short",    1, 0, stream_short,   0 },
-	{ "GET", "/over",     1, 0, stream_over,    0 },
-	{ "GET", "/refuses",  1, 0, stream_refuses, 0 },
-	{ "GET", "/both",     1, both_handler, stream_known, 0 },
+	{ "GET", "/known",    1, 0, stream_known,   0, 0 },
+	{ "GET", "/unknown",  1, 0, stream_unknown, 0, 0 },
+	{ "GET", "/short",    1, 0, stream_short,   0, 0 },
+	{ "GET", "/over",     1, 0, stream_over,    0, 0 },
+	{ "GET", "/refuses",  1, 0, stream_refuses, 0, 0 },
+	{ "GET", "/both",     1, both_handler, stream_known, 0, 0 },
 };
 
 static unsigned long *BYTES;
@@ -171,7 +171,7 @@ static struct http_site SITE = {
 	 * once and a blocking socket would stop the loop on whichever one
 	 * went quiet. See `serve.h`. */
 	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/stream",
-	0, 0, 0, 0, 0, unblock
+	0, 0, 0, 0, 0, unblock, 0, 0
 };
 
 /* --- the client ------------------------------------------------------------ */

@@ -73,6 +73,26 @@ total=0
 failed=0
 suites=0
 
+#
+# Before anything is built: are the string literals intact?
+#
+# The compiler finds this too, but only in files some suite happens to build,
+# and only as `missing terminating " character` -- which has been mistaken for
+# a typo three times and for a mangled patch script none. See the header of
+# `check-c-literals.py`, including the part where the checker itself was broken
+# by the very fault it exists to catch.
+#
+# It costs milliseconds and it runs first, because a broken literal makes every
+# suite below it fail for a reason that has nothing to do with the code.
+if command -v python3 >/dev/null 2>&1; then
+	if ! python3 "$here/check-c-literals.py"; then
+		echo "refusing to run the suites against sources that will not compile" >&2
+		exit 2
+	fi
+else
+	echo "literals: python3 not found, check skipped" >&2
+fi
+
 printf '%s\n' "--- server suites ---"
 
 for entry in $(printf '%s\n' "$targets" | tr ' ' '\001'); do

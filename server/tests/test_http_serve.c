@@ -95,9 +95,9 @@ static int handle_echo(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET",  "/",            1, handle_root,   0, 0 },
-	{ "GET",  "/api/status",  1, handle_status, 0, 0 },
-	{ "POST", "/api/echo",    1, handle_echo,   0, 0 },
+	{ "GET",  "/",            1, handle_root,   0, 0, 0 },
+	{ "GET",  "/api/status",  1, handle_status, 0, 0, 0 },
+	{ "POST", "/api/echo",    1, handle_echo,   0, 0, 0 },
 };
 
 /* The byte counter lives in shared memory, because the server runs in the
@@ -113,13 +113,79 @@ static void unblock(int fd)
 	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 }
 
+/* --- the guard, over a real socket -----------------------------------------
+ *
+ * `auth.c` decides whether a token is right and is tested exhaustively in its
+ * own suite. What is tested here is the part only the server can do: that a
+ * route marked `guarded` is **not reached at all** without permission, and
+ * that a site which asks for a guard and supplies none fails closed.
+ *
+ * That second one needs a second site, which is what found the pool bug
+ * recorded in `serve.c`: the connection slots are one static array, so a
+ * connection accepted for one site must carry its own site or it gets stepped
+ * with another's routes and another's policy. Two listeners in this suite are
+ * what makes that impossible to regress.
+ */
+
+/*
+ * How many times the policy was asked.
+ *
+ * **Shared, because the server runs in the child and the check is made in the
+ * parent.** A plain `int` here was the first version, and it failed exactly as
+ * this file's comment on the byte counter says it would: `fork` copies it, the
+ * child counts in its own copy, and the parent reads a zero that looks
+ * identical to a policy that was never consulted.
+ *
+ * Which is the failure this check exists to detect. It would have reported the
+ * guard as never asked, on a server asking it correctly every time.
+ */
+static int *GUARD_SAW;
+
+static int handle_secret(const struct http_request *r, const char *body,
+                         size_t body_len, struct http_response *out, void *ctx)
+{
+	(void)r; (void)body; (void)body_len; (void)ctx;
+	http_response_simple(out, 200, "text/plain", "secret\n", 7);
+	return HTTP_OK;
+}
+
+static const struct http_route GUARDED_ROUTES[] = {
+	{ "GET", "/open",   1, handle_root,    0, 0, 0 },
+	{ "GET", "/secret", 1, handle_secret,  0, 0, 1 },
+};
+
+/* Allows only the exact header. Deliberately trivial: the real decision is
+ * `auth_ok`, and repeating it here would test this file against itself. */
+static int allow_if_word(const struct http_request *r, void *ctx)
+{
+	const char *v = http_header_get(r, "authorization");
+
+	(void)ctx;
+	if (GUARD_SAW)
+		(*GUARD_SAW)++;
+	return v && strcmp(v, "Bearer opensesame") == 0;
+}
+
+static struct http_site GUARDED_SITE = {
+	GUARDED_ROUTES, sizeof(GUARDED_ROUTES) / sizeof(GUARDED_ROUTES[0]),
+	0, "ReconOS/guarded", 0, 0, 0, 0, 0, unblock, allow_if_word, 0
+};
+
+/* The same routes with **no policy at all**. A guarded route here must answer
+ * 500: the site asked for a guard it did not supply, and serving the request
+ * anyway is the one outcome nobody wanted. */
+static struct http_site BARE_SITE = {
+	GUARDED_ROUTES, sizeof(GUARDED_ROUTES) / sizeof(GUARDED_ROUTES[0]),
+	0, "ReconOS/bare", 0, 0, 0, 0, 0, unblock, 0, 0
+};
+
 static struct http_site SITE = {
 	/* `idle` and `now_ms` are zero: on a host there is nothing to yield
 	 * to. `unblock` is not -- the server holds several connections at
 	 * once and a blocking socket would stop the loop on whichever one
 	 * went quiet. See `serve.h`. */
 	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1",
-	0, 0, 0, 0, 0, unblock
+	0, 0, 0, 0, 0, unblock, 0, 0
 };
 
 /* --- the client ---------------------------------------------------------- */
@@ -193,6 +259,8 @@ static int starts_with(const char *s, const char *p)
 int main(void)
 {
 	unsigned port = 18080;
+	unsigned guard_port = 0, bare_port = 0;
+	int guard_listener = -1, bare_listener = -1;
 	int listener = -1;
 	pid_t child;
 	char reply[8192];
@@ -212,6 +280,14 @@ int main(void)
 	}
 	*BYTES = 0;
 	SITE.bytes_sent = BYTES;
+
+	GUARD_SAW = mmap(0, sizeof(*GUARD_SAW), PROT_READ | PROT_WRITE,
+	                 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	if (GUARD_SAW == MAP_FAILED) {
+		printf("  FAIL  no shared page for the guard counter\n");
+		return 1;
+	}
+	*GUARD_SAW = 0;
 
 	/* A busy port is not a failure of this suite. Walk until one is free. */
 	{
@@ -246,6 +322,34 @@ int main(void)
 	 */
 	fcntl(listener, F_SETFL, fcntl(listener, F_GETFL, 0) | O_NONBLOCK);
 
+	/* Two more, for the guard. One site with a policy and one without, on
+	 * their own ports, because the fail-closed case is a property of a site
+	 * rather than of a route -- and because two sites in one process is
+	 * exactly what found the pool bug recorded in `serve.c`. */
+	{
+		int tries = 0;
+
+		guard_port = port + 1;
+		while (tries < 32 && (guard_listener = http_listen(guard_port)) < 0) {
+			guard_port++;
+			tries++;
+		}
+		tries = 0;
+		bare_port = guard_port + 1;
+		while (tries < 32 && (bare_listener = http_listen(bare_port)) < 0) {
+			bare_port++;
+			tries++;
+		}
+	}
+	if (guard_listener < 0 || bare_listener < 0) {
+		printf("  FAIL  no free port for the guarded sites\n");
+		return 1;
+	}
+	fcntl(guard_listener, F_SETFL,
+	      fcntl(guard_listener, F_GETFL, 0) | O_NONBLOCK);
+	fcntl(bare_listener, F_SETFL,
+	      fcntl(bare_listener, F_GETFL, 0) | O_NONBLOCK);
+
 	child = fork();
 	if (child < 0) {
 		printf("  FAIL  fork\n");
@@ -277,13 +381,17 @@ int main(void)
 		(void)served;
 		for (;;) {
 			int rc = http_serve_once(listener, &SITE);
+			int g  = http_serve_once(guard_listener, &GUARDED_SITE);
+			int b  = http_serve_once(bare_listener, &BARE_SITE);
 
-			if (rc < 0)
+			if (rc < 0 || g < 0 || b < 0)
 				break;
-			if (rc == 0)
+			if (rc == 0 && g == 0 && b == 0)
 				usleep(200);	/* nothing to do; do not spin */
 		}
 		close(listener);
+	close(guard_listener);
+	close(bare_listener);
 		_exit(0);
 	}
 
@@ -490,6 +598,85 @@ int main(void)
 	 * reporting bytes it did not send would be worse than one reporting
 	 * none. */
 	ok(*BYTES > 400, "the server counted the bytes it put on the wire");
+
+	/* --- the guard --------------------------------------------------------
+	 *
+	 * Whether a token is the right one is `auth.c`'s job and is tested to
+	 * destruction there. What is checked here is that the server asks at
+	 * all, asks *before* the handler runs, and fails closed when a site
+	 * asked for a guard it did not supply.
+	 */
+	{
+		char reply[2048];
+
+		/* An unguarded route on the guarded site is unaffected. A guard
+		 * that quietly covered everything would look like this one
+		 * working, right up until somebody could not read a status
+		 * page. */
+		exchange(guard_port,
+		         "GET /open HTTP/1.1\r\nHost: m16\r\n"
+		         "Connection: close\r\n\r\n", reply, sizeof(reply));
+		ok(strstr(reply, "200 OK") != 0,
+		   "an unguarded route is served without a token");
+
+		/* No credentials at all. */
+		exchange(guard_port,
+		         "GET /secret HTTP/1.1\r\nHost: m16\r\n"
+		         "Connection: close\r\n\r\n", reply, sizeof(reply));
+		ok(strstr(reply, "401 Unauthorized") != 0,
+		   "a guarded route with no token answers 401");
+		ok(strstr(reply, "WWW-Authenticate: Bearer") != 0,
+		   "and says what it wants, which is what makes it a 401");
+		ok(strstr(reply, "secret") == 0,
+		   "and the handler did not run -- no part of its answer leaked");
+
+		/* Wrong credentials. Same answer as none, deliberately: telling
+		 * a caller which half they got right is what a guard must not
+		 * do. */
+		exchange(guard_port,
+		         "GET /secret HTTP/1.1\r\nHost: m16\r\n"
+		         "Authorization: Bearer wrong\r\n"
+		         "Connection: close\r\n\r\n", reply, sizeof(reply));
+		ok(strstr(reply, "401 Unauthorized") != 0,
+		   "a wrong token answers 401 too");
+		ok(strstr(reply, "secret") == 0, "and still does not run it");
+
+		/* The right one. */
+		exchange(guard_port,
+		         "GET /secret HTTP/1.1\r\nHost: m16\r\n"
+		         "Authorization: Bearer opensesame\r\n"
+		         "Connection: close\r\n\r\n", reply, sizeof(reply));
+		ok(strstr(reply, "200 OK") != 0, "the right token gets through");
+		ok(strstr(reply, "secret") != 0, "and the handler runs");
+
+		/*
+		 * The case this needed a second site for.
+		 *
+		 * A route marked `guarded` on a site with no policy. 500,
+		 * because the site is misconfigured -- and emphatically not
+		 * 200, which is what a guard that "falls back to open when
+		 * nothing is configured" would give. That fallback is the most
+		 * common way a guard turns out never to have been guarding.
+		 */
+		exchange(bare_port,
+		         "GET /secret HTTP/1.1\r\nHost: m16\r\n"
+		         "Connection: close\r\n\r\n", reply, sizeof(reply));
+		ok(strstr(reply, "500") != 0,
+		   "a guarded route with no policy answers 500, not 200");
+		ok(strstr(reply, "secret") == 0,
+		   "and fails closed: the handler never ran");
+
+		/* The unguarded route on that same site still works, so the
+		 * 500 above is about the guard and not about the site being
+		 * broken outright. */
+		exchange(bare_port,
+		         "GET /open HTTP/1.1\r\nHost: m16\r\n"
+		         "Connection: close\r\n\r\n", reply, sizeof(reply));
+		ok(strstr(reply, "200 OK") != 0,
+		   "while its unguarded route is served normally");
+
+		ok(*GUARD_SAW > 0, "the policy was actually consulted");
+	}
 
 	kill(child, SIGTERM);
 	waitpid(child, 0, 0);

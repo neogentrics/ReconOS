@@ -44,7 +44,7 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 560 checks across fifteen suites, **several connections at once**, running on the machine |
+| Web / API server | server | **built** | `server/http/` — 606 checks across sixteen suites, several connections at once, writes guarded, running on the machine |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
@@ -62,7 +62,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | LDAP directory service | server | **blocked** | no LDAP client or server |
 | Kerberos KDC | server | **blocked** | no GSSAPI, no crypto |
 | TLS termination and certificates | server | **blocked** | no TLS, no certificate store |
-| HTTP auth (Basic, session, bearer) | server | spec | **TLS first** — see `docs/WEB.md` §5 |
+| HTTP auth (Basic, session, bearer) | server | **partial** | Bearer is **built** for the two writing endpoints — `server/auth.c`, a boot token on the console, 33 checks. Basic and sessions still wait on TLS; the rule in `docs/WEB.md` §5 is amended there rather than bent |
 | Audit log daemon | server | **partial** | `server/log.c` — a ring of recent requests at `GET /api/log`. **In memory only**: appending to a file needs `O_APPEND`, which the C library drops |
 | POSIX ACLs | kernel | partial | uid/gid and caps exist |
 

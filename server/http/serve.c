@@ -697,6 +697,23 @@ static void note(const struct http_site *site, const struct http_request *req,
 struct http_conn {
 	int    fd;
 	int    state;
+
+	/*
+	 * The site this connection was accepted for.
+	 *
+	 * **Held per connection rather than passed in**, because the pool is
+	 * one static array and a process may serve more than one listener. A
+	 * connection accepted for one site and then stepped with another
+	 * would be routed by the wrong table and -- far worse -- guarded by
+	 * the wrong policy, which is a site's writes protected by a different
+	 * site's secret.
+	 *
+	 * Nothing does that yet. It was found by trying to write the suite for
+	 * the fail-closed case, which needed a second site to have no `allow`,
+	 * and it is four bytes to make impossible rather than a paragraph
+	 * telling the next person not to.
+	 */
+	const struct http_site *site;
 	size_t have;		/* bytes in `buf` */
 	size_t need;		/* head + body, once the head is parsed */
 	int    requests;	/* answered on this connection so far */
@@ -799,6 +816,49 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 			send_status(fd, 500, site->server_name,
 			            site->bytes_sent);
 			return 0;
+		}
+
+		/*
+		 * Permission, before the handler runs.
+		 *
+		 * Checked here rather than inside each handler, for the reason
+		 * the security headers are written here: a check every handler
+		 * must remember is a check the next handler will not do.
+		 *
+		 * **A guarded route on a site with no policy is 500, not 200.**
+		 * The site asked for a guard and did not supply one, which is
+		 * the same class of fault as the route above that is both a
+		 * handler and a stream -- and answering the request anyway
+		 * would be the single outcome nobody wanted. It fails closed
+		 * and loudly, rather than open and quietly.
+		 */
+		if (rt->guarded) {
+			if (!site->allow) {
+				send_status(fd, 500, site->server_name,
+				            site->bytes_sent);
+				return 0;
+			}
+			if (!site->allow(req, site->allow_ctx)) {
+				/* Logged. A client that cannot get in is
+				 * exactly the entry somebody goes looking for,
+				 * and a refusal that leaves no trace is
+				 * indistinguishable from a request that never
+				 * arrived. */
+				http_response_simple(&res, 401, "text/plain",
+				                     "401 Unauthorized\n", 17);
+				res.extra_name = "WWW-Authenticate";
+				res.extra_value = "Bearer";
+				res.close = 1;
+				if (send_response(fd, req, &res,
+				                  site->server_name, 0,
+				                  head_only,
+				                  site->bytes_sent) != 0) {
+					note(site, req, 401, sent_before);
+					return 0;
+				}
+				note(site, req, 401, sent_before);
+				return 0;
+			}
 		}
 
 		if (rt->stream) {
@@ -916,9 +976,9 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
  * returns immediately so the next one gets a turn, and comes back to exactly
  * where it was because the state is in the slot rather than on the stack.
  */
-static int conn_step(struct http_conn *c, const struct http_site *site)
+static int conn_step(struct http_conn *c)
 {
-	const struct http_site *s = site;
+	const struct http_site *s = c->site;
 	int verdict, got;
 
 	if (c->state == CONN_HEAD) {
@@ -1064,7 +1124,7 @@ static int conn_step(struct http_conn *c, const struct http_site *site)
 		return 1;
 	}
 
-	if (!conn_answer(c, site))
+	if (!conn_answer(c, c->site))
 		conn_drop(c);
 	return 1;
 }
@@ -1143,6 +1203,7 @@ int http_serve_once(int listener, const struct http_site *site)
 				site->unblock(fd);
 
 			c->fd = fd;
+			c->site = site;
 			c->state = CONN_HEAD;
 			c->have = 0;
 			c->need = 0;
@@ -1158,10 +1219,15 @@ int http_serve_once(int listener, const struct http_site *site)
 		}
 	}
 
-	/* Give every live connection a turn. */
+	/*
+	 * Give every live connection a turn -- each with the site it arrived
+	 * on, not the one this call was made for. With a single site those are
+	 * the same; with two they are not, and the difference is which policy
+	 * guards which writes.
+	 */
 	for (i = 0; i < HTTP_CONNS_MAX; i++)
 		if (CONNS[i].fd >= 0)
-			worked |= conn_step(&CONNS[i], site);
+			worked |= conn_step(&CONNS[i]);
 
 	return worked;
 }

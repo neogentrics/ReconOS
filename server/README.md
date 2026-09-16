@@ -29,10 +29,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.16.0 |
+| **Version** | 0.17.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 16 September 2026 |
-| **Checks** | 560 across fifteen suites, by `scripts/server-tests.sh` |
+| **Checks** | 606 across sixteen suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.41 |
 
 The check figure is the first one this project has that was not assembled by
@@ -67,8 +67,8 @@ architecture document asks for:
 | `GET /health` | `ok`, for something that is not a person |
 | `GET /api/services` | every registered service: state, polls, faults, restarts |
 | `GET /api/log` | the last 64 requests answered, and how many were dropped |
-| `POST /api/name` | renames the machine, validated by the same code that numbers a parallel |
-| `POST /api/upload` | takes a `multipart/form-data` file and keeps it in `/System/Uploads`, which **nothing serves** |
+| `POST /api/name` | renames the machine, validated by the same code that numbers a parallel. **Needs the token** |
+| `POST /api/upload` | takes a `multipart/form-data` file and keeps it in `/System/Uploads`, which **nothing serves**. **Needs the token** |
 | anything else | a file from `/System/Web` on the volume, or 404 |
 
 Every number on that page is read from the kernel through `SYS_MACHINE` or
@@ -148,7 +148,7 @@ project builds with, and following them left two suites unbuildable.
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
 | `server_http` | 93 | one request, and every way of writing two |
-| `server_http_serve` | 31 | the server over a real socket, `serve.c` unmodified |
+| `server_http_serve` | 43 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
@@ -159,6 +159,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_http_json` | 28 | escaping text for JSON, and the byte that ends a string early |
 | `server_http_multipart` | 71 | reading a multipart body, and the two bytes that ruin a file |
 | `server_http_concurrent` | 12 | two clients, one of them stuck |
+| `server_auth` | 33 | a guard, and every way of getting past one that is not the token |
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
 | `server_dial` | 32 | three answers, and the two ways of confusing them |
 
@@ -251,6 +252,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.17.0** | **The writes stop being open to everybody.** `POST /api/name` renamed the machine and `POST /api/upload` wrote to its volume for anyone who could reach port 80 — a hole the upload endpoint had widened one version earlier. The obvious defence was unavailable and not for want of effort: `SYS_ACCEPT` takes only a descriptor, so the kernel cannot report who connected and an address check cannot be written. Filed. Instead, a random token from `SYS_RANDOM`, made at boot and printed on the console — a capability saying *whoever can read this machine's console*, not a password. The check is in the **server**, not the handlers, for the reason the security headers are: a guarded route on a site with no policy answers **500**, never 200, because falling back to open is how a guard turns out never to have guarded. Reads stay open. Honest about its limit: the token is in clear on the wire, so it stops a passer-by and not somebody on the path — `docs/WEB.md` §5's hard rule is amended there rather than bent. Also: the connection pool could have guarded one site with another's secret, found by writing the test for the 500; and the fourth patch-script-broken string literal became `scripts/check-c-literals.py`, which the runner now runs before it compiles anything. VF-015, VF-016. |
 | **0.16.0** | **Several connections at once, and the capability that turned out to already exist.** `docs/WEB.md` called single-connection serving the most serious limitation in it — a denial of service costing one socket — and said the fix needed the kernel to report readiness on more than a listener. It already did: `recv` answers 0 with `errno` 0 when nothing has arrived, which is exactly the behaviour that had been silently dropping every request over 4 KiB one version earlier. The missing feature and the bug were one fact seen from two sides. `serve.c` now holds four connections and gives each a turn; **reading** is concurrent, which is where the seconds are, and dispatch stays synchronous on purpose. Measured on the machine: one client stuck mid-body, three others answered in 0.2s each. The new suite fails 4 of 12 against the old server — and the eight that pass are the point, because a suite that follows one client would have called it perfectly good. That is VF-014: fifteen suites, none of which could see the limitation everyone had written down. |
 | **0.15.0** | **A file upload, and the reason no request over 4 KiB had ever worked.** `multipart.c` reads `multipart/form-data` — 71 checks, watched failing at 12 against the obvious parser, which returns every value two bytes too long because the CRLF before a delimiter belongs to the delimiter. A filename that climbs is refused rather than repaired, and uploads land in `/System/Uploads`, which nothing serves. Wiring it up found the bigger fault: `serve.c` read `recv` returning 0 as end-of-stream, when on this kernel it means *nothing yet*. Every request whose bytes did not all arrive in one read was dropped without an answer — which had never happened before, because a page request fits in one read and an upload does not. The same file already documented the identical behaviour on the **send** side and had never looked at the receive side. Fixed with a real clock rather than a spin count, and a request cut off at the deadline now gets 408 and a log entry instead of silence. **The kernel half is filed, with measurements from both ends**: a burst stalls at 2880 bytes and trickles in at a kilobyte a second, while the same bytes paced by the sender arrive at full speed and twenty times the size. |
 | **0.14.0** | **The coincidence removed from HTML in 0.9.0, found still holding up the JSON.** `/api/status` and the reply from `POST /api/name` wrote the machine's name into a JSON string unescaped — safe only because the name validator happens to forbid a quote, which is exactly the argument 0.9.0 exists to have stopped making. Found by reading back 0.12.0's own refusal to serve the log as JSON, which named the hazard correctly and assumed its scope. `json.c` now escapes **every** string in every endpoint, including the ones that cannot hold a quote today, because a rule with an exception for known-safe values is a rule the next person has to apply silently. Two things fell out of the wiring: a handler could not say a failure was the *server's* (`http_status_for` answered 400 for anything unrecognised, blaming the client for the server running out of buffer) — now `HTTP_EINTERNAL`, 500; and thirteen suites had no way to be run except by hand, which `scripts/server-tests.sh` fixes, finding two that did not build under its own flags in its first minute. |

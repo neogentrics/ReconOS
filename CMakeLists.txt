@@ -1057,6 +1057,19 @@ add_executable(recon_server_concurrent_tests
 
 add_test(NAME server_http_concurrent COMMAND recon_server_concurrent_tests)
 
+# A guard, and every way of getting past one that is not the token.
+#
+# `POST /api/name` renames the machine and `POST /api/upload` writes to its
+# volume, and until 0.17.0 neither asked anything of the caller. Source-address
+# restriction was not available -- SYS_ACCEPT cannot report who connected -- so
+# this is a boot token instead. Watched failing at 9 of 33 against a guard using
+# strcmp, no scheme check, and an unarmed guard that allowed everyone through.
+add_executable(recon_server_auth_tests
+    server/auth.c
+    server/tests/test_auth.c)
+
+add_test(NAME server_auth COMMAND recon_server_auth_tests)
+
 # A ring of recent entries, and the count that stops it lying.
 #
 # A log that drops silently looks complete, reads plausibly, and has lost
