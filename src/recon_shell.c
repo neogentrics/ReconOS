@@ -6292,7 +6292,7 @@ static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
     size_t typed = strlen(shell->menu_filter);
 
     switch (sym) {
-    case XKB_KEY_Escape:
+    case RECON_KEY_Escape:
         /* One step back at a time: what was typed, then the long list, then
          * the menu. Closing outright would throw away a search somebody is
          * halfway through correcting. */
@@ -6310,7 +6310,7 @@ static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
         recon_damage_all(shell->server);
         return true;
 
-    case XKB_KEY_BackSpace:
+    case RECON_KEY_BackSpace:
         if (typed > 0) {
             shell->menu_filter[typed - 1] = '\0';
             shell->menu_hover = -1;
@@ -6320,17 +6320,17 @@ static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
         }
         return true;
 
-    case XKB_KEY_Up:
-    case XKB_KEY_Down: {
+    case RECON_KEY_Up:
+    case RECON_KEY_Down: {
         if (count <= 0) {
             return true;
         }
         int at = (shell->menu_hover >= HIT_MENU_BASE &&
                   shell->menu_hover < HIT_MENU_BASE + count)
             ? shell->menu_hover - HIT_MENU_BASE
-            : (sym == XKB_KEY_Down ? -1 : count);
+            : (sym == RECON_KEY_Down ? -1 : count);
 
-        at += (sym == XKB_KEY_Down) ? 1 : -1;
+        at += (sym == RECON_KEY_Down) ? 1 : -1;
         if (at < 0) {
             at = count - 1;
         } else if (at >= count) {
@@ -6343,8 +6343,8 @@ static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
         return true;
     }
 
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter: {
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter: {
         if (count <= 0) {
             return true;
         }
@@ -6406,13 +6406,13 @@ bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
 
     /* A question owns the keyboard while it is up. */
     if (shell->dialog_open) {
-        if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        if (sym == RECON_KEY_Return || sym == RECON_KEY_KP_Enter) {
             dialog_finish(shell, shell->dialog_default);
-        } else if (sym == XKB_KEY_Escape) {
+        } else if (sym == RECON_KEY_Escape) {
             dialog_finish(shell, shell->dialog_cancel);
-        } else if (sym == XKB_KEY_Left || sym == XKB_KEY_Right ||
-                sym == XKB_KEY_Tab) {
-            int step = (sym == XKB_KEY_Left) ? -1 : 1;
+        } else if (sym == RECON_KEY_Left || sym == RECON_KEY_Right ||
+                sym == RECON_KEY_Tab) {
+            int step = (sym == RECON_KEY_Left) ? -1 : 1;
             shell->dialog_default =
                 (shell->dialog_default + step + shell->dialog_button_count) %
                 shell->dialog_button_count;

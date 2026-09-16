@@ -16,7 +16,7 @@
 
 #include <stdbool.h>
 
-#include <xkbcommon/xkbcommon.h>
+#include "recon_key.h"
 
 #include "recon_fs.h"
 
@@ -127,7 +127,7 @@ void recon_desktop_paste(struct recon_desktop *desktop);
  */
 void recon_desktop_begin_rename(struct recon_desktop *desktop, const char *name);
 bool recon_desktop_is_renaming(struct recon_desktop *desktop);
-bool recon_desktop_handle_key(struct recon_desktop *desktop, xkb_keysym_t sym,
+bool recon_desktop_handle_key(struct recon_desktop *desktop, recon_keysym sym,
     uint32_t modifiers);
 
 #endif

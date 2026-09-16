@@ -1554,7 +1554,7 @@ bool recon_appwin_handle_scroll(struct recon_appwin *win, double lx, double ly,
     return true;
 }
 
-bool recon_appwin_handle_key(struct recon_appwin *win, xkb_keysym_t sym,
+bool recon_appwin_handle_key(struct recon_appwin *win, recon_keysym sym,
         uint32_t modifiers) {
     if (win == NULL || !win->open || win->minimized || !win->focused) {
         return false;

@@ -728,15 +728,15 @@ static bool calendar_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 }
 
-static bool calendar_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool calendar_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct calendar_window *cw = user;
 
     if (cw->typing) {
-        if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        if (sym == RECON_KEY_Return || sym == RECON_KEY_KP_Enter) {
             keep_typed(cw);
             return true;
         }
-        if (sym == XKB_KEY_Escape) {
+        if (sym == RECON_KEY_Escape) {
             cw->typing = false;
             recon_edit_end(&cw->adding);
             return true;
@@ -747,28 +747,28 @@ static bool calendar_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     int last = days_in(cw->year, cw->month);
 
     switch (sym) {
-    case XKB_KEY_Left:
+    case RECON_KEY_Left:
         cw->day = cw->day > 1 ? cw->day - 1 : 1;
         return true;
-    case XKB_KEY_Right:
+    case RECON_KEY_Right:
         cw->day = cw->day < last ? cw->day + 1 : last;
         return true;
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         cw->day = cw->day > 7 ? cw->day - 7 : cw->day;
         return true;
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         cw->day = cw->day + 7 <= last ? cw->day + 7 : cw->day;
         return true;
-    case XKB_KEY_Page_Up:
+    case RECON_KEY_Page_Up:
         shift_month(cw, -1);
         return true;
-    case XKB_KEY_Page_Down:
+    case RECON_KEY_Page_Down:
         shift_month(cw, 1);
         return true;
-    case XKB_KEY_Home:
+    case RECON_KEY_Home:
         go_to_today(cw);
         return true;
-    case XKB_KEY_Return:
+    case RECON_KEY_Return:
         cw->typing = true;
         recon_edit_begin(&cw->adding, "", false);
         return true;

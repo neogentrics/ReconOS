@@ -1053,7 +1053,7 @@ static void help_scroll(void *user, double delta) {
     }
 }
 
-static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool help_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_help *help = user;
 
     /*
@@ -1062,7 +1062,7 @@ static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      * learn it again in the other.
      */
     if ((modifiers & WLR_MODIFIER_CTRL) != 0 &&
-            (sym == XKB_KEY_f || sym == XKB_KEY_F)) {
+            (sym == RECON_KEY_f || sym == RECON_KEY_F)) {
         recon_edit_focus(&help->search);
         return true;
     }
@@ -1071,7 +1071,7 @@ static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         /* Escape empties the box and gives the whole list back, which is the
          * only way out that does not involve deleting what was typed one
          * character at a time. */
-        if (sym == XKB_KEY_Escape) {
+        if (sym == RECON_KEY_Escape) {
             recon_edit_begin(&help->search, "", false);
             help->search.active = false;
             refilter(help);
@@ -1079,7 +1079,7 @@ static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         /* Return leaves the results standing and hands the keyboard to the
          * page, so the arrows read rather than type. */
-        if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        if (sym == RECON_KEY_Return || sym == RECON_KEY_KP_Enter) {
             help->search.active = false;
             return true;
         }
@@ -1091,24 +1091,24 @@ static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     switch (sym) {
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         help->page.scroll++;
         return true;
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         if (help->page.scroll > 0) {
             help->page.scroll--;
         }
         return true;
-    case XKB_KEY_Page_Down:
+    case RECON_KEY_Page_Down:
         help->page.scroll += help->page.visible_lines;
         return true;
-    case XKB_KEY_Page_Up:
+    case RECON_KEY_Page_Up:
         help->page.scroll -= help->page.visible_lines;
         if (help->page.scroll < 0) {
             help->page.scroll = 0;
         }
         return true;
-    case XKB_KEY_Home:
+    case RECON_KEY_Home:
         help->page.scroll = 0;
         return true;
     /* Stepping through the topics from the keyboard, so the whole document
@@ -1118,10 +1118,10 @@ static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      * topic the search has filtered out would show a page that is not on the
      * list beside it, which reads as the list being wrong.
      */
-    case XKB_KEY_Right:
+    case RECON_KEY_Right:
         choose(help, step(help, +1));
         return true;
-    case XKB_KEY_Left:
+    case RECON_KEY_Left:
         choose(help, step(help, -1));
         return true;
     default:
@@ -1646,30 +1646,30 @@ static void notice_scroll(void *user, double delta) {
     }
 }
 
-static bool notice_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool notice_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_notice *notice = user;
     (void)modifiers;
 
     switch (sym) {
     /* Both, because this is a notice rather than a question: there is no
      * answer to give, only an acknowledgement, and either key gives it. */
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
-    case XKB_KEY_Escape:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
+    case RECON_KEY_Escape:
         notice_dismiss(notice);
         return true;
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         notice->page.scroll++;
         return true;
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         if (notice->page.scroll > 0) {
             notice->page.scroll--;
         }
         return true;
-    case XKB_KEY_Page_Down:
+    case RECON_KEY_Page_Down:
         notice->page.scroll += notice->page.visible_lines;
         return true;
-    case XKB_KEY_Page_Up:
+    case RECON_KEY_Page_Up:
         notice->page.scroll -= notice->page.visible_lines;
         if (notice->page.scroll < 0) {
             notice->page.scroll = 0;

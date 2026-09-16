@@ -1043,34 +1043,34 @@ static bool photos_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 }
 
-static bool photos_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool photos_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_photos *ph = user;
     (void)modifiers;
 
     switch (sym) {
-    case XKB_KEY_Left:
-    case XKB_KEY_Up:
+    case RECON_KEY_Left:
+    case RECON_KEY_Up:
         step(ph, -1);
         return true;
-    case XKB_KEY_Right:
-    case XKB_KEY_Down:
-    case XKB_KEY_space:
+    case RECON_KEY_Right:
+    case RECON_KEY_Down:
+    case RECON_KEY_space:
         step(ph, 1);
         return true;
-    case XKB_KEY_Home:
+    case RECON_KEY_Home:
         if (ph->count > 0) {
             ph->at = 0;
             load_current(ph);
         }
         return true;
-    case XKB_KEY_End:
+    case RECON_KEY_End:
         if (ph->count > 0) {
             ph->at = ph->count - 1;
             load_current(ph);
         }
         return true;
-    case XKB_KEY_f:
-    case XKB_KEY_F:
+    case RECON_KEY_f:
+    case RECON_KEY_F:
         ph->fit = !ph->fit;
         return true;
     default:

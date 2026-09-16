@@ -18,7 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <xkbcommon/xkbcommon.h>
+#include "recon_key.h"
 
 struct wlr_scene_tree;
 struct wlr_scene_buffer;
@@ -701,7 +701,7 @@ enum recon_edit_result {
 };
 
 enum recon_edit_result recon_edit_key(struct recon_edit *edit,
-    xkb_keysym_t sym, uint32_t modifiers);
+    recon_keysym sym, uint32_t modifiers);
 
 /*
  * Draw the field, sunken, with a caret. Long text scrolls so the caret stays

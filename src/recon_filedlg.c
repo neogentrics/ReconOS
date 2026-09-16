@@ -478,16 +478,16 @@ enum recon_filedlg_result recon_filedlg_click(struct recon_filedlg *dialog,
 }
 
 enum recon_filedlg_result recon_filedlg_key(struct recon_filedlg *dialog,
-        xkb_keysym_t sym, uint32_t modifiers) {
+        recon_keysym sym, uint32_t modifiers) {
     if (dialog == NULL || !dialog->open) {
         return RECON_FILEDLG_UNHANDLED;
     }
 
     /* Up and Down move through the listing rather than through the text, since
      * the text is one line and has nowhere vertical to go. */
-    if (sym == XKB_KEY_Up || sym == XKB_KEY_Down) {
+    if (sym == RECON_KEY_Up || sym == RECON_KEY_Down) {
         int index = dialog->selected;
-        index += (sym == XKB_KEY_Down) ? 1 : -1;
+        index += (sym == RECON_KEY_Down) ? 1 : -1;
 
         if (index < 0) {
             index = 0;

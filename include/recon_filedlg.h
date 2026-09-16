@@ -17,7 +17,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <xkbcommon/xkbcommon.h>
+#include "recon_key.h"
 
 #include "recon_fs.h"
 #include "recon_ui.h"
@@ -116,7 +116,7 @@ void recon_filedlg_draw(struct recon_filedlg *dialog, struct recon_panel *panel,
 enum recon_filedlg_result recon_filedlg_click(struct recon_filedlg *dialog,
     uint32_t hit_id);
 enum recon_filedlg_result recon_filedlg_key(struct recon_filedlg *dialog,
-    xkb_keysym_t sym, uint32_t modifiers);
+    recon_keysym sym, uint32_t modifiers);
 
 void recon_filedlg_scroll(struct recon_filedlg *dialog, double delta);
 

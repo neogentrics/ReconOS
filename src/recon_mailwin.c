@@ -1569,7 +1569,7 @@ static void open_selected(struct recon_mailwin *m) {
     }
 }
 
-static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool mailwin_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_mailwin *m = user;
 
     /* The dialog first, and it takes everything -- including the keys it does
@@ -1587,7 +1587,7 @@ static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     if (m->screen == SCREEN_SETUP) {
         struct recon_edit *edit = &m->fields[m->focused];
 
-        if (sym == XKB_KEY_Tab) {
+        if (sym == RECON_KEY_Tab) {
             edit->active = false;
             m->focused = (m->focused + 1) % FIELD_COUNT;
             /*
@@ -1616,7 +1616,7 @@ static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     if (m->screen == SCREEN_COMPOSE) {
         struct recon_edit *edit = &m->compose[m->compose_focused];
 
-        if (sym == XKB_KEY_Tab) {
+        if (sym == RECON_KEY_Tab) {
             edit->active = false;
             m->compose_focused = (m->compose_focused + 1) % COMPOSE_COUNT;
             /*
@@ -1671,15 +1671,15 @@ static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     /* Reading the mail. */
     if (m->reading) {
         switch (sym) {
-        case XKB_KEY_Escape:
-        case XKB_KEY_BackSpace:
+        case RECON_KEY_Escape:
+        case RECON_KEY_BackSpace:
             m->reading = false;
             m->body_scroll = 0;
             return true;
-        case XKB_KEY_Down:
+        case RECON_KEY_Down:
             m->body_scroll++;
             return true;
-        case XKB_KEY_Up:
+        case RECON_KEY_Up:
             if (m->body_scroll > 0) {
                 m->body_scroll--;
             }
@@ -1691,18 +1691,18 @@ static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
     int count = recon_mail_count(m->session);
     switch (sym) {
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         if (m->selected + 1 < count) {
             m->selected++;
         }
         return true;
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         if (m->selected > 0) {
             m->selected--;
         }
         return true;
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
         open_selected(m);
         return true;
     default:

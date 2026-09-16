@@ -1207,7 +1207,7 @@ static void run_typed_task(struct recon_taskmgr *tm) {
     snprintf(tm->status, sizeof(tm->status), "Started '%s'.", found);
 }
 
-static bool taskmgr_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool taskmgr_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_taskmgr *tm = user;
 
     if (!tm->running_task) {

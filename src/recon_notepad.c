@@ -2099,7 +2099,7 @@ static void notepad_motion(void *user, uint32_t hit_id, int cx, int cy) {
     }
 }
 
-static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool notepad_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_notepad *np = user;
 
     if (recon_filedlg_is_open(&np->dialog)) {
@@ -2121,23 +2121,23 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
     if (ctrl) {
         switch (sym) {
-        case XKB_KEY_n:
-        case XKB_KEY_N:
+        case RECON_KEY_n:
+        case RECON_KEY_N:
             run_command(np, FILE_NEW);
             return true;
-        case XKB_KEY_o:
-        case XKB_KEY_O:
+        case RECON_KEY_o:
+        case RECON_KEY_O:
             run_command(np, FILE_OPEN);
             return true;
-        case XKB_KEY_s:
-        case XKB_KEY_S:
+        case RECON_KEY_s:
+        case RECON_KEY_S:
             /* Shift+Ctrl+S is Save As, which is why the shift bit is read
              * rather than ignored. */
             run_command(np, (modifiers & RECON_MOD_SHIFT)
                 ? FILE_SAVE_AS : FILE_SAVE);
             return true;
-        case XKB_KEY_z:
-        case XKB_KEY_Z:
+        case RECON_KEY_z:
+        case RECON_KEY_Z:
             /* Shift+Ctrl+Z redoes, which is the other spelling of Ctrl+Y and
              * the one people who came from a Mac reach for. */
             if (modifiers & RECON_MOD_SHIFT) {
@@ -2146,32 +2146,32 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
                 do_undo(np);
             }
             return true;
-        case XKB_KEY_y:
-        case XKB_KEY_Y:
+        case RECON_KEY_y:
+        case RECON_KEY_Y:
             do_redo(np);
             return true;
-        case XKB_KEY_a:
-        case XKB_KEY_A:
+        case RECON_KEY_a:
+        case RECON_KEY_A:
             do_select_all(np);
             return true;
-        case XKB_KEY_c:
-        case XKB_KEY_C:
+        case RECON_KEY_c:
+        case RECON_KEY_C:
             do_copy(np, false);
             return true;
-        case XKB_KEY_x:
-        case XKB_KEY_X:
+        case RECON_KEY_x:
+        case RECON_KEY_X:
             do_copy(np, true);
             return true;
-        case XKB_KEY_v:
-        case XKB_KEY_V:
+        case RECON_KEY_v:
+        case RECON_KEY_V:
             do_paste(np);
             return true;
-        case XKB_KEY_h:
-        case XKB_KEY_H:
+        case RECON_KEY_h:
+        case RECON_KEY_H:
             open_replace(np);
             return true;
-        case XKB_KEY_f:
-        case XKB_KEY_F:
+        case RECON_KEY_f:
+        case RECON_KEY_F:
             open_find(np);
             return true;
         default:
@@ -2189,14 +2189,14 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      * next thing; Escape puts it away.
      */
     if (np->finding) {
-        if (sym == XKB_KEY_F3) {
+        if (sym == RECON_KEY_F3) {
             do_find_next(np);
             return true;
         }
 
         /* Tab moves between the two fields, which is the gesture a form of
          * any kind teaches. */
-        if (np->replacing && sym == XKB_KEY_Tab) {
+        if (np->replacing && sym == RECON_KEY_Tab) {
             np->replacement_focused = !np->replacement_focused;
             apply_find_focus(np);
             return true;
@@ -2228,12 +2228,12 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         return true;
     }
 
-    if (sym == XKB_KEY_F3) {
+    if (sym == RECON_KEY_F3) {
         do_find_next(np);
         return true;
     }
 
-    if (np->menu_open >= 0 && sym == XKB_KEY_Escape) {
+    if (np->menu_open >= 0 && sym == RECON_KEY_Escape) {
         np->menu_open = -1;
         return true;
     }
@@ -2243,23 +2243,23 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     np->message[0] = '\0';
 
     switch (sym) {
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
         insert_char(np, '\n');
         scroll_to_cursor(np);
         return true;
 
-    case XKB_KEY_BackSpace:
+    case RECON_KEY_BackSpace:
         delete_before_cursor(np);
         scroll_to_cursor(np);
         return true;
 
-    case XKB_KEY_Delete:
-    case XKB_KEY_KP_Delete:
+    case RECON_KEY_Delete:
+    case RECON_KEY_KP_Delete:
         delete_at_cursor(np);
         return true;
 
-    case XKB_KEY_Tab:
+    case RECON_KEY_Tab:
         for (int i = 0; i < TAB_WIDTH; i++) {
             insert_char(np, ' ');
         }
@@ -2270,7 +2270,7 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      * whatever was selected. before_move is called on every one of these, so
      * there is no arrow key that quietly forgets to.
      */
-    case XKB_KEY_Left:
+    case RECON_KEY_Left:
         before_move(np, shift);
         if (np->cursor > 0) {
             np->cursor--;
@@ -2278,7 +2278,7 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         scroll_to_cursor(np);
         return true;
 
-    case XKB_KEY_Right:
+    case RECON_KEY_Right:
         before_move(np, shift);
         if (np->cursor < np->length) {
             np->cursor++;
@@ -2286,24 +2286,24 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         scroll_to_cursor(np);
         return true;
 
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         before_move(np, shift);
         move_up(np);
         scroll_to_cursor(np);
         return true;
 
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         before_move(np, shift);
         move_down(np);
         scroll_to_cursor(np);
         return true;
 
-    case XKB_KEY_Home:
+    case RECON_KEY_Home:
         before_move(np, shift);
         np->cursor = line_start(np, np->cursor);
         return true;
 
-    case XKB_KEY_End:
+    case RECON_KEY_End:
         before_move(np, shift);
         np->cursor = line_end(np, np->cursor);
         return true;
@@ -2315,7 +2315,7 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     /* Anything that maps to a printable character gets inserted. Going
      * through the keymap rather than the raw keysym is what makes shifted
      * characters and other layouts work. */
-    uint32_t codepoint = xkb_keysym_to_utf32(sym);
+    uint32_t codepoint = recon_key_to_char(sym);
     if (codepoint >= 32 && codepoint < 127) {
         insert_char(np, (char)codepoint);
         scroll_to_cursor(np);

@@ -9,6 +9,125 @@ way for the two to disagree.
 
 ---
 
+## v0.4.42 — one include held twenty-four files
+
+**20 of the desktop's sources compiled with no libc under them. 42 do now.**
+
+`scripts/check-userland.sh` takes glibc away and asks a compiler to build the
+desktop anyway, and it is the honest measure of how close this half is to
+running on its own kernel. Its list is hand-maintained on purpose — *"a script
+that decides its own input can always pass, by shrinking it"* — and it was
+twenty files, with a header explaining that the blocker was the allocator.
+
+**That explanation had stopped being true two days earlier.** The allocator
+landed in v0.4.28 and the kernel answered `SYS_MAP` in v0.4.33. So the first
+thing this landing did was offer every file in `src/` to the compiler again,
+with exactly the flags the check uses, and read what came back.
+
+### The answer was one header
+
+Twenty-four of the fifty-three that failed stopped at the same line:
+`xkbcommon/xkbcommon.h`, reached through `include/recon_ui.h`.
+
+And `recon_ui.h` wanted **one thing** from it: the typedef `xkb_keysym_t`,
+which is a `uint32_t`. Not a function, not a keymap — a name for a number.
+
+That one include held the file manager, the Terminal, Notepad, Help, the
+Control Panel, the theme engine, the title bar, the wallpaper, the icon
+generator, the avatar, the file dialog and the whole widget layer off a
+compiler with no Linux underneath it. **Not because any of them talk to a
+keyboard library. Because they name a key.**
+
+The script's own header had a theory about why those files were stuck — *"these
+files need their drawing half separated from their compositor half before they
+can move"* — and it was wrong. They needed to be able to say "Escape".
+
+### include/recon_key.h
+
+176 constants, `recon_keysym`, and the two questions anything asks about a key:
+what character it stands for, and which key has this name.
+
+The numbers are X11 keysym values, taken out of xkbcommon **once, by asking
+it** rather than typed in from a table — the same shape as the icons and the
+trusted roots: borrowed at the boundary, owned afterwards. Keeping the
+numbering is deliberate: the compositor half still runs on wlroots and hands
+these values straight up, so a second numbering would mean a translation layer
+in the one place a mistake is invisible. **A key that does the wrong thing looks
+like a key that does nothing.**
+
+`src/main.c` still links xkbcommon, because turning a keycode into a keysym
+through a keymap is genuinely that library's job on Linux. It is the only file
+that does.
+
+### What holds the borrow
+
+`tests/test_key.c`, which is now the one place on the desktop side xkbcommon
+appears — the file whose job is to disagree with it.
+
+| what it sweeps | result |
+|---|---|
+| all 176 names, against `xkb_keysym_from_name` | 0 disagreements |
+| every keysym 0x0000–0xffff, against `xkb_keysym_to_utf32` | 64,773 compared, 0 disagreements |
+| the Unicode range, 0x01000000 upward | 159,744 compared, 0 disagreements |
+
+**763 keysyms xkbcommon maps and this does not** — Greek, Cyrillic, Hebrew,
+Arabic, Thai. Counted rather than hidden, because nothing in ReconOS can
+produce one: there is a single keymap and it is `us`. The rule that makes the
+gap safe is tested too — it never contains a key this system claims to know.
+
+### The sweep found two faults, both in the new code
+
+**`key a` at the Terminal injected a capital A.** The table is in value order,
+so `A` at 0x41 is listed before `a` at 0x61, and a case-insensitive scan takes
+the first match. All twenty-six letters were wrong the same way. An exact name
+wins now, and case-insensitivity stays as what it was for — so somebody does
+not have to know X11 spelled it `Page_Up`.
+
+I had written the opposite into the test as a comment explaining why it was
+fine, beside a check that passed because it asserted the theory. **It was a
+theory about code I had not read back.**
+
+**A surrogate came back as a character.** 0xd800–0xdfff are the halves of a
+UTF-16 pair and are not characters on their own; xkbcommon returns zero for the
+whole block and this returned the number. 292 disagreements in the sweep, every
+one of them that block — a document would have got an unpaired surrogate in it.
+
+And a third, in the test rather than the code: the check establishing that
+there *is* a gap asked whether xkbcommon knows `Hebrew_aleph`. **It does not**,
+in this build — so a check meant to prove a difference was really confirming
+that two libraries were both ignorant, and passed for the wrong reason.
+`Greek_alpha` it knows.
+
+### One behaviour change, in the desktop's favour
+
+The control socket's `key <name>` went through
+`xkb_keysym_from_name(name, XKB_KEYSYM_CASE_INSENSITIVE)`, and measuring that
+call turned up something worth knowing: **it returns the lower-case keysym for
+both `a` and `A`.** `key A` could not send a capital letter. It can now. No
+script in the tree sends an upper-case key name, so nothing depended on the old
+answer.
+
+### And the include guard was a key
+
+`RECON_KEY_H` is the H key. An include guard by that name is a macro that
+expands inside the enum it is guarding, and the compiler says
+`expected identifier before '='` on the line for H and nothing at all about the
+guard. It is `RECON_KEY_H_INCLUDED`, with the reason written above it.
+
+### What is left, and it is three groups
+
+| what is missing | files |
+|---|---|
+| **the compositor** — `wayland-server-core.h`, `wlr/` | 15 |
+| vendored `stb_image.h` / `stb_truetype.h` | 8 |
+| one thing each — `realpath`, `pid_t`, `signal.h`, `sys/time.h`, `dlfcn.h`, `ifaddrs.h`, `zlib.h`, mbedtls, libdrm | 14 |
+
+Only the first is structural, and it is the board's `display-boundary` row
+rather than a library gap: a program on the ReconOS kernel draws on the
+framebuffer device and does not speak Wayland to itself.
+
+---
+
 ## v0.4.41 — four sentences nobody was checking
 
 `recon_tls.c` had **fifteen functions no suite ran**, and they were all of one

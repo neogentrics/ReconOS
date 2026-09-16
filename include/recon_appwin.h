@@ -20,7 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <xkbcommon/xkbcommon.h>
+#include "recon_key.h"
 
 struct recon_server;
 struct recon_font;
@@ -127,7 +127,7 @@ struct recon_appwin_impl {
     bool (*click)(void *user, uint32_t hit_id, int cx, int cy, bool pressed);
 
     /* A key press while this window has focus. */
-    bool (*key)(void *user, xkb_keysym_t sym, uint32_t modifiers);
+    bool (*key)(void *user, recon_keysym sym, uint32_t modifiers);
 
     /*
      * The pointer moved over the window. `hit_id` is RECON_HIT_NONE when it is
@@ -418,7 +418,7 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
 void recon_appwin_handle_motion(struct recon_appwin *win, double lx, double ly);
 bool recon_appwin_handle_scroll(struct recon_appwin *win, double lx, double ly,
     double delta);
-bool recon_appwin_handle_key(struct recon_appwin *win, xkb_keysym_t sym,
+bool recon_appwin_handle_key(struct recon_appwin *win, recon_keysym sym,
     uint32_t modifiers);
 
 /*

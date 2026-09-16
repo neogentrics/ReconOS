@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "recon_key.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_calc.h"
@@ -2952,7 +2953,7 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
  * Keyboard input, including the number pad, so the calculator can be driven
  * without touching the mouse.
  */
-static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool calc_key_press(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_calc *calc = user;
 
     /*
@@ -2982,7 +2983,7 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
          * only be reached with the mouse, which makes them feel like an extra
          * rather than like part of the same thing.
          */
-        if (sym == XKB_KEY_Tab) {
+        if (sym == RECON_KEY_Tab) {
             graph_field(calc, calc->formula_focused)->active = false;
             calc->formula_focused =
                 (calc->formula_focused + 1) % graph_field_count(calc);
@@ -3008,11 +3009,11 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     /* Date mode steps a day at a time rather than typing arithmetic. */
     if (calc->mode == CALC_DATE) {
         switch (sym) {
-        case XKB_KEY_Left:  date_step(calc, -1); return true;
-        case XKB_KEY_Right: date_step(calc, 1); return true;
-        case XKB_KEY_Down:  date_step(calc, -7); return true;
-        case XKB_KEY_Up:    date_step(calc, 7); return true;
-        case XKB_KEY_Tab:
+        case RECON_KEY_Left:  date_step(calc, -1); return true;
+        case RECON_KEY_Right: date_step(calc, 1); return true;
+        case RECON_KEY_Down:  date_step(calc, -7); return true;
+        case RECON_KEY_Up:    date_step(calc, 7); return true;
+        case RECON_KEY_Tab:
             calc->date_field = calc->date_field == 0 ? 1 : 0;
             return true;
         default:
@@ -3021,52 +3022,52 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     /* Number pad digits arrive as their own keysyms. */
-    if (sym >= XKB_KEY_KP_0 && sym <= XKB_KEY_KP_9) {
-        append_digit(calc, (char)('0' + (sym - XKB_KEY_KP_0)));
+    if (sym >= RECON_KEY_KP_0 && sym <= RECON_KEY_KP_9) {
+        append_digit(calc, (char)('0' + (sym - RECON_KEY_KP_0)));
         return true;
     }
-    if (sym >= XKB_KEY_0 && sym <= XKB_KEY_9) {
-        append_digit(calc, (char)('0' + (sym - XKB_KEY_0)));
+    if (sym >= RECON_KEY_0 && sym <= RECON_KEY_9) {
+        append_digit(calc, (char)('0' + (sym - RECON_KEY_0)));
         return true;
     }
 
     switch (sym) {
-    case XKB_KEY_period:
-    case XKB_KEY_KP_Decimal:
-    case XKB_KEY_comma:
+    case RECON_KEY_period:
+    case RECON_KEY_KP_Decimal:
+    case RECON_KEY_comma:
         append_dot(calc);
         return true;
 
-    case XKB_KEY_plus:
-    case XKB_KEY_KP_Add:
+    case RECON_KEY_plus:
+    case RECON_KEY_KP_Add:
         set_operator(calc, '+');
         return true;
-    case XKB_KEY_minus:
-    case XKB_KEY_KP_Subtract:
+    case RECON_KEY_minus:
+    case RECON_KEY_KP_Subtract:
         set_operator(calc, '-');
         return true;
-    case XKB_KEY_asterisk:
-    case XKB_KEY_KP_Multiply:
+    case RECON_KEY_asterisk:
+    case RECON_KEY_KP_Multiply:
         set_operator(calc, '*');
         return true;
-    case XKB_KEY_slash:
-    case XKB_KEY_KP_Divide:
+    case RECON_KEY_slash:
+    case RECON_KEY_KP_Divide:
         set_operator(calc, '/');
         return true;
 
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
-    case XKB_KEY_equal:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
+    case RECON_KEY_equal:
         equals(calc);
         return true;
 
-    case XKB_KEY_BackSpace:
+    case RECON_KEY_BackSpace:
         backspace(calc);
         return true;
 
-    case XKB_KEY_Escape:
-    case XKB_KEY_Delete:
-    case XKB_KEY_KP_Delete:
+    case RECON_KEY_Escape:
+    case RECON_KEY_Delete:
+    case RECON_KEY_KP_Delete:
         clear_all(calc);
         return true;
 

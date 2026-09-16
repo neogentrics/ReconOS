@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.41
+    VERSION 0.4.42
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -163,6 +163,10 @@ add_custom_command(
 
 add_executable(ReconOS
     src/main.c
+    # The keys, as ReconOS's own rather than as xkbcommon's. One typedef in
+    # recon_ui.h used to put twenty-four of these files out of reach of a
+    # compiler with no Linux under it.
+    src/recon_key.c
     src/recon_apps.c
     src/recon_avatar.c
     src/recon_modules.c
@@ -422,6 +426,24 @@ target_include_directories(recon_tls_tests PRIVATE
 
 target_link_libraries(recon_tls_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+# The keys, held against the library their numbers came from.
+#
+# include/recon_key.h exists so that twenty-four of the desktop's sources stop
+# needing a Linux keyboard library in order to name a key. Its values were
+# taken out of xkbcommon once, by asking it -- and a borrowed table with
+# nothing checking the borrow is a copy that is right on the day it is made.
+# This is the one file on the desktop side that still links xkbcommon, which is
+# deliberate: its job is to disagree with it.
+add_executable(recon_key_tests
+    tests/test_key.c
+    src/recon_key.c)
+
+target_include_directories(recon_key_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_key_tests PRIVATE ${XKB_LIBRARIES})
+target_include_directories(recon_key_tests PRIVATE ${XKB_INCLUDE_DIRS})
 
 # The other direction: whether to believe somebody else's certificate.
 #
@@ -1191,6 +1213,7 @@ add_test(NAME theme COMMAND recon_theme_tests)
 add_test(NAME fonts COMMAND recon_fonts_tests)
 add_test(NAME tls COMMAND recon_tls_tests)
 add_test(NAME tls-verify COMMAND recon_tls_verify_tests)
+add_test(NAME keys COMMAND recon_key_tests)
 add_test(NAME clock COMMAND recon_clock_tests)
 add_test(NAME versions COMMAND recon_version_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)

@@ -2765,7 +2765,7 @@ static struct recon_edit *focused_edit(struct recon_session *session) {
 }
 
 bool recon_session_handle_key(struct recon_session *session,
-        xkb_keysym_t sym, uint32_t modifiers) {
+        recon_keysym sym, uint32_t modifiers) {
     if (!recon_session_active(session)) {
         return false;
     }
@@ -2790,7 +2790,7 @@ bool recon_session_handle_key(struct recon_session *session,
     }
 
     /* Tab moves between fields, which is how a form is expected to work. */
-    if (sym == XKB_KEY_Tab && session->stage == STAGE_ACCOUNT) {
+    if (sym == RECON_KEY_Tab && session->stage == STAGE_ACCOUNT) {
         bool backwards = (modifiers & RECON_MOD_SHIFT) != 0;
         int next = (int)session->focus + (backwards ? -1 : 1);
         if (next < 0) {
@@ -2809,7 +2809,7 @@ bool recon_session_handle_key(struct recon_session *session,
      * Escape means everywhere else: undo the choice that got you here. Not
      * while locked, where there is no choice to undo.
      */
-    if (sym == XKB_KEY_Escape && session->stage == STAGE_LOGIN &&
+    if (sym == RECON_KEY_Escape && session->stage == STAGE_LOGIN &&
             !session->picking_account && session->locked_to[0] == '\0' &&
             recon_users_count() > 1) {
         session->picking_account = true;
@@ -2822,8 +2822,8 @@ bool recon_session_handle_key(struct recon_session *session,
     }
 
     /* Up and Down walk a list, wherever there is one. */
-    if (sym == XKB_KEY_Up || sym == XKB_KEY_Down) {
-        int step = (sym == XKB_KEY_Down) ? 1 : -1;
+    if (sym == RECON_KEY_Up || sym == RECON_KEY_Down) {
+        int step = (sym == RECON_KEY_Down) ? 1 : -1;
 
         if (session->stage == STAGE_LOGIN) {
             /*
@@ -2877,7 +2877,7 @@ bool recon_session_handle_key(struct recon_session *session,
         }
     }
 
-    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+    if (sym == RECON_KEY_Return || sym == RECON_KEY_KP_Enter) {
         advance(session);
         return true;
     }

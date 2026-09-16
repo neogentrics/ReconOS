@@ -8335,7 +8335,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     return true;
 }
 
-static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool panel_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct control_panel *cp = user;
 
     /* Typing the path of something to install. */
@@ -8360,7 +8360,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     if (cp->naming_skin) {
         /* Tab moves between the name and the line describing it, which is
          * what Tab does in every other pair of fields here. */
-        if (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+        if (sym == RECON_KEY_Tab || sym == RECON_KEY_ISO_Left_Tab) {
             cp->skin_desc_focused = !cp->skin_desc_focused;
             return true;
         }
@@ -8384,7 +8384,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
     /* A custom firewall rule: its name and its port. */
     if (cp->fw_adding && cp->fw_custom) {
-        if (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+        if (sym == RECON_KEY_Tab || sym == RECON_KEY_ISO_Left_Tab) {
             cp->fw_port_focused = !cp->fw_port_focused;
             return true;
         }
@@ -8448,21 +8448,21 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      */
     if (cp->skin_editing) {
         switch (sym) {
-        case XKB_KEY_Up:
+        case RECON_KEY_Up:
             if (cp->skin_row > 0) {
                 cp->skin_row--;
             }
             return true;
-        case XKB_KEY_Down:
+        case RECON_KEY_Down:
             if (cp->skin_row < SKIN_ROW_COUNT - 1) {
                 cp->skin_row++;
             }
             return true;
-        case XKB_KEY_Return:
-        case XKB_KEY_KP_Enter:
+        case RECON_KEY_Return:
+        case RECON_KEY_KP_Enter:
             do_action(cp, ACTION_EDIT_SKIN);
             return true;
-        case XKB_KEY_Escape:
+        case RECON_KEY_Escape:
             do_action(cp, ACTION_SKIN_DONE);
             return true;
         default:
@@ -8477,7 +8477,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      */
     if (cp->page == PAGE_REGISTRY &&
             (cp->registry_editing || cp->registry_adding)) {
-        if (cp->registry_adding && sym == XKB_KEY_Tab) {
+        if (cp->registry_adding && sym == RECON_KEY_Tab) {
             cp->reg_key_focused = !cp->reg_key_focused;
             apply_registry_focus(cp);
             return true;
@@ -8519,18 +8519,18 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     if (cp->page == PAGE_REGISTRY && cp->registry_unlocked) {
-        if (sym == XKB_KEY_Up) {
+        if (sym == RECON_KEY_Up) {
             cp->registry_scroll--;
             return true;
         }
-        if (sym == XKB_KEY_Down) {
+        if (sym == RECON_KEY_Down) {
             cp->registry_scroll++;
             return true;
         }
     }
 
     if (cp->editing) {
-        if (sym == XKB_KEY_Tab && !cp->editing_password_only) {
+        if (sym == RECON_KEY_Tab && !cp->editing_password_only) {
             cp->password_focused = !cp->password_focused;
             apply_field_focus(cp);
             return true;
@@ -8556,12 +8556,12 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     switch (sym) {
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         if (cp->selected > 0) {
             cp->selected--;
         }
         return true;
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         cp->selected++;
         return true;
     default:

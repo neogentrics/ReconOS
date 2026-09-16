@@ -2158,7 +2158,7 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
     return false;
 }
 
-static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool explorer_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_explorer *ex = user;
 
     /* An open drop-down is dismissed by any key rather than navigated with
@@ -2167,14 +2167,14 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     if (ex->menu_open >= 0) {
         ex->menu_open = -1;
         ex->menu_item_hover = -1;
-        if (sym == XKB_KEY_Escape) {
+        if (sym == RECON_KEY_Escape) {
             return true;
         }
     }
 
     if (ex->places_open) {
         close_places(ex);
-        if (sym == XKB_KEY_Escape) {
+        if (sym == RECON_KEY_Escape) {
             return true;
         }
     }
@@ -2221,16 +2221,16 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
     if (ctrl) {
         switch (sym) {
-        case XKB_KEY_x:
-        case XKB_KEY_X:
+        case RECON_KEY_x:
+        case RECON_KEY_X:
             do_clip(ex, true);
             return true;
-        case XKB_KEY_c:
-        case XKB_KEY_C:
+        case RECON_KEY_c:
+        case RECON_KEY_C:
             do_clip(ex, false);
             return true;
-        case XKB_KEY_v:
-        case XKB_KEY_V:
+        case RECON_KEY_v:
+        case RECON_KEY_V:
             do_paste(ex);
             return true;
         default:
@@ -2239,11 +2239,11 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     switch (sym) {
-    case XKB_KEY_F2:
+    case RECON_KEY_F2:
         do_begin_rename(ex);
         return true;
 
-    case XKB_KEY_Delete:
+    case RECON_KEY_Delete:
         /* Shift means skip the bin, the way it does everywhere else. */
         if (modifiers & RECON_MOD_SHIFT) {
             do_purge(ex);
@@ -2252,7 +2252,7 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         return true;
 
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         if (ex->selected > 0) {
             ex->selected--;
         }
@@ -2261,7 +2261,7 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         return true;
 
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         if (ex->selected + 1 < ex->entry_count) {
             ex->selected++;
         }
@@ -2270,31 +2270,31 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         return true;
 
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
         if (ex->selected >= 0 && ex->selected < ex->entry_count &&
                 ex->entries[ex->selected].kind == RECON_FILE_DIRECTORY) {
             navigate(ex, ex->entries[ex->selected].name);
         }
         return true;
 
-    case XKB_KEY_BackSpace:
+    case RECON_KEY_BackSpace:
         navigate(ex, "..");
         return true;
 
-    case XKB_KEY_Left:
+    case RECON_KEY_Left:
         go_back(ex);
         return true;
 
-    case XKB_KEY_Right:
+    case RECON_KEY_Right:
         go_forward(ex);
         return true;
 
-    case XKB_KEY_F5:
+    case RECON_KEY_F5:
         reload(ex);
         return true;
 
-    case XKB_KEY_Escape:
+    case RECON_KEY_Escape:
         cancel_delete(ex);
         ex->selected = -1;
         return true;

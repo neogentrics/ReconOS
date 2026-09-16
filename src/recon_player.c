@@ -1114,32 +1114,32 @@ static bool player_click(void *user, uint32_t hit, int cx, int cy,
     }
 }
 
-static bool player_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool player_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_player *p = user;
     (void)modifiers;
 
     switch (sym) {
-    case XKB_KEY_space:
+    case RECON_KEY_space:
         toggle_play(p);
         return true;
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         if (p->selected + 1 < p->count) {
             p->selected++;
         }
         return true;
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         if (p->selected > 0) {
             p->selected--;
         }
         return true;
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
         if (p->selected >= 0) {
             play_index(p, p->selected);
         }
         return true;
-    case XKB_KEY_Right:
-    case XKB_KEY_Left: {
+    case RECON_KEY_Right:
+    case RECON_KEY_Left: {
         /* Ten seconds, which is the step every player uses because it is long
          * enough to be worth pressing and short enough to press twice. */
         if (p->stream == NULL || p->format.rate <= 0) {
@@ -1147,17 +1147,17 @@ static bool player_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         uint64_t step = (uint64_t)p->format.rate * 10;
         uint64_t at = position_frames(p);
-        seek_to(p, (sym == XKB_KEY_Right) ? at + step
+        seek_to(p, (sym == RECON_KEY_Right) ? at + step
             : (at > step ? at - step : 0));
         return true;
     }
-    case XKB_KEY_plus:
-    case XKB_KEY_equal:
+    case RECON_KEY_plus:
+    case RECON_KEY_equal:
         if (p->volume < 16) {
             p->volume++;
         }
         return true;
-    case XKB_KEY_minus:
+    case RECON_KEY_minus:
         if (p->volume > 0) {
             p->volume--;
         }

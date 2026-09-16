@@ -518,7 +518,7 @@ static void insert_char(struct recon_terminal *term, char c) {
     term->cursor++;
 }
 
-static bool terminal_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool terminal_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_terminal *term = user;
 
     if ((modifiers & RECON_MOD_CTRL) != 0) {
@@ -531,7 +531,7 @@ static bool terminal_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
          * to a paste they meant to read first -- the first line goes in, and
          * pressing Return is still a decision.
          */
-        if (sym == XKB_KEY_v || sym == XKB_KEY_V) {
+        if (sym == RECON_KEY_v || sym == RECON_KEY_V) {
             const char *held = recon_clip_text();
             for (const char *c = held; *c != '\0'; c++) {
                 if (*c == '\n' || *c == '\r') {
@@ -547,12 +547,12 @@ static bool terminal_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     switch (sym) {
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
         submit(term);
         return true;
 
-    case XKB_KEY_BackSpace:
+    case RECON_KEY_BackSpace:
         if (term->cursor > 0) {
             memmove(term->input + term->cursor - 1, term->input + term->cursor,
                 term->input_length - term->cursor + 1);
@@ -561,7 +561,7 @@ static bool terminal_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         return true;
 
-    case XKB_KEY_Delete:
+    case RECON_KEY_Delete:
         if (term->cursor < term->input_length) {
             memmove(term->input + term->cursor, term->input + term->cursor + 1,
                 term->input_length - term->cursor);
@@ -569,42 +569,42 @@ static bool terminal_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         return true;
 
-    case XKB_KEY_Left:
+    case RECON_KEY_Left:
         if (term->cursor > 0) {
             term->cursor--;
         }
         return true;
 
-    case XKB_KEY_Right:
+    case RECON_KEY_Right:
         if (term->cursor < term->input_length) {
             term->cursor++;
         }
         return true;
 
-    case XKB_KEY_Up:
+    case RECON_KEY_Up:
         recall_history(term, -1);
         return true;
 
-    case XKB_KEY_Down:
+    case RECON_KEY_Down:
         recall_history(term, 1);
         return true;
 
-    case XKB_KEY_Home:
+    case RECON_KEY_Home:
         term->cursor = 0;
         return true;
 
-    case XKB_KEY_End:
+    case RECON_KEY_End:
         term->cursor = term->input_length;
         return true;
 
-    case XKB_KEY_Page_Up:
+    case RECON_KEY_Page_Up:
         term->scroll -= term->visible_lines;
         if (term->scroll < 0) {
             term->scroll = 0;
         }
         return true;
 
-    case XKB_KEY_Page_Down:
+    case RECON_KEY_Page_Down:
         term->scroll += term->visible_lines;
         scroll_to_end(term);
         return true;
@@ -613,7 +613,7 @@ static bool terminal_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         break;
     }
 
-    uint32_t codepoint = xkb_keysym_to_utf32(sym);
+    uint32_t codepoint = recon_key_to_char(sym);
     if (codepoint >= 32 && codepoint < 127) {
         insert_char(term, (char)codepoint);
         return true;

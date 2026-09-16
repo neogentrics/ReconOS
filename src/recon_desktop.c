@@ -1135,7 +1135,7 @@ void recon_desktop_handle_motion(struct recon_desktop *desktop,
     recon_desktop_refresh(desktop);
 }
 
-bool recon_desktop_handle_key(struct recon_desktop *desktop, xkb_keysym_t sym,
+bool recon_desktop_handle_key(struct recon_desktop *desktop, recon_keysym sym,
         uint32_t modifiers) {
     if (!recon_desktop_is_renaming(desktop)) {
         return false;

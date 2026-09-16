@@ -56,6 +56,8 @@
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "recon_key.h"
+
 #include "ReconOS.h"
 #include "recon_clock.h"
 #include "recon_decor.h"
@@ -1457,7 +1459,7 @@ void recon_inject_button(struct recon_server *server, uint32_t button, bool pres
  * needs it above, so that a key sent from outside takes the same route a key
  * from a keyboard does. */
 static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
-    xkb_keysym_t sym);
+    recon_keysym sym);
 
 void recon_inject_scroll(struct recon_server *server, double delta) {
     if (server == NULL) {
@@ -1866,11 +1868,11 @@ static void close_focused(struct recon_server *server) {
  * not reach the focused window.
  */
 static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
-        xkb_keysym_t sym) {
+        recon_keysym sym) {
     /* Ctrl+Alt+Delete, kept because it is the gesture people already reach for
      * when something has gone wrong. */
     if ((modifiers & WLR_MODIFIER_CTRL) && (modifiers & WLR_MODIFIER_ALT) &&
-            (sym == XKB_KEY_Delete || sym == XKB_KEY_BackSpace)) {
+            (sym == RECON_KEY_Delete || sym == RECON_KEY_BackSpace)) {
         recon_shell_toggle_security(server->shell);
         return true;
     }
@@ -1880,7 +1882,7 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
      * every system that has one treats it that way. Handled before the Alt
      * check for the same reason.
      */
-    if (sym == XKB_KEY_Print) {
+    if (sym == RECON_KEY_Print) {
         if (recon_capture_request(server, NULL)) {
             wlr_log(WLR_INFO, "ReconOS: capturing the screen");
         } else {
@@ -1893,7 +1895,7 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
      * F1, with no modifier, because that is what F1 has meant on every system
      * that has one. Before the Alt check for the same reason Print Screen is.
      */
-    if (sym == XKB_KEY_F1) {
+    if (sym == RECON_KEY_F1) {
         recon_shell_open_help(server->shell);
         return true;
     }
@@ -1903,17 +1905,17 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
     }
 
     switch (sym) {
-    case XKB_KEY_q:
-    case XKB_KEY_Q:
+    case RECON_KEY_q:
+    case RECON_KEY_Q:
         wlr_log(WLR_INFO, "ReconOS: Alt+Q, shutting down");
         wl_display_terminate(server->wl_display);
         return true;
-    case XKB_KEY_n:
-    case XKB_KEY_N:
+    case RECON_KEY_n:
+    case RECON_KEY_N:
         recon_shell_open_app(server->shell, 2);
         return true;
-    case XKB_KEY_Tab:
-    case XKB_KEY_ISO_Left_Tab:
+    case RECON_KEY_Tab:
+    case RECON_KEY_ISO_Left_Tab:
         /*
          * Over what the taskbar lists, not over the compositor's client
          * windows. cycle_focus walked the latter, which was right when the
@@ -1923,8 +1925,8 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
          */
         recon_shell_cycle_windows(server->shell);
         return true;
-    case XKB_KEY_t:
-    case XKB_KEY_T:
+    case RECON_KEY_t:
+    case RECON_KEY_T:
         recon_shell_open_taskmgr(server->shell);
         return true;
 
@@ -1933,15 +1935,15 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
      * along. A number key each is what makes four desktops learnable, and it
      * is the same number the pager on the taskbar shows.
      */
-    case XKB_KEY_1: case XKB_KEY_2: case XKB_KEY_3: case XKB_KEY_4:
-        recon_shell_set_desktop(server->shell, (int)(sym - XKB_KEY_1));
+    case RECON_KEY_1: case RECON_KEY_2: case RECON_KEY_3: case RECON_KEY_4:
+        recon_shell_set_desktop(server->shell, (int)(sym - RECON_KEY_1));
         return true;
-    case XKB_KEY_exclam:   /* Shift+1 and friends, which is what the */
-    case XKB_KEY_at:       /* keyboard actually sends. */
-    case XKB_KEY_numbersign:
-    case XKB_KEY_dollar: {
-        static const xkb_keysym_t SHIFTED[] = {
-            XKB_KEY_exclam, XKB_KEY_at, XKB_KEY_numbersign, XKB_KEY_dollar,
+    case RECON_KEY_exclam:   /* Shift+1 and friends, which is what the */
+    case RECON_KEY_at:       /* keyboard actually sends. */
+    case RECON_KEY_numbersign:
+    case RECON_KEY_dollar: {
+        static const recon_keysym SHIFTED[] = {
+            RECON_KEY_exclam, RECON_KEY_at, RECON_KEY_numbersign, RECON_KEY_dollar,
         };
         for (int i = 0; i < (int)(sizeof(SHIFTED) / sizeof(SHIFTED[0])); i++) {
             if (sym == SHIFTED[i]) {
@@ -1951,12 +1953,12 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
         }
         return true;
     }
-    case XKB_KEY_Return:
+    case RECON_KEY_Return:
         /* The ReconOS terminal, in the place the old one used to be. */
         recon_shell_open_app(server->shell, 3);
         return true;
-    case XKB_KEY_c:
-    case XKB_KEY_C:
+    case RECON_KEY_c:
+    case RECON_KEY_C:
         close_focused(server);
         return true;
     default:
@@ -1971,7 +1973,7 @@ static void server_keyboard_key(struct wl_listener *listener, void *data) {
 
     /* libinput keycodes are offset by 8 from xkb's. */
     uint32_t keycode = event->keycode + 8;
-    const xkb_keysym_t *syms;
+    const recon_keysym *syms;
     int nsyms = xkb_state_key_get_syms(keyboard->wlr_keyboard->xkb_state, keycode, &syms);
 
     bool handled = false;

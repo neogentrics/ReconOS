@@ -17,7 +17,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <xkbcommon/xkbcommon.h>
+#include "recon_key.h"
 
 struct recon_server;
 struct recon_font;
@@ -65,7 +65,7 @@ bool recon_session_handle_click(struct recon_session *session,
 bool recon_session_handle_motion(struct recon_session *session,
     double lx, double ly);
 bool recon_session_handle_key(struct recon_session *session,
-    xkb_keysym_t sym, uint32_t modifiers);
+    recon_keysym sym, uint32_t modifiers);
 
 /* What is on screen, for diagnosis from the control socket. */
 void recon_session_describe(struct recon_session *session, char *out, size_t size);

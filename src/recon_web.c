@@ -5137,7 +5137,7 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
     }
 }
 
-static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+static bool web_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_web *w = user;
     struct web_tab *t = front(w);
     bool ctrl = (modifiers & RECON_MOD_CTRL) != 0;
@@ -5151,23 +5151,23 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      */
     if (ctrl) {
         switch (sym) {
-        case XKB_KEY_t:
-        case XKB_KEY_T:
+        case RECON_KEY_t:
+        case RECON_KEY_T:
             menu_do(w, MENU_NEW_TAB);
             return true;
-        case XKB_KEY_w:
-        case XKB_KEY_W:
+        case RECON_KEY_w:
+        case RECON_KEY_W:
             tab_close(w, w->active);
             if (t != NULL) {
                 recon_appwin_refresh(t->win);
             }
             return true;
-        case XKB_KEY_f:
-        case XKB_KEY_F:
+        case RECON_KEY_f:
+        case RECON_KEY_F:
             find_open(w, true);
             return true;
-        case XKB_KEY_d:
-        case XKB_KEY_D:
+        case RECON_KEY_d:
+        case RECON_KEY_D:
             bookmark_toggle(w);
             if (w->bookmark_count == 1) {
                 w->show_bookmarks = true;
@@ -5176,27 +5176,27 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
                 recon_appwin_refresh(t->win);
             }
             return true;
-        case XKB_KEY_l:
-        case XKB_KEY_L:
+        case RECON_KEY_l:
+        case RECON_KEY_L:
             recon_edit_focus(&w->address);
             if (t != NULL) {
                 recon_appwin_refresh(t->win);
             }
             return true;
-        case XKB_KEY_r:
-        case XKB_KEY_R:
+        case RECON_KEY_r:
+        case RECON_KEY_R:
             if (t != NULL && t->have_url) {
                 go_to(t, &t->url, false);
             }
             return true;
-        case XKB_KEY_plus:
-        case XKB_KEY_equal:
+        case RECON_KEY_plus:
+        case RECON_KEY_equal:
             set_zoom(w, (t != NULL ? t->zoom : 100) + ZOOM_STEP);
             return true;
-        case XKB_KEY_minus:
+        case RECON_KEY_minus:
             set_zoom(w, (t != NULL ? t->zoom : 100) - ZOOM_STEP);
             return true;
-        case XKB_KEY_0:
+        case RECON_KEY_0:
             set_zoom(w, 100);
             return true;
         default:
@@ -5276,26 +5276,26 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
          * going somewhere nobody can see.
          */
         if (d != NULL && !field_is_typable(d) &&
-                sym != XKB_KEY_Tab && sym != XKB_KEY_ISO_Left_Tab) {
+                sym != RECON_KEY_Tab && sym != RECON_KEY_ISO_Left_Tab) {
             /* An open menu: move through it, choose, or leave it. */
             if (t->menu_field == t->focus && t->menu_field >= 0) {
                 int last = d->option_count - 1;
                 switch (sym) {
-                case XKB_KEY_Down:
+                case RECON_KEY_Down:
                     if (t->fields[t->focus].chosen < last) {
                         t->fields[t->focus].chosen++;
                     }
                     recon_appwin_refresh(t->win);
                     return true;
-                case XKB_KEY_Up:
+                case RECON_KEY_Up:
                     if (t->fields[t->focus].chosen > 0) {
                         t->fields[t->focus].chosen--;
                     }
                     recon_appwin_refresh(t->win);
                     return true;
-                case XKB_KEY_Return:
-                case XKB_KEY_KP_Enter:
-                case XKB_KEY_space:
+                case RECON_KEY_Return:
+                case RECON_KEY_KP_Enter:
+                case RECON_KEY_space:
                     t->menu_field = -1;
                     recon_appwin_refresh(t->win);
                     return true;
@@ -5310,8 +5310,8 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
              * sends the form from a button -- which is the one place the two
              * keys differ, and they differ the way they do in a browser.
              */
-            if (sym == XKB_KEY_space || sym == XKB_KEY_Return ||
-                    sym == XKB_KEY_KP_Enter) {
+            if (sym == RECON_KEY_space || sym == RECON_KEY_Return ||
+                    sym == RECON_KEY_KP_Enter) {
                 field_pressed(w, t, t->focus);
                 recon_appwin_refresh(t->win);
                 return true;
@@ -5320,9 +5320,9 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             /* Up and down on a closed menu change the choice without opening
              * it, which is how a menu behaves under a keyboard everywhere. */
             if (d->kind == RECON_HTML_FIELD_CHOICE &&
-                    (sym == XKB_KEY_Down || sym == XKB_KEY_Up)) {
+                    (sym == RECON_KEY_Down || sym == RECON_KEY_Up)) {
                 int at = t->fields[t->focus].chosen +
-                    (sym == XKB_KEY_Down ? 1 : -1);
+                    (sym == RECON_KEY_Down ? 1 : -1);
                 if (at >= 0 && at < d->option_count) {
                     t->fields[t->focus].chosen = at;
                 }
@@ -5336,7 +5336,7 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
          * sees the key: `recon_edit_key` would put a tab character into the
          * text, and a tab inside a form field is not something anybody means.
          */
-        if (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+        if (sym == RECON_KEY_Tab || sym == RECON_KEY_ISO_Left_Tab) {
             int by = (modifiers & RECON_MOD_SHIFT) != 0 ? -1 : 1;
             int next = field_step(t, t->focus, by);
             if (next >= 0) {
@@ -5351,7 +5351,7 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         if (!field_is_typable(d)) {
             /* Nothing else here belongs to a control with no caret. Escape
              * and the scrolling keys fall through to the window. */
-            if (sym == XKB_KEY_Escape) {
+            if (sym == RECON_KEY_Escape) {
                 t->menu_field = -1;
                 t->focus = -1;
                 recon_appwin_refresh(t->win);
@@ -5413,7 +5413,7 @@ not_a_field_key:
      * with a search box that cannot be reached without the pointer is a page
      * somebody has to stop typing to use.
      */
-    if (sym == XKB_KEY_Tab && t->fields != NULL && t->field_count > 0 &&
+    if (sym == RECON_KEY_Tab && t->fields != NULL && t->field_count > 0 &&
             !w->address.active && w->strip != STRIP_FIND) {
         int first = field_step(t, -1, 1);
         if (first >= 0) {
@@ -5426,7 +5426,7 @@ not_a_field_key:
     int page = t->viewport_height > 40 ? t->viewport_height - 20 : 40;
 
     switch (sym) {
-    case XKB_KEY_Escape:
+    case RECON_KEY_Escape:
         if (w->menu_open) {
             w->menu_open = false;
             recon_appwin_refresh(t->win);
@@ -5454,16 +5454,16 @@ not_a_field_key:
             return true;
         }
         return false;
-    case XKB_KEY_F3:
+    case RECON_KEY_F3:
         find_step(w, (modifiers & RECON_MOD_SHIFT) != 0 ? -1 : 1);
         return true;
-    case XKB_KEY_Down:      t->scroll += 40; return true;
-    case XKB_KEY_Up:        t->scroll -= 40; return true;
-    case XKB_KEY_Page_Down:
-    case XKB_KEY_space:     t->scroll += page; return true;
-    case XKB_KEY_Page_Up:   t->scroll -= page; return true;
-    case XKB_KEY_Home:      t->scroll = 0; return true;
-    case XKB_KEY_End:       t->scroll = t->content_height; return true;
+    case RECON_KEY_Down:      t->scroll += 40; return true;
+    case RECON_KEY_Up:        t->scroll -= 40; return true;
+    case RECON_KEY_Page_Down:
+    case RECON_KEY_space:     t->scroll += page; return true;
+    case RECON_KEY_Page_Up:   t->scroll -= page; return true;
+    case RECON_KEY_Home:      t->scroll = 0; return true;
+    case RECON_KEY_End:       t->scroll = t->content_height; return true;
     default:
         return false;
     }

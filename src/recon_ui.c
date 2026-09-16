@@ -2842,14 +2842,14 @@ static void edit_delete_at(struct recon_edit *edit, int index) {
 }
 
 enum recon_edit_result recon_edit_key(struct recon_edit *edit,
-        xkb_keysym_t sym, uint32_t modifiers) {
+        recon_keysym sym, uint32_t modifiers) {
     if (edit == NULL || !edit->active) {
         return RECON_EDIT_IGNORED;
     }
     (void)modifiers;
 
     if ((modifiers & (1u << 2)) != 0) {  /* Ctrl */
-        if (sym == XKB_KEY_a || sym == XKB_KEY_A) {
+        if (sym == RECON_KEY_a || sym == RECON_KEY_A) {
             edit->anchor = 0;
             edit->caret = edit->length;
             return RECON_EDIT_CHANGED;
@@ -2864,13 +2864,13 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
          * others is worse than none, since which is which cannot be seen.
          */
         int from, to;
-        if (sym == XKB_KEY_c || sym == XKB_KEY_C) {
+        if (sym == RECON_KEY_c || sym == RECON_KEY_C) {
             if (edit_selection(edit, &from, &to)) {
                 recon_clip_set_text(edit->text + from, (size_t)(to - from));
             }
             return RECON_EDIT_IGNORED;
         }
-        if (sym == XKB_KEY_x || sym == XKB_KEY_X) {
+        if (sym == RECON_KEY_x || sym == RECON_KEY_X) {
             if (edit_selection(edit, &from, &to)) {
                 recon_clip_set_text(edit->text + from, (size_t)(to - from));
                 edit_delete_selection(edit);
@@ -2878,7 +2878,7 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
             }
             return RECON_EDIT_IGNORED;
         }
-        if (sym == XKB_KEY_v || sym == XKB_KEY_V) {
+        if (sym == RECON_KEY_v || sym == RECON_KEY_V) {
             const char *held = recon_clip_text();
             if (*held == '\0') {
                 return RECON_EDIT_IGNORED;
@@ -2905,8 +2905,8 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
     }
 
     switch (sym) {
-    case XKB_KEY_Return:
-    case XKB_KEY_KP_Enter:
+    case RECON_KEY_Return:
+    case RECON_KEY_KP_Enter:
         /* A multi-line field takes the newline instead of finishing. There is
          * no way to commit one from the keyboard, deliberately: a letter with
          * a blank line in it should not be sent by the key that made it. */
@@ -2916,10 +2916,10 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
         }
         return RECON_EDIT_COMMIT;
 
-    case XKB_KEY_Escape:
+    case RECON_KEY_Escape:
         return RECON_EDIT_CANCEL;
 
-    case XKB_KEY_BackSpace:
+    case RECON_KEY_BackSpace:
         /* Backspace over a selection removes the selection, not the character
          * before it. */
         if (!edit_delete_selection(edit) && edit->caret > 0) {
@@ -2929,13 +2929,13 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
         }
         return RECON_EDIT_CHANGED;
 
-    case XKB_KEY_Delete:
+    case RECON_KEY_Delete:
         if (!edit_delete_selection(edit)) {
             edit_delete_at(edit, edit->caret);
         }
         return RECON_EDIT_CHANGED;
 
-    case XKB_KEY_Left:
+    case RECON_KEY_Left:
         /* Moving off a selection lands at its edge rather than stepping from
          * wherever the caret happened to be inside it. */
         if (edit->anchor >= 0) {
@@ -2949,7 +2949,7 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
         }
         return RECON_EDIT_CHANGED;
 
-    case XKB_KEY_Right:
+    case RECON_KEY_Right:
         if (edit->anchor >= 0) {
             int from, to;
             if (edit_selection(edit, &from, &to)) {
@@ -2961,12 +2961,12 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
         }
         return RECON_EDIT_CHANGED;
 
-    case XKB_KEY_Home:
+    case RECON_KEY_Home:
         edit->caret = 0;
         edit->anchor = -1;
         return RECON_EDIT_CHANGED;
 
-    case XKB_KEY_End:
+    case RECON_KEY_End:
         edit->caret = edit->length;
         edit->anchor = -1;
         return RECON_EDIT_CHANGED;
@@ -2985,7 +2985,7 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
      * them meant a person could name a file only in English -- on a system
      * that will happily store the name and now draws it correctly.
      */
-    uint32_t code = xkb_keysym_to_utf32(sym);
+    uint32_t code = recon_key_to_char(sym);
     if (code >= 0x20 && code != 0x7F) {
         char bytes[4];
         int count = encode_utf8(code, bytes);

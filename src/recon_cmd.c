@@ -13,6 +13,7 @@
 #include <unistd.h> /* access */
 #include <strings.h> /* strcasecmp */
 
+#include "recon_key.h"
 #include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_capture.h"
@@ -42,7 +43,6 @@
 #include "recon_shell.h"
 
 #include <linux/input-event-codes.h> /* BTN_LEFT, BTN_RIGHT */
-#include <xkbcommon/xkbcommon.h>
 
 #define OUTPUT_MAX 16384
 #define MAX_ARGS 16
@@ -1619,8 +1619,8 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
             name = plus + 1;
         }
 
-        xkb_keysym_t sym = xkb_keysym_from_name(name, XKB_KEYSYM_CASE_INSENSITIVE);
-        if (sym == XKB_KEY_NoSymbol) {
+        recon_keysym sym = recon_key_from_name(name);
+        if (sym == RECON_KEY_NoSymbol) {
             out(s, "No key called '%s'.\n", name);
             return;
         }
@@ -1862,7 +1862,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         int typed = 0;
         for (int i = 2; i < argc; i++) {
             if (i > 2) {
-                recon_inject_key(server, XKB_KEY_space, 0);
+                recon_inject_key(server, RECON_KEY_space, 0);
                 typed++;
             }
             for (const char *c = argv[i]; *c != '\0'; c++) {
