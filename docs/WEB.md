@@ -33,7 +33,9 @@ Nothing is marked built on the strength of having been written.
 | Listener, accept, keep-alive | **built** | `serve.c`, verified on the machine |
 | `GET` / `HEAD` / `POST` | **built** | |
 | Request bodies, framed by `Content-Length` | **built** | 64 KiB cap |
-| Static files from the volume | **built** | `files.c` — 29 checks; on the machine |
+| Static files from the volume | **built** | `files.c` — 30 checks; on the machine |
+| Streaming responses | **built** | `serve.c` — 23 checks; a declared length is a promise |
+| Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
 The suites run on the host: `recon_server_http_tests` (parsing) and
@@ -110,8 +112,8 @@ can run, not by what it can send.
 | **JSON / REST APIs** | **built** | demonstrated in the serving suite: a handler returning `application/json` with the raw query string. Needs a JSON writer and parser next. |
 | **Form submission** | **built** (transport) | `POST` bodies arrive whole, with their real length, not NUL-terminated. `application/x-www-form-urlencoded` and `multipart/form-data` decoders are specified, not written. |
 | **File upload** | specified | needs `multipart/form-data` and streaming to disk; the 64 KiB body cap exists because nothing streams yet. |
-| **File download** | specified | needs range requests and a sendfile-shaped path, or it reads whole files into memory. |
-| **Server-sent events** | specified | needs a response the handler can write to incrementally. |
+| **File download** | **built** | streams from the volume in 8 KiB blocks. Range requests are still specified, not written. |
+| **Server-sent events** | **unblocked** | the sink it needed now exists; the event framing is not written. |
 | **WebSocket** | specified | needs the `Upgrade` handshake, SHA-1 for the accept key, and a framing layer. The connection stops being HTTP after the handshake, so it needs its own loop. |
 | **Long-polling** | **blocked** | needs a request to be parked without occupying the only process. See concurrency below. |
 | **CGI-style external programs** | **blocked** | nothing in user mode can start a program — `KERNEL-WANTS.md` carries the entry. |
@@ -121,11 +123,23 @@ can run, not by what it can send.
 
 ### The two that shape the others
 
-**Streaming responses.** Today a handler returns a whole body and the server
-sends it. That is why the body cap is 64 KiB, why downloads are unspecified,
-and why server-sent events cannot work. The fix is a response the handler
-writes into progressively, and it should be designed before the static file
-handler is written rather than after.
+~~**Streaming responses.**~~ **Built**, 15 September. A handler is handed a
+sink and writes as it goes, so the size of a response is no longer the size of
+what a program can hold. The static file handler was rewritten onto it and a
+file far larger than `HTTP_RESPONSE_MAX` is now served whole.
+
+**The rule that makes it safe:** a declared length is a promise, and one this
+server cannot keep closes the connection rather than being broken quietly. A
+handler that says `Content-Length: 4096` and writes 3000 leaves the client
+waiting -- and on a kept connection the client reads the *next* response's head
+as this body's tail. That is request smuggling's desynchronisation arrived at
+from the server's own side, and it gets the same treatment: refuse rather than
+hope.
+
+**Chunked is refused coming in and used going out, which is not a
+contradiction.** A request framed two ways is dangerous because two *different*
+parsers must agree about a body neither wrote. A response this server frames is
+written by this server, once, with one framing chosen at `http_stream_begin`.
 
 **Concurrency.** The server is single-threaded and serves one connection to
 completion before accepting the next. A slow client therefore blocks every
@@ -242,8 +256,8 @@ Each step is chosen so the thing before it is what makes it possible.
    kernel — which has never been shown.
 2. ~~**A static file handler**~~ — **built**, 15 September. It found that
    `open(O_CREAT)` in the C library never creates; see `docs/SERVER.md`.
-3. **Streaming responses.** Before anything that returns a large body, not
-   after.
+3. ~~**Streaming responses.**~~ **Built**, 15 September, and it is what let
+   the file handler stop reading whole files into memory.
 4. **The admin console's first real page**, served by a handler, reading real
    machine facts through `SYS_MACHINE`.
 5. **JSON in and out**, which turns the route table into a REST API.

@@ -6,14 +6,19 @@
  *
  * --- What was tried and rejected ---
  *
- * **`lseek` to the end to learn the size, then read that many bytes.** It
- * works on the host and it is the obvious shape. It was dropped because the
- * size it learns is the size *at that moment*, and the read that follows is a
- * second look at a file something else may have changed in between -- so the
- * length in the header and the bytes in the body come from two different
- * observations. Reading until the file stops and reporting what actually
- * arrived is one observation, and the header is then a fact about the body
- * rather than a claim about the file.
+ * **`lseek` to the end to learn the size, then read that many bytes** -- which
+ * this file rejected when it was written, and uses now. The objection was
+ * real: the size is a fact at one moment and the bytes are a fact at another,
+ * so a header built from the first describes a different observation from the
+ * body built from the second. While a whole response was assembled in memory
+ * there was a way to avoid the gap entirely -- read until the file stops, and
+ * report what actually arrived.
+ *
+ * Streaming removes that option, because the header goes out before the body
+ * exists. What it adds is **detection**: the length becomes a declared promise
+ * and `http_stream_end` compares it against what was written. The gap is still
+ * there and is no longer silent, which is the trade that changed the answer.
+ * See `files.h`.
  *
  * **Falling back to a directory listing when there is no index.** Refused, and
  * this is a security decision rather than a feature decision. A listing
@@ -188,73 +193,81 @@ static int join(const struct http_files *files, const char *target,
 }
 
 /*
- * Read a whole file into `into`.
+ * Open a file and learn how long it is.
  *
- * Returns the number of bytes on success, or a negative verdict. A file that
- * does not fit is refused rather than served short: a truncated file with a
- * 200 beside it is a corrupt file that looks like a good one, and that is
- * worse than an error.
+ * Returns the descriptor with the cursor back at the start, or a negative
+ * number. `lseek` failing is how this library asks "is that a file?" without a
+ * `stat` it does not have -- a directory cannot be seeked to its end, and
+ * neither can anything else that has no bytes to serve.
  */
-static long slurp(const char *path, char *into, size_t room)
+static int open_and_size(const char *path, long *size)
 {
 	int fd = open(path, O_RDONLY);
-	size_t have = 0;
+	char probe;
+	ssize_t got;
+	off_t end;
 
 	if (fd < 0)
-		return HTTP_EMALFORMED;	/* absent, or not readable */
+		return -1;
 
-	for (;;) {
-		ssize_t n;
-
-		if (have >= room) {
-			/* There is more file than there is room. Distinguished
-			 * from a file that exactly fills the buffer by asking
-			 * for one more byte than can be served -- see the
-			 * caller, which sizes `room` at the cap plus one. */
-			close(fd);
-			return HTTP_EBODY_LONG;
-		}
-
-		n = read(fd, into + have, room - have);
-		if (n > 0) {
-			have += (size_t)n;
-			continue;
-		}
-		if (n == 0)
-			break;			/* the end of the file */
-		if (errno == EINTR)
-			continue;
-
-		/* A read that fails on the first byte is the answer to the
-		 * question this library cannot ask directly: a directory, or
-		 * something else that is not a file to be served. `EISDIR` is
-		 * the host's word for it; ReconOS answers its own error and
-		 * either way there are no bytes, which is what matters. */
+	end = lseek(fd, 0, SEEK_END);
+	if (end < 0 || lseek(fd, 0, SEEK_SET) != 0) {
 		close(fd);
-		return HTTP_EMALFORMED;
+		return -1;
 	}
 
-	close(fd);
-	return (long)have;
+	/*
+	 * A trial read, because seeking is not the question.
+	 *
+	 * This asked `lseek` alone at first, on the reasoning that a directory
+	 * cannot be seeked to its end. **That is false**, at least on the host:
+	 * a directory opens, seeks, and reports a size -- so `/docs` was served
+	 * as a zero-length file of its own rather than falling through to the
+	 * index inside it, and the suite caught it.
+	 *
+	 * Reading is the operation actually wanted, so reading is what gets
+	 * asked. A directory refuses it; an empty file returns zero, which is
+	 * a perfectly good answer and must not be mistaken for a refusal.
+	 */
+	got = read(fd, &probe, 1);
+	if (got < 0 || lseek(fd, 0, SEEK_SET) != 0) {
+		close(fd);
+		return -1;
+	}
+
+	*size = (long)end;
+	return fd;
+}
+
+/* A status with a short body, written through the sink because the sink is the
+ * only way out. Deliberately plain: an error page that reports what was wrong
+ * tells an attacker which of their probes was noticed. */
+static int say_status(struct http_sink *sink, int status, const char *text)
+{
+	size_t n = slen(text);
+
+	if (http_stream_begin(sink, status, "text/plain", (long)n) != HTTP_OK)
+		return HTTP_EMALFORMED;
+	if (http_stream_write(sink, text, n) != HTTP_OK)
+		return HTTP_EMALFORMED;
+	return HTTP_OK;
 }
 
 int http_files_handler(const struct http_request *request,
                        const char *body, size_t body_len,
-                       struct http_response *out, void *ctx)
+                       struct http_sink *sink, void *ctx)
 {
-	/* One buffer, static because this server serves one connection at a
-	 * time and 256 KiB is far more stack than a user process here should
-	 * assume. One byte over the cap, so that a file which exactly fills
-	 * the cap is served and one byte larger is refused -- without that
-	 * extra byte the two are indistinguishable. */
-	static char contents[HTTP_RESPONSE_MAX + 1];
+	/* One block at a time. Static because this server serves one
+	 * connection at a time, and because the whole point of streaming is
+	 * that this buffer does not grow with the file. */
+	static char block[8192];
 	static char path[HTTP_PATH_MAX];
 
 	const struct http_files *files = (const struct http_files *)ctx;
 	const char *target;
 	size_t tl;
-	long n;
-	int rc;
+	long size = 0;
+	int fd, rc;
 
 	(void)body; (void)body_len;
 
@@ -267,11 +280,8 @@ int http_files_handler(const struct http_request *request,
 	/* A directory is served from its index or not at all. Never listed --
 	 * see the file header. */
 	if (tl > 0 && target[tl - 1] == '/') {
-		if (!files->index) {
-			http_response_simple(out, 404, "text/plain",
-			                     "404 Not Found\n", 14);
-			return HTTP_OK;
-		}
+		if (!files->index)
+			return say_status(sink, 404, "404 Not Found\n");
 		rc = join(files, target, files->index, path, sizeof(path));
 	} else {
 		rc = join(files, target, "", path, sizeof(path));
@@ -280,54 +290,62 @@ int http_files_handler(const struct http_request *request,
 	if (rc != HTTP_OK)
 		return rc;
 
-	if (escapes(path + slen(files->root))) {
-		http_response_simple(out, 403, "text/plain",
-		                     "403 Forbidden\n", 14);
-		return HTTP_OK;
-	}
+	if (escapes(path + slen(files->root)))
+		return say_status(sink, 403, "403 Forbidden\n");
 
-	n = slurp(path, contents, sizeof(contents));
+	fd = open_and_size(path, &size);
 
 	/*
 	 * Not a file. If the request named a directory without its trailing
 	 * slash -- `/docs` rather than `/docs/` -- try the index inside it
 	 * before giving up, because a person typing a path leaves the slash
 	 * off and a 404 there is a 404 for a page that exists.
-	 *
-	 * A redirect to the slashed form would be the more correct answer and
-	 * is what `docs/WEB.md` specifies; this serves it directly, which is
-	 * indistinguishable to a reader and does not need a `Location` header
-	 * this handler would have to build a full URL for.
 	 */
-	if (n < 0 && n == HTTP_EMALFORMED && files->index
-	    && (tl == 0 || target[tl - 1] != '/')) {
+	if (fd < 0 && files->index && (tl == 0 || target[tl - 1] != '/')) {
 		rc = join(files, target, files->index, path, sizeof(path));
 		if (rc == HTTP_OK)
-			n = slurp(path, contents, sizeof(contents));
+			fd = open_and_size(path, &size);
 	}
 
-	if (n == HTTP_EBODY_LONG) {
-		/* Larger than a response can carry. 413 rather than 500: the
-		 * server is fine, the file is bigger than this server can send
-		 * until streaming exists. `docs/WEB.md` carries that row. */
-		http_response_simple(out, 413, "text/plain",
-		                     "413 Content Too Large\n", 22);
-		return HTTP_OK;
+	if (fd < 0)
+		return say_status(sink, 404, "404 Not Found\n");
+
+	/*
+	 * The length is declared from what `lseek` said, and the promise is
+	 * what makes that safe -- see `files.h`. A file that changes under the
+	 * read writes a different number of bytes than was declared, and
+	 * `http_stream_end` turns that into a closed connection rather than a
+	 * header that quietly disagrees with its body.
+	 */
+	if (http_stream_begin(sink, 200, http_content_type(path), size)
+	    != HTTP_OK) {
+		close(fd);
+		return HTTP_EMALFORMED;
 	}
 
-	if (n < 0) {
-		http_response_simple(out, 404, "text/plain",
-		                     "404 Not Found\n", 14);
-		return HTTP_OK;
+	for (;;) {
+		ssize_t n = read(fd, block, sizeof(block));
+
+		if (n > 0) {
+			if (http_stream_write(sink, block, (size_t)n)
+			    != HTTP_OK) {
+				close(fd);
+				return HTTP_EMALFORMED;
+			}
+			continue;
+		}
+		if (n == 0)
+			break;
+		if (errno == EINTR)
+			continue;
+
+		/* The file stopped being readable part way through. The head
+		 * is already gone, so the only honest thing left is to stop
+		 * and let the promise check close the connection. */
+		close(fd);
+		return HTTP_EMALFORMED;
 	}
 
-	if ((size_t)n > HTTP_RESPONSE_MAX) {
-		http_response_simple(out, 413, "text/plain",
-		                     "413 Content Too Large\n", 22);
-		return HTTP_OK;
-	}
-
-	http_response_simple(out, 200, http_content_type(path), contents,
-	                     (size_t)n);
+	close(fd);
 	return HTTP_OK;
 }

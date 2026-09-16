@@ -111,6 +111,8 @@ Features, patches and releases are tracked the same way: see
 
 ## Two prefixes, and why
 
+*(Three registers now: see `VF-` at the foot of this section.)*
+
 `BG-` is the desktop's. **`KF-` is the kernel's** -- a kernel *fault*, and not
 `KB-`, because this kernel prints KB for kilobytes in the very summaries these
 numbers appear in.
@@ -134,6 +136,37 @@ upward mean `KF-`.
 Kernel faults from here take the next free `KF-` number; desktop faults the next
 free `BG-`. Neither track can take the other's, so neither has to look at the
 other's file first.
+
+## A third prefix, `VF-`, and what it is not
+
+**Claimed by the server role on 15 September 2026, and recorded here so that
+nobody else takes it.** It is not a fourth sequence of bugs. It does not appear
+in this file, and nothing in this file ever becomes one.
+
+`KF-` is a fault in the kernel. `BG-` is a bug in the OS. `VF-` is a
+**verification finding**: a claim stated as fact that the source contradicts --
+a number written into a handoff, a branch named in an instruction, a limitation
+that quietly stopped being true. They live in documents rather than in code, and
+they are worth their own register for one reason:
+
+> A `BG` is found by something breaking. A `VF` is found only if somebody
+> checks -- and if nobody does it is not inert, it gets built on.
+
+They are kept in `docs/VERIFICATION.md`, numbered there and nowhere else.
+
+**The rule that keeps this from repeating 6 September.** `VF-` numbers are
+assigned only in that file, and the two registers never trade. If a `VF` turns
+out to describe a real defect in the system rather than a claim about it, it
+gets a `BG-` or `KF-` of its own from whichever track owns the code, and the
+`VF` entry cites that number. Two numbers for two different things, never one
+number moved.
+
+**The server role claims no `KF-` or `BG-` numbers at all.** It has found faults
+in both tracks -- `tcp_write` reporting more bytes sent than it sent, and
+`open(O_CREAT)` in `posix.c` dropping the flag -- and both are written up in
+`docs/SERVER.md` with their measurements and *without* a number, because the
+number belongs to whoever owns the file. Taking the next free one from a copy of
+this register is exactly what produced the collision above.
 
 ---
 

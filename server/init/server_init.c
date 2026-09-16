@@ -229,10 +229,13 @@ static const struct http_files SITE_FILES = { WEB_ROOT, "index.html" };
  * serves its index and nothing else.
  */
 static const struct http_route ROUTES[] = {
-	{ "GET", "/",             1, handle_dashboard,   &FACTS },
-	{ "GET", "/api/status",   1, handle_status,      &FACTS },
-	{ "GET", "/health",       1, handle_health,      0 },
-	{ "GET", "",              0, http_files_handler,
+	{ "GET", "/",             1, handle_dashboard, 0, &FACTS },
+	{ "GET", "/api/status",   1, handle_status,    0, &FACTS },
+	{ "GET", "/health",       1, handle_health,    0, 0 },
+
+	/* Last, and streaming. A file no longer has to fit in a response, so
+	 * the volume can serve something larger than this program's memory. */
+	{ "GET", "",              0, 0, http_files_handler,
 	  (void *)&SITE_FILES },
 };
 

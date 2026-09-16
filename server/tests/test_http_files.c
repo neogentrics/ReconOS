@@ -1,29 +1,37 @@
 /*
  * Serving a file, and every way of serving the wrong one.
  *
- * The handler is called directly with a hand-built request rather than through
- * a socket. That is deliberate: the socket path already has its own suite, and
- * what is under test here is *which file gets opened and what comes back*, a
- * question a listener only makes slower to ask.
+ * The handler is driven over a socketpair rather than through a whole server.
+ * The socket path has its own suite; what is under test here is *which file
+ * gets opened and what comes back*, and a listener only makes that slower to
+ * ask. It is still a real socket, because the handler streams and `send` is
+ * what it streams with.
  *
  * **The cases that matter are the ones about a file that is not the one asked
  * for**: a path that climbs out of the root, a directory served as a listing,
- * a file cut short and answered 200, a binary file truncated at its first zero
- * byte. Each of those is a served file that is wrong rather than a served
- * error, which is the harder failure to notice.
+ * a binary file truncated at its first zero byte, a body that does not match
+ * the length declared beside it. Each of those is a served file that is wrong
+ * rather than a served error, which is the harder failure to notice.
  *
- * **Watched failing first, and the second attempt is the interesting one.**
+ * **Every case checks the declared length as well as the bytes.** A body that
+ * is right next to a header that is wrong desynchronises a kept connection,
+ * and a check that only compares bytes cannot see it.
+ *
+ * --- Watched failing, three times, and each time taught something ---
+ *
  * Run against a handler with `escapes()` removed, the four traversal cases
- * failed as they should. Relaxing the over-size check to serve what fitted
- * changed nothing -- the suite still passed, because the handler guards that
- * twice: once where the file is read and again on the length before it is
- * answered. Only with *both* removed did the truncation case fail.
+ * failed as they should.
  *
- * That is worth writing down rather than tidying away. The doubled guard is
- * deliberate and it means no single edit to `files.c` can quietly start
- * serving cut files -- but it also means a suite run against one broken half
- * proves less than it appears to. A check that survives the removal of the
- * thing it is checking is not evidence about that thing.
+ * Relaxing the old over-size check changed **nothing** -- the suite still
+ * passed, because the handler guarded that twice and only one half had been
+ * broken. A check that survives the removal of the thing it is checking is not
+ * evidence about that thing. (Streaming has since removed the cap entirely;
+ * the case now proves the opposite, that a large file is served whole.)
+ *
+ * And the suite caught a real one on conversion. `open_and_size` asked `lseek`
+ * whether something was a file, on the reasoning that a directory cannot be
+ * seeked to its end. A directory can. `/docs` was served as a zero-length file
+ * of its own instead of falling through to the index inside it.
  */
 
 #include "../http/files.h"
@@ -32,7 +40,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 
 static int failures;
@@ -68,59 +80,171 @@ static void put(const char *rel, const void *data, size_t len)
 	close(fd);
 }
 
-/* Ask the handler for a path, as the parser would have handed it over: already
- * decoded, normalised and rooted. */
-static int ask(const struct http_files *files, const char *target,
-               struct http_response *out)
+/*
+ * Ask the handler for a path and collect everything it put on the wire.
+ *
+ * The handler streams, so there is no response structure left to inspect --
+ * what it produces is bytes, and bytes are what this reads back. A socketpair
+ * rather than a file, because the sink sends with `send`, which a regular
+ * descriptor refuses.
+ *
+ * **Forked, and that is not ceremony.** A socketpair holds a few hundred
+ * kilobytes before it blocks, and one case below deliberately serves more than
+ * that. A single process writing and then reading would deadlock at exactly
+ * the size that case exists to prove works.
+ */
+static size_t ask(const struct http_files *files, const char *target,
+                  char *into, size_t room)
 {
-	struct http_request r;
+	int sv[2];
+	pid_t child;
+	size_t have = 0;
 
-	memset(&r, 0, sizeof(r));
-	snprintf(r.method, sizeof(r.method), "GET");
-	snprintf(r.target, sizeof(r.target), "%s", target);
-	r.minor = 1;
+	into[0] = '\0';
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0)
+		return 0;
 
-	return http_files_handler(&r, 0, 0, out, (void *)files);
+	child = fork();
+	if (child < 0) {
+		close(sv[0]);
+		close(sv[1]);
+		return 0;
+	}
+
+	if (child == 0) {
+		struct http_request r;
+		struct http_sink sink;
+
+		alarm(20);
+		close(sv[0]);
+
+		memset(&r, 0, sizeof(r));
+		snprintf(r.method, sizeof(r.method), "GET");
+		snprintf(r.target, sizeof(r.target), "%s", target);
+		r.minor = 1;
+
+		memset(&sink, 0, sizeof(sink));
+		sink.fd = sv[1];
+		sink.minor = 1;
+		sink.declared = HTTP_LENGTH_UNKNOWN;
+		sink.server_name = "ReconOS/files";
+
+		http_files_handler(&r, 0, 0, &sink, (void *)files);
+		http_stream_end(&sink);
+
+		close(sv[1]);
+		_exit(0);
+	}
+
+	close(sv[1]);
+	for (;;) {
+		ssize_t n = read(sv[0], into + have, room - 1 - have);
+
+		if (n > 0) {
+			have += (size_t)n;
+			if (have >= room - 1)
+				break;
+			continue;
+		}
+		if (n < 0 && errno == EINTR)
+			continue;
+		break;
+	}
+	into[have] = '\0';
+	close(sv[0]);
+	waitpid(child, 0, 0);
+	return have;
 }
+
+/* The status line's code, or 0. */
+static int status_of(const char *reply)
+{
+	if (strncmp(reply, "HTTP/1.1 ", 9) != 0)
+		return 0;
+	return atoi(reply + 9);
+}
+
+/* Where the body begins, or NULL. */
+static const char *body_of(const char *reply)
+{
+	const char *at = strstr(reply, "\r\n\r\n");
+
+	return at ? at + 4 : 0;
+}
+
+/* A header must be in the head, not merely somewhere in the reply. A body that
+ * happens to contain the text is not the server having sent it. */
+static int has_header(const char *reply, const char *line)
+{
+	const char *head_end = strstr(reply, "\r\n\r\n");
+	const char *at = strstr(reply, line);
+
+	return at && head_end && at < head_end;
+}
+
+static char REPLY[HTTP_RESPONSE_MAX + 65536];
 
 static void serves(const struct http_files *f, const char *target,
                    const char *expect, size_t expect_len, const char *type,
                    const char *what)
 {
-	struct http_response res;
-	int rc = ask(f, target, &res);
+	size_t n = ask(f, target, REPLY, sizeof(REPLY));
+	const char *b = body_of(REPLY);
+	size_t got;
+	char want[96];
 
 	checks++;
-	if (rc != HTTP_OK || res.status != 200) {
+	if (status_of(REPLY) != 200) {
 		failures++;
-		printf("  FAIL  %s: rc=%d status=%d\n", what, rc, res.status);
+		printf("  FAIL  %s: status=%d\n", what, status_of(REPLY));
 		return;
 	}
-	if (res.body_len != expect_len
-	    || memcmp(res.body, expect, expect_len) != 0) {
+	if (!b) {
 		failures++;
-		printf("  FAIL  %s: got %lu bytes, wanted %lu\n", what,
-		       (unsigned long)res.body_len, (unsigned long)expect_len);
+		printf("  FAIL  %s: no head terminator\n", what);
 		return;
 	}
-	if (type && strcmp(res.content_type, type) != 0) {
+	got = n - (size_t)(b - REPLY);
+
+	/* The declared length and the delivered length, both, and from one
+	 * response. A body that is right beside a header that is wrong is the
+	 * failure that desynchronises a kept connection, and it is invisible to
+	 * a check that only looks at the bytes. */
+	snprintf(want, sizeof(want), "Content-Length: %lu\r\n",
+	         (unsigned long)expect_len);
+	if (!has_header(REPLY, want)) {
 		failures++;
-		printf("  FAIL  %s: type \"%s\", wanted \"%s\"\n", what,
-		       res.content_type, type);
+		printf("  FAIL  %s: did not declare %lu bytes\n", what,
+		       (unsigned long)expect_len);
+		return;
+	}
+	if (got != expect_len || memcmp(b, expect, expect_len) != 0) {
+		failures++;
+		printf("  FAIL  %s: delivered %lu, wanted %lu\n", what,
+		       (unsigned long)got, (unsigned long)expect_len);
+		return;
+	}
+	if (type) {
+		snprintf(want, sizeof(want), "Content-Type: %s\r\n", type);
+		if (!has_header(REPLY, want)) {
+			failures++;
+			printf("  FAIL  %s: wrong content type\n", what);
+		}
 	}
 }
 
 static void answers(const struct http_files *f, const char *target,
                     int status, const char *what)
 {
-	struct http_response res;
-	int rc = ask(f, target, &res);
+	int got;
+
+	ask(f, target, REPLY, sizeof(REPLY));
+	got = status_of(REPLY);
 
 	checks++;
-	if (rc != HTTP_OK || res.status != status) {
+	if (got != status) {
 		failures++;
-		printf("  FAIL  %s: rc=%d status=%d, wanted %d\n", what, rc,
-		       res.status, status);
+		printf("  FAIL  %s: status=%d, wanted %d\n", what, got, status);
 	}
 }
 
@@ -128,7 +252,7 @@ int main(void)
 {
 	struct http_files site = { ROOT, "index.html" };
 	struct http_files noindex = { ROOT, 0 };
-	static char big[HTTP_RESPONSE_MAX + 16];
+	static char big[HTTP_RESPONSE_MAX + 8192];
 	static const char PAGE[] = "<!doctype html><h1>M16</h1>\n";
 	static const char PLAIN[] = "ok\n";
 
@@ -188,29 +312,39 @@ int main(void)
 	answers(&site, "/..", 403, "a bare climb");
 	answers(&site, "/docs\\..\\x", 403, "a backslash climb");
 
-	/* --- size --------------------------------------------------------- */
+	/* --- size, whose meaning streaming changed ---------------------------
+	 *
+	 * There used to be a cap here. A whole response was assembled in
+	 * memory, so a file larger than `HTTP_RESPONSE_MAX` was refused with
+	 * 413 rather than served short -- a truncated file with a 200 beside it
+	 * being a corrupt file that looks good.
+	 *
+	 * Streaming removes the cap, and these cases are the evidence: a file
+	 * well past that size is served in full, with a declared length that
+	 * matches what arrives. The handler's own buffer is 8 KiB and does not
+	 * grow with the file, which is the property that makes it possible and
+	 * the one that would silently regress if somebody went back to reading
+	 * the whole thing into memory. */
 	{
 		size_t i;
 
 		for (i = 0; i < sizeof(big); i++)
-			big[i] = 'a';
+			big[i] = (char)('a' + (i % 26));
 
-		/* Exactly the cap is served. */
-		put("/exact.txt", big, HTTP_RESPONSE_MAX);
-		{
-			struct http_response res;
-			int rc = ask(&site, "/exact.txt", &res);
+		put("/large.txt", big, HTTP_RESPONSE_MAX + 5000);
+		serves(&site, "/large.txt", big, HTTP_RESPONSE_MAX + 5000,
+		       "text/plain; charset=utf-8",
+		       "a file far larger than a whole response is served entire");
 
-			ok(rc == HTTP_OK && res.status == 200
-			   && res.body_len == HTTP_RESPONSE_MAX,
-			   "a file exactly at the cap is served whole");
-		}
+		ok(HTTP_RESPONSE_MAX + 5000 > HTTP_RESPONSE_MAX,
+		   "and it is past what the old cap allowed");
 
-		/* One byte more is refused, not served short. A truncated file
-		 * with a 200 beside it is a corrupt file that looks good. */
-		put("/over.txt", big, HTTP_RESPONSE_MAX + 1);
-		answers(&site, "/over.txt", 413,
-		        "one byte over the cap is refused, not cut");
+		/* An empty file is a file. Zero bytes, a 200, and a declared
+		 * length of zero -- not a 404, which would say it was absent
+		 * when it is there and empty. */
+		put("/empty.txt", "", 0);
+		serves(&site, "/empty.txt", "", 0, "text/plain; charset=utf-8",
+		       "an empty file is served as empty, not as missing");
 	}
 
 	/* --- the content type table ------------------------------------------ */

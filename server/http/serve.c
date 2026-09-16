@@ -183,6 +183,164 @@ static int send_response(int fd, const struct http_request *req,
 	return send_all(fd, res->body, res->body_len, counter);
 }
 
+/* --- streaming ------------------------------------------------------------ */
+
+int http_stream_begin(struct http_sink *sink, int status,
+                      const char *content_type, long length)
+{
+	char head[1024];
+	int n;
+
+	if (!sink || sink->begun)
+		return -1;
+	sink->begun = 1;
+	sink->declared = length;
+
+	/*
+	 * Choose the framing, and it is the client's version that decides.
+	 *
+	 * Chunked arrived in HTTP/1.1. A 1.0 client handed a chunked body reads
+	 * the hex sizes as part of the content, so an unknown length there has
+	 * exactly one honest framing: write the bytes and close, and say so in
+	 * the head. That costs the connection, which is the price of not
+	 * knowing the size.
+	 */
+	sink->chunked = (length == HTTP_LENGTH_UNKNOWN && sink->minor >= 1);
+	if (length == HTTP_LENGTH_UNKNOWN && !sink->chunked)
+		sink->keep_alive = 0;
+
+	n = snprintf(head, sizeof(head),
+	             "HTTP/1.1 %d %s\r\nServer: %s\r\nConnection: %s\r\n",
+	             status, http_reason(status),
+	             sink->server_name ? sink->server_name : "ReconOS",
+	             sink->keep_alive ? "keep-alive" : "close");
+	if (n < 0 || (size_t)n >= sizeof(head))
+		return -1;
+
+	if (length >= 0) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "Content-Length: %lu\r\n",
+		                 (unsigned long)length);
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	} else if (sink->chunked) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "Transfer-Encoding: chunked\r\n");
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	}
+
+	if (content_type) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "Content-Type: %s\r\n", content_type);
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	}
+
+	if ((size_t)n + 2 >= sizeof(head))
+		return -1;
+	head[n++] = '\r';
+	head[n++] = '\n';
+
+	if (send_all(sink->fd, head, (size_t)n, sink->bytes_sent) != 0) {
+		sink->failed = 1;
+		return -1;
+	}
+	return HTTP_OK;
+}
+
+int http_stream_write(struct http_sink *sink, const void *data, size_t len)
+{
+	if (!sink || !sink->begun)
+		return -1;
+	if (sink->failed)
+		return -1;	/* already lost; say so but do nothing more */
+	if (len == 0)
+		return HTTP_OK;
+
+	/* Counted whether or not it is sent, because on a HEAD the length is
+	 * still the truth about the resource -- a HEAD that reported a
+	 * different figure from the GET it mirrors would be a different
+	 * answer to the same question. */
+	sink->written += (unsigned long)len;
+
+	/* A declared length that is about to be exceeded. Refused here rather
+	 * than sent, because the bytes past the promise are read by the client
+	 * as the beginning of the next response. */
+	if (sink->declared >= 0
+	    && sink->written > (unsigned long)sink->declared) {
+		sink->failed = 1;
+		return -1;
+	}
+
+	if (sink->head_only)
+		return HTTP_OK;
+
+	if (sink->chunked) {
+		char size[32];
+		int n = snprintf(size, sizeof(size), "%lx\r\n",
+		                 (unsigned long)len);
+
+		if (n < 0 || (size_t)n >= sizeof(size)) {
+			sink->failed = 1;
+			return -1;
+		}
+		if (send_all(sink->fd, size, (size_t)n, sink->bytes_sent) != 0
+		    || send_all(sink->fd, (const char *)data, len,
+		                sink->bytes_sent) != 0
+		    || send_all(sink->fd, "\r\n", 2, sink->bytes_sent) != 0) {
+			sink->failed = 1;
+			return -1;
+		}
+		return HTTP_OK;
+	}
+
+	if (send_all(sink->fd, (const char *)data, len, sink->bytes_sent) != 0) {
+		sink->failed = 1;
+		return -1;
+	}
+	return HTTP_OK;
+}
+
+int http_stream_end(struct http_sink *sink)
+{
+	if (!sink)
+		return -1;
+	if (!sink->begun) {
+		/* A handler that wrote nothing at all. Not this function's to
+		 * answer -- the caller still owes the client a status. */
+		return -1;
+	}
+
+	if (!sink->failed && sink->chunked && !sink->head_only) {
+		if (send_all(sink->fd, "0\r\n\r\n", 5, sink->bytes_sent) != 0)
+			sink->failed = 1;
+	}
+
+	/*
+	 * The promise, checked.
+	 *
+	 * A handler that declared a length and wrote fewer bytes has left the
+	 * client waiting for the rest -- and on a kept connection the client
+	 * reads the next response's head as this body's tail, so every answer
+	 * after it is wrong. There is no way to fix that from here: the head
+	 * is long gone. All this can do is refuse to reuse the connection, and
+	 * say so.
+	 */
+	if (!sink->failed && sink->declared >= 0
+	    && sink->written != (unsigned long)sink->declared)
+		sink->failed = 1;
+
+	if (sink->failed) {
+		sink->keep_alive = 0;
+		return HTTP_EMALFORMED;
+	}
+	return HTTP_OK;
+}
+
 /* An error answered before any handler ran. Kept deliberately plain: an error
  * page that reports what was wrong with the request tells an attacker which of
  * their probes the parser noticed. */
@@ -283,6 +441,72 @@ static void serve_connection(int fd, const struct http_site *site)
 			if (!prefix_matches(req.target, rt->prefix, rt->exact))
 				continue;
 
+			/* A route that is both, or neither, is a route whose
+			 * author had not decided. 500 rather than a precedence
+			 * rule: the fault is in the site, and answering it
+			 * plausibly would hide it. */
+			if ((rt->handler && rt->stream)
+			    || (!rt->handler && !rt->stream)) {
+				send_status(fd, 500, site->server_name,
+				            site->bytes_sent);
+				return;
+			}
+
+			if (rt->stream) {
+				struct http_sink sink;
+
+				memset(&sink, 0, sizeof(sink));
+				sink.fd = fd;
+				sink.head_only = head_only;
+				sink.keep_alive = keep;
+				sink.minor = req.minor;
+				sink.declared = HTTP_LENGTH_UNKNOWN;
+				sink.bytes_sent = site->bytes_sent;
+				sink.server_name = site->server_name;
+
+				verdict = rt->stream(&req,
+				                     req.content_length ?
+				                         buf + req.head_length : 0,
+				                     req.content_length,
+				                     &sink,
+				                     rt->ctx ? rt->ctx : site->ctx);
+
+				/* Refused before anything reached the wire, so
+				 * a status can still be sent honestly. */
+				if (verdict != HTTP_OK && !sink.begun) {
+					int s = http_status_for(verdict);
+
+					if (s == 0)
+						s = 500;
+					send_status(fd, s, site->server_name,
+					            site->bytes_sent);
+					return;
+				}
+
+				if (http_stream_end(&sink) != HTTP_OK
+				    || verdict != HTTP_OK)
+					return;	/* the framing is in doubt;
+						 * close rather than reuse */
+
+				if (!sink.keep_alive)
+					return;
+
+				/* Carry any pipelined bytes and go round. */
+				{
+					size_t used = req.head_length
+					            + req.content_length;
+					size_t left = have - used;
+					size_t k;
+
+					for (k = 0; k < left; k++)
+						buf[k] = buf[used + k];
+					have = left;
+				}
+				requests++;
+				matched = 2;
+				break;
+			}
+
 			verdict = rt->handler(&req,
 			                      req.content_length ?
 			                          buf + req.head_length : 0,
@@ -301,6 +525,11 @@ static void serve_connection(int fd, const struct http_site *site)
 			matched = 1;
 			break;
 		}
+
+		/* A streaming route has already answered in full and moved the
+		 * buffer on. Nothing below applies to it. */
+		if (matched == 2)
+			continue;
 
 		/* A path that exists under a route that does not take this
 		 * method is 405, not 404 -- the difference is whether the

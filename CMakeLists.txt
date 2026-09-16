@@ -924,6 +924,25 @@ add_executable(recon_server_files_tests
 
 add_test(NAME server_http_files COMMAND recon_server_files_tests)
 
+# Streaming a response, and the promise that must not be broken.
+#
+# A handler that declares a length and writes a different number of bytes
+# leaves the client waiting -- and on a kept connection the client then reads
+# the next response's head as this body's tail, so every answer after it is
+# wrong. That is the same desynchronisation request smuggling causes, arrived
+# at from the server's own side, and the cases here check that a broken promise
+# CLOSES the connection rather than being papered over.
+#
+# The client sets a receive deadline on purpose: run against a server with the
+# promise check removed, a client without one simply hangs, and a suite that
+# can hang is a suite that gets disabled.
+add_executable(recon_server_stream_tests
+    server/http/request.c
+    server/http/serve.c
+    server/tests/test_http_stream.c)
+
+add_test(NAME server_http_stream COMMAND recon_server_stream_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the

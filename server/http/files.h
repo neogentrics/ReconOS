@@ -58,15 +58,30 @@ struct http_files {
 /*
  * The handler. `ctx` is a `const struct http_files *`.
  *
- * Answers 200 with the file, 404 when it is not there or is not readable, 403
- * when the path escapes the root, and 413 when the file is larger than a
- * response can carry. It never answers 500 for a missing file: absence is an
- * ordinary outcome and reporting it as a server fault is how a monitoring
- * system learns to ignore 500s.
+ * **A streaming handler**, so the size of a file is no longer the size of a
+ * response. It answers 200 and writes the file out in blocks, 404 when it is
+ * not there or is not readable, and 403 when the path escapes the root. It
+ * never answers 500 for a missing file: absence is an ordinary outcome, and
+ * reporting it as a server fault is how a monitoring system learns to ignore
+ * 500s.
+ *
+ * --- Why `lseek` for the length is safe now, having been rejected before ---
+ *
+ * The first version of this file read the whole thing into memory and refused
+ * to learn the size separately, because the size is a fact at one moment and
+ * the bytes are a fact at another -- so the header would describe a different
+ * observation from the body.
+ *
+ * Streaming does not remove that gap; it makes it **detectable**. The length
+ * becomes a declared promise, and `http_stream_end` compares what was written
+ * against what was declared. A file that changes under the read no longer
+ * produces a response whose header quietly disagrees with its body: it
+ * produces a closed connection and a refusal. The hazard is the same and the
+ * outcome is no longer silent, which is the whole of the difference.
  */
 int http_files_handler(const struct http_request *request,
                        const char *body, size_t body_len,
-                       struct http_response *out, void *ctx);
+                       struct http_sink *sink, void *ctx);
 
 /*
  * The content type for a name, by its extension.

@@ -72,6 +72,86 @@ struct http_response {
 	const char *extra_value;
 };
 
+/* --- streaming --------------------------------------------------------------
+ *
+ * The response above is written whole: a handler fills in a body and the
+ * server sends it. That is right for a page built in memory and wrong for
+ * everything large -- it is why the body cap exists, why a file bigger than
+ * the cap is refused rather than served, and why a feed that produces output
+ * over time cannot work at all.
+ *
+ * A sink is the other shape. The handler is handed somewhere to write, and
+ * writes as it goes.
+ *
+ * --- The rule that makes this safe ---
+ *
+ * **A declared length is a promise, and a promise this server cannot keep must
+ * close the connection rather than be broken quietly.** If a handler says
+ * `Content-Length: 4096` and writes 3000 bytes, the client waits for 1096 more
+ * -- and on a keep-alive connection it reads the *next* response's head as the
+ * tail of this body. Every request after that is answered with the wrong
+ * bytes. So `http_stream_end` checks what was written against what was
+ * declared, and a mismatch marks the connection unusable.
+ *
+ * That is the same failure request smuggling causes, arrived at from the
+ * server's side instead of the client's, and it deserves the same treatment:
+ * refuse rather than hope.
+ */
+
+/* Pass as `length` when the size is not known before the body is produced. */
+#define HTTP_LENGTH_UNKNOWN (-1L)
+
+/*
+ * Where a streaming handler writes.
+ *
+ * Declared here rather than hidden so a caller can put one on the stack; the
+ * fields are the server's and a handler should touch none of them. `written`
+ * is readable and is occasionally the honest thing to log.
+ */
+struct http_sink {
+	int  fd;
+	int  chunked;		/* framing chosen when the head was written */
+	int  head_only;		/* a HEAD: count bytes, send none */
+	int  failed;		/* a write failed, or a promise was broken */
+	int  keep_alive;
+	int  begun;
+	int  minor;		/* the request's HTTP/1.x */
+	long declared;		/* HTTP_LENGTH_UNKNOWN, or the promised length */
+	unsigned long  written;
+	unsigned long *bytes_sent;
+	const char    *server_name;
+};
+
+/*
+ * Write the head and choose the framing. Must be called exactly once, before
+ * any write.
+ *
+ * With a `length` of zero or more, that becomes `Content-Length` and the
+ * handler is held to it.
+ *
+ * With `HTTP_LENGTH_UNKNOWN`, the framing depends on the client: HTTP/1.1 gets
+ * `Transfer-Encoding: chunked`, and HTTP/1.0 -- which has no chunked -- is
+ * told the connection will close and the body is delimited by that close.
+ *
+ * **Chunked is refused on the way in and used on the way out, and that is not
+ * a contradiction.** A request framed two ways is dangerous because two
+ * *different* parsers must agree about a body neither of them wrote. A
+ * response this server frames is written by this server, once, with one
+ * framing chosen here.
+ */
+int http_stream_begin(struct http_sink *sink, int status,
+                      const char *content_type, long length);
+
+/* Write body bytes. Safe to call with zero length. After a failure every
+ * further call is a no-op, so a handler's loop need not check each one -- the
+ * verdict arrives from `http_stream_end`. */
+int http_stream_write(struct http_sink *sink, const void *data, size_t len);
+
+/* Finish: send the chunked terminator if one is owed, and check the promise.
+ * Returns HTTP_OK, or a negative verdict when the response could not be
+ * completed -- in which case the connection is closed rather than reused. */
+int http_stream_end(struct http_sink *sink);
+
 /*
  * A handler.
  *
@@ -89,6 +169,19 @@ typedef int (*http_handler)(const struct http_request *request,
                             const char *body, size_t body_len,
                             struct http_response *out, void *ctx);
 
+/*
+ * A streaming handler.
+ *
+ * Calls `http_stream_begin` once, then `http_stream_write` as often as it
+ * likes, and returns HTTP_OK. The server calls `http_stream_end`; a handler
+ * that returns a negative verdict *before* beginning gets the matching status
+ * instead, which is why beginning late is better than beginning early -- once
+ * the head is on the wire the status cannot be taken back.
+ */
+typedef int (*http_stream_handler)(const struct http_request *request,
+                                   const char *body, size_t body_len,
+                                   struct http_sink *sink, void *ctx);
+
 struct http_route {
 	const char  *method;	/* NULL matches any method */
 
@@ -104,7 +197,13 @@ struct http_route {
 	const char  *prefix;
 
 	int          exact;	/* the prefix must be the whole path */
-	http_handler handler;
+
+	/* Exactly one of these. `handler` builds a whole response in memory;
+	 * `stream` is handed a sink and writes as it goes. A route with both
+	 * is a route whose author had not decided, and is refused at dispatch
+	 * rather than resolved by a precedence rule nobody would remember. */
+	http_handler        handler;
+	http_stream_handler stream;
 
 	/* This route's own context, or NULL to take the site's.
 	 *
