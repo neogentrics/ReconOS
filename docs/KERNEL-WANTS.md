@@ -16,6 +16,93 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## A datagram cannot carry an address, so DNS and DHCP cannot be written
+
+**Where:** opening the server role on branch `server`, 15 September 2026. Hit
+before a line of either service could be written.
+
+*Filed from the server role rather than the desktop. The file says it is the
+compositor's side; this is the first entry that is not, and it is here because
+`docs/ROLES.md` points every role at this file for exactly this purpose.*
+
+**This is the same shape as the sockets entry at the foot of this file, and it
+is deliberately not a request to reverse that entry's ruling.** Refusing an
+unconnected datagram rather than half-serving it was right, and
+`userland/include/sys/socket.h` says so where a caller will find it:
+
+> **Declared and not defined.** A caller fails to link, naming the symbol.
+> `sendto` and `recvfrom` need an unconnected datagram to carry an address per
+> message, and the kernel refuses such a socket rather than half-serving it.
+
+A refusal that names itself is worth more than a call that works twice out of
+three times. The ask is for the doorway, not for the ruling to be softened.
+
+### Why it stops two services rather than inconveniencing them
+
+DHCP and DNS are both **unconnected** datagram protocols, and neither has a
+half that runs over a stream.
+
+- **DHCP cannot be connected, by definition.** A client with no address
+  broadcasts to `255.255.255.255` from `0.0.0.0`, and the server answers a
+  machine that does not yet have the address it is being given. There is no
+  peer to `connect` to at either end. It is the one protocol on the network
+  that exists precisely because nothing is addressable yet.
+- **A DNS server answers hundreds of unrelated clients on one socket.** It
+  must learn each query's sender from the datagram that carried it and reply
+  to that sender. `connect` binds a socket to one peer; a resolver that had to
+  `connect` per query would be a different protocol.
+
+So this is not "DNS would be slower". It is that the first two services the
+role exists to provide cannot be started in any partial form.
+
+### The hard part is already built, again
+
+Exactly as it was for sockets. In `kernel/core/`:
+
+- `udp_bind_port` — `net.c`, works.
+- `socket_sendto` and `socket_recvfrom` — `socket.c`, both present, and
+  `net.c:374` already calls `socket_recvfrom` on the receive path.
+
+The datagram machinery is written and running inside the kernel. What is
+missing is the two system calls that let a program in ring 3 reach it.
+
+### What would answer it, smallest first
+
+Two calls, in the shape the existing five established:
+
+```
+SYS_SENDTO   (fd, buffer, length, addr, port) -> bytes sent
+SYS_RECVFROM (fd, buffer, length, addr_out, port_out) -> bytes read
+```
+
+`addr` is a `u32` in host order and `port` is sixteen bits, matching `SYS_BIND`
+and `SYS_CONNECT` rather than introducing a `sockaddr` at the system call
+boundary — the existing calls deliberately do not take one, and one call that
+disagreed would be worse than either convention applied throughout.
+
+`addr_out` and `port_out` are written only on success. A caller that ignores
+them gets `recv`'s behaviour and the kernel is not asked to guess whether it
+meant to.
+
+**What it does not need, so that it does not get built:** no `msghdr`, no
+scatter-gather, no ancillary data, no `MSG_*` flags beyond zero. Every one of
+those is a thing DNS and DHCP do not use, and the flags in particular are
+where a stand-in becomes looser than the real call.
+
+### What it unblocks
+
+DHCP, DNS, DDNS, and **discovery by broadcast** — which `docs/ROLES.md`
+requires to run before the first screen on a machine looking for a peer to
+become a parallel of. The server role can reach a broadcast address no other
+way, and is otherwise reduced to sweeping a subnet with `connect` one address
+at a time.
+
+Three of the five roles in `docs/ROLES.md` want this. The server and thin
+client cannot work without it; the firewall needs it before it needs anything
+else on its own list.
+
+---
+
 ## ~~There is no way for a program to ask for memory~~ — answered, 15 September 2026
 
 > **Answered in kernel 0.2.38 / v0.4.33.** `SYS_MAP` with an fd of -1 returns a

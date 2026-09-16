@@ -857,6 +857,25 @@ add_executable(recon_libc_socket_tests
 
 add_test(NAME libc_sockets COMMAND recon_libc_socket_tests)
 
+# Naming a parallel, for the server role.
+#
+# Nothing in POSIX numbers a machine's successor, so this cannot be
+# differential the way the libc suites are. It is a table of cases and their
+# required answers, and its refusals outnumber its successes because refusing
+# is the harder half: a name invented where one should have been refused is two
+# machines answering to one name.
+#
+# It builds against the host's library rather than ReconOS's. `identity.c`
+# reaches its header by relative path and borrows nothing from either, for
+# exactly that reason -- `tolower` is locale-dependent on a host, and a name
+# that folds one way here and another on the machine is a collision that never
+# appears in a test.
+add_executable(recon_server_identity_tests
+    server/identity.c
+    server/tests/test_identity.c)
+
+add_test(NAME server_identity COMMAND recon_server_identity_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the
