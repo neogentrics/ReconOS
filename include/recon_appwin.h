@@ -384,12 +384,30 @@ void recon_appwin_set_focused(struct recon_appwin *win, bool focused);
 void recon_appwin_raise(struct recon_appwin *win);
 
 /*
+ * The panel this window draws on.
+ *
+ * The only thing the presentation layer needs to know about a window, and the
+ * reason `recon_appwin.c` no longer mentions a compositor: the one wlroots
+ * call it had forwarded to `recon_panel_node`, and the forwarding now happens
+ * on the other side of the seam.
+ *
+ * Not for drawing -- everything in `recon_ui.h` already takes the window. It
+ * is for the handful of things that have to reach the presentation directly,
+ * and there should stay very few of them.
+ */
+struct recon_panel *recon_appwin_panel(struct recon_appwin *win);
+
+/*
  * The scene node this window draws into.
  *
  * Lets the shell ask the scene graph which window is genuinely on top at a
  * point, rather than assuming. Testing only whether a point falls inside a
  * window is not enough: a maximized window contains every point on screen and
  * would claim clicks meant for windows stacked above it.
+ *
+ * **Defined in `src/recon_appwin_wlr.c`**, which is the wlroots half and is
+ * not built for ReconOS. A build with no compositor under it does not call
+ * this, because nothing on that side has a scene graph to ask.
  */
 struct wlr_scene_node *recon_appwin_node(struct recon_appwin *win);
 

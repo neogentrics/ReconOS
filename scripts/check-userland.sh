@@ -185,6 +185,7 @@ src/recon_cookie.c
 src/recon_css.c
 src/recon_firewall.c
 src/recon_fonts.c
+src/recon_appwin.c
 src/recon_fs.c
 src/recon_media.c
 src/recon_form.c

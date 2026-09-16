@@ -1,71 +1,86 @@
-Fourteen call sites, and until v0.4.30 it was in neither half of the coverage
-figure: glibc emits it as __isoc99_sscanf, which sat behind a filter meant
-for compiler internals (BG-197).
+Sockets are the largest group left, and most of it needs a kernel. Nine
+symbols do not, and they were worth taking now rather than waiting: a program
+that parses an address does not need a network, and src/recon_net.c reads
+/proc/net/route and turns the result into dotted quads long before it opens
+anything.
 
-What the desktop asks for was measured before any of it was written, by
-reading all fourteen calls: %d with widths, %u %lu %llu, %lx, %63s,
-%n, and literal text around them — MemTotal: %lu kB, * %d EXISTS,
-%4d-%2d-%2d %2d:%2d %n. Those fourteen formats open the suite, verbatim, on
-realistic input.
+htons, htonl, ntohs, ntohl, inet_pton, inet_ntoa, gai_strerror,
+and the three stdio readers feof, ferror and ungetc — plus clearerr and
+assert, which came with them.
 
-Implemented is that set plus the rest of the integer and floating conversions,
-* suppression, and the hh h l ll z j modifiers. Scansets and %p are
-not, and a format holding one stops the scan rather than skipping it — so
-a caller gets a short count instead of a field in the wrong variable.
+### Byte order is not a byte swap
 
-### The failure that matters is not the count
+htons is written as arithmetic on the value, not as a reordering of its
+storage. The two are the same thing only on a little-endian machine — and both
+architectures ReconOS runs on are little-endian, so a byte-swap version would
+agree with glibc on every machine in the rig and be wrong on the first one that
+is not, with nothing able to say so.
 
-It is assigning the right value to the wrong variable. So every case
-declares a block of storage, fills it with a sentinel, runs both libraries on
-identical copies, and compares the whole block — a variable that should not
-have been touched is checked to be untouched.
+Which means comparing against the host is not enough here, and the suite
+says so: alongside the comparison, the bytes of the result are required to be
+the value's own bytes, most significant first. That assertion fails on a
+byte-swap implementation even on this machine.
 
-### Two faults in the tools, and neither in the library
+### inet_pton is mostly a refusal
 
-BG-198. The mutation harness crashed between mutating and restoring — a
-mutated build printed the sentinel bytes, which are not UTF-8 — and left the
-mutation in the tree. The next run took that as its original and restored it.
-Then rsync --checksum brought the correct source back with an older
-modification time than the object, so make did nothing and the next run
-tested the mutation again.
+Its value is what it turns down. inet_aton reads 010.0.0.1 as octal,
+1.2.3 as a three-part address and a bare 16777217 as a number — and those
+readings are how a check that two strings name the same host is defeated.
 
-The result was a function that had passed cleanly an hour earlier failing the
-one case its own comment says must work, with diff reporting the source
-identical to the kept copy — true, and useless, because the kept copy was the
-mutated one. A harness that can leave the tree in a state it invented is
-worse than no harness. The restore is now in a finally, forces a rebuild,
-and is verified.
+So most of the corpus is text that must not parse: leading zeroes,
+hexadecimal, four parts and a trailing dot, a space at either end, a negative
+octet. Every one is put to the host as well, because *both refuse* is a
+stronger statement than *we refuse*.
 
-BG-199. Once the harness worked it caught four of five mutations and missed
-one: an unimplemented conversion being *skipped* rather than stopping. The
-suite tested that with %[a-z], and a version that skipped it would then match
-the leftover a-z] as literals and fail anyway — returning the same 0. The
-test was asserting a number that agrees either way, which is the exact failure
-its own header exists to catch. Fixed with an unknown conversion between
-two numbers, where stopping and skipping write to different variables.
+### feof is the one people use wrongly
 
-### And one fault in the library, caught by building it for the machine
+It is false after the last byte has been read and true only after a
+further read found nothing. A stream that sets it one read early makes every
+while (!feof(f)) loop drop the last line; one that never sets it makes the
+same loop never end.
 
-posix.c called recon_strlen. On the host that compiles and works —
-prefix.h renames strlen to precisely that — so every suite passed. It only
-fails where there is no renaming, which is the freestanding build.
+That is a question about *timing*, not about a value, so the suite asks the
+flag after every single step on both libraries over one file — the only way
+the timing can be compared rather than asserted from memory.
 
-scanf.c and posix.c were added to the program on the disk for exactly this:
-it is the only place the library is compiled with no glibc, the kernel's flags
-and -Werror. A library file built only for Linux is a library file that has
-quietly stopped being portable.
+ungetc takes one character, which is all the standard promises. More would
+mean deciding what happens when a caller pushes back characters it never read,
+and what ftell should then say about a position that is partly invented.
+
+### Three faults, and the first is an old friend
+
+BG-200. struct recon_stream gained a pushed_back field and
+take_stream — which resets every field of a slot before handing it out — was
+not told. Static storage makes an unreset field 0, and 0 is a perfectly
+good character, so every fopen produced a stream that would hand back a NUL
+before the first byte of the file.
+
+That is exactly the fault the kernel's sched_init has a paragraph about: *a
+structure cleared wholesale, and one field whose zero is a meaningful and wrong
+value.* Caught on the first run by the file suite, which compares contents
+rather than return values.
+
+BG-201. assert was put in stdlib.c because that is where exit lives.
+It prints, so it needs stdio.c's streams — and four suites stopped linking. A
+function placed by what it is *about* rather than by what it *needs*.
+
+And one in a test, which is worth as much: the pushback case used the
+shared fixture, which an earlier test deletes when it finishes. It reported
+*the fixture would not open* as though the library had failed. A test that
+depends on the order it runs in will eventually fail for a reason that has
+nothing to do with what it checks; it brings its own file now.
 
 ### Where it leaves things
 
 | | before | now |
 |---|---|---|
-| call sites answered | 3,020 of 3,134 | 3,034 of 3,134 |
-| desktop sources with no libc | 19 of 79 | 20 of 79 |
+| call sites answered | 3,034 of 3,134 | 3,043 of 3,134 |
+| socket symbols outstanding | 19 | 14 |
 
-src/recon_cookie.c is the twentieth — it came off the list an hour earlier
-for wanting sscanf, and has one now.
+91 call sites left, and every one of them now needs the kernel: 35 for the
+sockets that open something, 31 for stat and its relatives, 12 for dlopen,
+11 for processes and signals, 2 for an environment.
 
-Sockets is the largest group left at 44 call sites, then the ten remaining file
-calls at 31.
+That is the whole of the C library that can be written without the kernel.
 
 ---

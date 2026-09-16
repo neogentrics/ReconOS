@@ -26,7 +26,6 @@
 #include "recon_png.h"
 #include "recon_server.h"
 #include "recon_shell.h"
-#include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 #include "recon_widget.h"

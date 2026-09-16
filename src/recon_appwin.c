@@ -7,15 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <wlr/types/wlr_scene.h>
-#include <wlr/util/log.h>
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_error.h"
 #include "recon_help.h"
 #include "recon_icons.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_registry.h"
 #include "recon_shell.h"
 #include "recon_theme.h"
@@ -335,8 +333,8 @@ void recon_appwin_refresh(struct recon_appwin *win) {
      * is resting on may no longer be there -- and its tooltip would carry on
      * being drawn, pointing at nothing. BG-172.
      */
-    if (win->server != NULL && win->server->shell != NULL) {
-        recon_shell_contents_changed(win->server->shell);
+    if (win->server != NULL && recon_server_shell(win->server) != NULL) {
+        recon_shell_contents_changed(recon_server_shell(win->server));
     }
 
     recon_damage_all(win->server);
@@ -553,7 +551,7 @@ struct recon_appwin *recon_appwin_create(struct recon_server *server,
     win->restore_w = win->width;
     win->restore_h = win->height;
 
-    win->panel = recon_panel_create(server->layer_windows, win->width,
+    win->panel = recon_server_window_panel(server, win->width,
         win->height);
     if (win->panel == NULL) {
         free(win);
@@ -743,7 +741,7 @@ void recon_appwin_ask(struct recon_appwin *win, const char *title,
     }
     /* The application's own `user` pointer goes back to it, so it does not
      * have to carry a second identity through the question. */
-    recon_shell_ask(win->server->shell, title, message, buttons, button_count,
+    recon_shell_ask(recon_server_shell(win->server), title, message, buttons, button_count,
         answer, win->user);
 }
 
@@ -990,8 +988,8 @@ void recon_appwin_set_title(struct recon_appwin *win, const char *title) {
      * The web viewer changes its title on every page, and the taskbar sat
      * there naming the page before.
      */
-    if (win->server != NULL && win->server->shell != NULL) {
-        recon_shell_refresh(win->server->shell);
+    if (win->server != NULL && recon_server_shell(win->server) != NULL) {
+        recon_shell_refresh(recon_server_shell(win->server));
     }
 }
 
@@ -1051,8 +1049,8 @@ void recon_appwin_set_focused(struct recon_appwin *win, bool focused) {
     recon_appwin_refresh(win);
 }
 
-struct wlr_scene_node *recon_appwin_node(struct recon_appwin *win) {
-    return win != NULL ? recon_panel_node(win->panel) : NULL;
+struct recon_panel *recon_appwin_panel(struct recon_appwin *win) {
+    return win != NULL ? win->panel : NULL;
 }
 
 void recon_appwin_raise(struct recon_appwin *win) {

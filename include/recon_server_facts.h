@@ -65,4 +65,37 @@ int recon_server_screen_height(const struct recon_server *server);
  */
 void recon_background_reload(struct recon_server *server);
 
+/*
+ * Something for a window to draw on.
+ *
+ * A window asking for a panel is a window asking the compositor which *layer*
+ * to put it in -- and the layer is a wlroots idea that a window has no other
+ * reason to know about. It reached through `server->layer_windows` to say it,
+ * which is what kept `src/recon_appwin.c` -- sixteen hundred lines about
+ * frames, titles, buttons and edges -- off a compiler with no Linux under it.
+ *
+ * NULL when there is nothing to make one on, which the caller has to treat as
+ * a window that cannot open. That is the honest answer rather than a panel
+ * that draws nowhere: a window with a panel nothing presents looks open,
+ * accepts clicks, and shows nothing.
+ */
+struct recon_panel *recon_server_window_panel(struct recon_server *server,
+    int width, int height);
+
+/*
+ * Say that something on screen changed and the next frame must repaint all of
+ * it.
+ *
+ * Declared here as well as in `recon_server.h`, which is deliberate rather
+ * than sloppy: it is one function with one definition, and what changes is
+ * which header a caller has to include to reach it. A window saying "I
+ * changed" should not have to include a compositor to say so.
+ *
+ * Why repaint everything: drivers that do not preserve buffer contents between
+ * frames cannot be given a partial repaint -- whatever is not redrawn shows
+ * stale pixels. So the compositor repaints fully whenever it is told something
+ * changed, and not at all otherwise.
+ */
+void recon_damage_all(struct recon_server *server);
+
 #endif /* RECON_SERVER_FACTS_H */

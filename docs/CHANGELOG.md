@@ -9,6 +9,89 @@ way for the two to disagree.
 
 ---
 
+## v0.4.57 — what is left of the port, measured
+
+`scripts/check-userland.sh` says how many sources build with no Linux under
+them. It says nothing about the rest, and **the rest is where the decisions
+are.**
+
+`scripts/port-blockers.sh` answers the other question: for every source that
+does not build, what stops it and **how many lines it is holding**. Three
+columns, and the shape to look for is a small marker count beside a large line
+count — a file that is about something else, held by an accident.
+
+It was written because that shape keeps turning up and nobody keeps predicting
+it:
+
+| | what was holding what |
+|---|---|
+| v0.4.42 | `recon_ui.h` pulled xkbcommon for **one typedef**. Twenty-four files. |
+| v0.4.44 | `recon_ui.c` was 3,100 lines of drawing, **28** of which said wlroots. |
+| v0.4.46 | `recon_server.h` — a whole compositor — included by five applications for one field, and by **two of them for nothing at all**. |
+| v0.4.57 | `recon_appwin.c` was 1,629 lines held by **one forwarding function**. |
+
+Each time the file's own header had a theory about why it was stuck, and each
+time the theory was wrong.
+
+### `recon_appwin.c` is off wlroots, and it was one line
+
+Sixteen hundred lines about what a window *is* — its frame, its title, its
+buttons, where its edges are, what a drag on one of them means — and not one of
+them is about wayland. What held it was `recon_appwin_node()`, which forwards
+to `recon_panel_node(win->panel)`, and `recon_panel_node` already lived in
+`recon_ui_wlr.c`: the file v0.4.44 split off for exactly this.
+
+So `src/recon_appwin_wlr.c` is the same split one layer up, and it is
+deliberately twenty-five lines. **If it grew, the seam would be in the wrong
+place.** What replaced the function here is `recon_appwin_panel()` — an
+accessor, not an internal header, because nothing needed to reach *inside* a
+window the way the presentation reaches inside a panel.
+
+The other include, `<wlr/util/log.h>`, was used by nothing.
+
+Two more went onto `recon_server_facts.h`, which is the file that exists to be
+*"the one place allowed to include recon_server.h on their behalf"*:
+`recon_server_window_panel()` (a window asking for something to draw on was
+reaching through `server->layer_windows`, which is a compositor idea a window
+has no other reason to know) and a declaration of `recon_damage_all` — one
+function, one definition, and what changes is which header a caller needs.
+
+**58 of 85 sources now build with no libc under them.**
+
+### And the report named the next piece in one line
+
+Twenty-seven sources still do not build, holding **32,593 lines**. The report
+makes it obvious that they are not twenty-seven problems:
+
+| source | lines | mentions a compositor |
+|---|---|---|
+| `recon_shell.c` | 7,219 | 21 |
+| `recon_cmd.c` | 3,626 | 3 |
+| `recon_session.c` | 3,078 | **2** |
+| `recon_taskmgr.c` | 1,616 | 2 |
+| `recon_player.c` | 1,254 | **0** |
+| `recon_photos.c` | 1,190 | **0** |
+| `recon_clock.c` | 616 | 1 |
+| `recon_audio.c` | 401 | 1 |
+
+Asking what those actually *use* gives one answer: **the event loop.**
+`wl_event_loop_add_timer`, `wl_event_loop_add_fd`, `wl_event_source_remove`,
+`wl_event_source_timer_update`. Nothing else.
+
+Six files — **8,155 lines** — are behind one seam that does not exist yet, and
+it is a seam for two things a system needs anyway: *call me back later*, and
+*tell me when this is ready to read*. That is a decision before it is code, so
+it is written down here rather than started at five in the morning.
+
+### One duplicate include
+
+`recon_photos.c` included `recon_server.h` twice, three lines apart, with
+another include between them — which is how it hid: the list reads correctly if
+you stop at the first one. Harmless to the compiler, and exactly the sort of
+thing a report that reads every file turns up on the way past.
+
+---
+
 ## v0.4.56 — the desktop program runs
 
 Not on hardware — `stat` is still the one thing missing for that. It runs
