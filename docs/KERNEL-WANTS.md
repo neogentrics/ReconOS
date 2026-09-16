@@ -31,6 +31,21 @@ Ordered by how sharply it is felt, not by how hard it would be.
 > tips at KF-242 / 0.2.46 and `socket_connect` there still sets
 > `connected = true` straight after `tcp_open`.
 >
+> **Re-checked 16 September, later the same day, and still open.** `4e42d14`
+> is reachable locally and is on the `kernel` branch; it is not on
+> `origin/userland`, which is what the server role builds from. A boot of this
+> branch's kernel (0.2.41) the same afternoon printed the standing measurement
+> unchanged:
+>
+> ```
+> the client side: connect(closed port)=0 connect(own :80)=0 write=-1 read=0
+> ```
+>
+> That is the same line this entry was opened with. It is recorded again rather
+> than assumed, because *the fix exists* and *the fix is in the tree I build
+> from* are two different facts, and the first one is the one that is easy to
+> start treating as the second.
+>
 > **The caller is built and tested against it already**: `server/dial.c`, 32
 > checks, written against the *names* `EAGAIN` and `EISCONN` rather than any
 > number. `server_init.c` carries a standing measurement that will change the
