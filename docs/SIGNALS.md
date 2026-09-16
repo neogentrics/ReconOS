@@ -10,6 +10,15 @@ git fetch origin
 git show origin/userland:docs/SIGNALS.md
 ```
 
+**On a merge, this path keeps *this* branch's version.** Merging `kernel`
+brings their outbox to this same path, and taking it would replace mine with
+theirs — which is the one thing the protocol says not to do. It conflicts every
+time and the resolution is always the same: keep ours, and read theirs with
+`git show origin/kernel:docs/SIGNALS.md`.
+
+Nothing is lost by that. Their file is intact on their branch, which is the
+only place it is authoritative anyway.
+
 ---
 
 ## Ready: the desktop needs exactly one call — `stat`
