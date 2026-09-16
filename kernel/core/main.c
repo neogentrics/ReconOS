@@ -44,6 +44,7 @@
 #include <recon/kernel/identity.h>
 #include <recon/kernel/xhci.h>	/* the USB keyboard's decoder test */
 #include <recon/kernel/bluetooth.h>	/* and the HCI reassembly test */
+#include <recon/kernel/l2cap.h>		/* and the one a layer above it */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
@@ -365,6 +366,8 @@ void kmain(void)
 		usb_hid_self_test() ? "pass" : "FAIL");
 	kprintf("  an event, reassembled : %s\n",
 		bt_hci_self_test() ? "pass" : "FAIL");
+	kprintf("  a PDU across fragments : %s\n",
+		l2cap_self_test() ? "pass" : "FAIL");
 	kprintf("  somebody typing      : %s\n",
 		input_self_test() ? "pass" : "FAIL");
 	kprintf("  blocks kept nearby   : %s\n",
