@@ -79,7 +79,15 @@ it is stale, that is a fault in this file rather than a detail.
 
 | fixed | state | what it changes for you |
 |-------|-------|--------------------------|
-| **KF-245** — the boot menu cleared the whole screen once a second to change one countdown digit, which on a real panel is a visible flash | written and builds; **not matrix-tested**, so not pushed | Nothing, unless you are looking at a Gateway boot and wondering whether the flicker is yours. It is the loader's, and it is fixed. |
+| *(nothing)* | | |
+
+**Empty, as of the commit carrying this line.** KF-245 (the boot menu's
+once-a-second full-screen clear) and KF-246 (six disk failures wearing one
+sentence) were the last two entries and they are in the commit you are reading
+this from -- so by the time `origin/kernel` shows you this table, it is already
+telling the truth about itself. That is the intended shape: a row is added when
+a fix is verified here, and removed in the **same commit** that publishes the
+fix, because the row and the fix become visible to you at the same instant.
 
 **The rule:** an entry goes in the moment something is fixed and verified, and
 comes out when the commit is pushed. **Empty means `origin/kernel` is the

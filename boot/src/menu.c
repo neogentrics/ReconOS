@@ -465,8 +465,13 @@ int menu_choose(unsigned seconds,
 			for (i = 0; i < entry_count; i++)
 				labels[i] = entries[i].label;
 
-			gfx_menu_draw(entry_count, labels, 0, (left / 10) + 1,
-				      FALSE);
+			/* The countdown row alone. Redrawing the whole menu to
+			 * change one digit cleared the screen once a second,
+			 * and on a real panel that is a visible flash --
+			 * KF-245, noticed by somebody watching it decide what
+			 * to boot. */
+			gfx_menu_countdown(entry_count, labels,
+					   (left / 10) + 1);
 		}
 
 		BS->Stall(100000);		/* a tenth of a second */

@@ -67,6 +67,12 @@
 #define BOUNCE_BYTES	(BOUNCE_PAGES * PAGE_SIZE)
 
 struct usb_storage {
+	/* Why the last request failed, and how far it got before it did.
+	 * Null when the last one succeeded. Six exits share one return value
+	 * and the caller cannot tell them apart without this (KF-246). */
+	const char *why;
+	u32 why_moved;
+
 	struct xhci *x;
 	struct usb_device *ud;
 
@@ -150,12 +156,36 @@ static int command(struct usb_storage *s, const u8 *cdb, unsigned cdb_len,
 	for (i = 0; i < cdb_len; i++)
 		wrap[15 + i] = cdb[i];
 
-	if (!xhci_bulk_transfer(s->x, s->ud, false, wrap, CBW_LENGTH, &moved) ||
-	    moved != CBW_LENGTH)
-		return -1;
+	/* **Which of the six, and how far it got.** (KF-246)
+	 *
+	 * Every exit below used to be a bare -1, and the block layer turned all
+	 * of them into one "the hardware did not answer". A wedged endpoint, a
+	 * device that could not satisfy the read, and a status wrapper lost
+	 * after the data had already moved are three different faults wearing
+	 * one sentence. */
+	s->why = "the command wrapper was not accepted";
+	s->why_moved = 0;
 
-	if (length && !xhci_bulk_transfer(s->x, s->ud, in, data, length, &moved))
+	if (!xhci_bulk_transfer(s->x, s->ud, false, wrap, CBW_LENGTH, &moved)) {
+		s->why_moved = moved;
 		return -1;
+	}
+	if (moved != CBW_LENGTH) {
+		s->why = "the command wrapper went out short";
+		s->why_moved = moved;
+		return -1;
+	}
+
+	if (length) {
+		s->why = in ? "the device sent no data"
+			    : "the device took no data";
+		s->why_moved = 0;
+
+		if (!xhci_bulk_transfer(s->x, s->ud, in, data, length, &moved)) {
+			s->why_moved = moved;
+			return -1;
+		}
+	}
 
 	/* The status wrapper goes in the device's page, not next to the command
 	 * wrapper: the command wrapper is still the buffer a failed data phase
@@ -163,19 +193,40 @@ static int command(struct usb_storage *s, const u8 *cdb, unsigned cdb_len,
 	 * like a bad signature. */
 	kmemset(wrap + 64, 0, CSW_LENGTH);
 
-	if (!xhci_bulk_transfer(s->x, s->ud, true, wrap + 64, CSW_LENGTH,
-				&moved) ||
-	    moved != CSW_LENGTH)
-		return -1;
+	/* **Past here the data has already moved.** A failure from this point
+	 * is a lost acknowledgement rather than a transfer that did not happen,
+	 * and saying so is the difference between a disk that cannot read and a
+	 * disk whose read nobody confirmed. */
+	s->why = "the status wrapper never arrived, after the data had moved";
+	s->why_moved = 0;
 
-	if (get_le32(wrap + 64) != CSW_SIGNATURE)
+	if (!xhci_bulk_transfer(s->x, s->ud, true, wrap + 64, CSW_LENGTH,
+				&moved)) {
+		s->why_moved = moved;
 		return -1;
+	}
+	if (moved != CSW_LENGTH) {
+		s->why = "the status wrapper came back short";
+		s->why_moved = moved;
+		return -1;
+	}
+
+	if (get_le32(wrap + 64) != CSW_SIGNATURE) {
+		s->why = "the status wrapper had the wrong signature";
+		s->why_moved = CSW_LENGTH;
+		return -1;
+	}
 
 	/* The tag is the only thing tying this status to this command. A device
 	 * that answers with somebody else's tag has lost track of the exchange,
 	 * and believing it would attribute one command's failure to another. */
-	if (get_le32(wrap + 68) != tag)
+	if (get_le32(wrap + 68) != tag) {
+		s->why = "the status carried another command's tag";
+		s->why_moved = CSW_LENGTH;
 		return -1;
+	}
+
+	s->why = 0;
 
 	return wrap[76];
 }
@@ -368,8 +419,20 @@ static enum block_status transfer(struct usb_storage *s, bool in, u64 lba,
 
 	status = command(s, cdb, sizeof(cdb), in, s->bounce, bytes);
 
-	if (status < 0)
+	if (status < 0) {
+		/* Said here because here is where the request is known: the
+		 * phase comes from `command`, and the block and byte counts
+		 * only exist at this level. A reader given all of it can tell
+		 * a wedged endpoint from a device that refused one particular
+		 * read. (KF-246) */
+		kprintf("  usb-storage  : %s %u block(s) at %llu failed -- %s"
+			" (%u of %u bytes moved)\n",
+			in ? "reading" : "writing", count,
+			(unsigned long long)lba,
+			s->why ? s->why : "no reason was recorded",
+			s->why_moved, bytes);
 		return BLOCK_ERR_TIMEOUT;
+	}
 	if (status != CSW_PASSED) {
 		drain_sense(s);
 		return BLOCK_ERR_IO;

@@ -7109,6 +7109,74 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-246 - Six ways a disk request can fail, one word for all of them
+
+- **Found:** 16 September 2026, reading for the cause of
+  `block: could not read the last 32 blocks of usb0: the hardware did not
+  answer` -- which has failed on every Gateway boot since the stick first
+  appeared as a disk.
+
+- **What it was.** `command()` in `usb_storage.c` returns -1 from **six**
+  places and the caller turns every one into `BLOCK_ERR_TIMEOUT`. So one
+  sentence covered: the command wrapper not accepted; accepted short; the data
+  phase never completing; the status wrapper never arriving; arriving with the
+  wrong signature; and arriving carrying another command's tag.
+
+  **Those are not variations of one fault.** A failed command phase means the
+  endpoint is wedged and the read is uninteresting. A failed data phase means
+  the device accepted a READ(10) it could not satisfy. A failed *status* phase
+  means the data already moved and only the acknowledgement was lost -- a
+  request that arguably worked.
+
+- **And nothing reported the LBA, the count, or how many bytes moved.** `moved`
+  is captured at every step and discarded on failure, though a short transfer
+  and a silent one are different facts.
+
+- **It misled.** The message names "the last 32 blocks", so the obvious reading
+  is a problem at the end of a 14.4 GB disk -- a truncated LBA, sign extension,
+  a 32-bit limit. The LBA is 30,277,600, which fits in 32 bits, and the CDB is
+  correct. The other reading is that **any multi-block read fails** and the
+  partition scan only ever succeeded because it reads one block at a time. One
+  boot with this entry's output tells the two apart; reasoning could not.
+
+- **Fixed:** each exit records which phase and how far it got, and the caller
+  prints that beside the block count and LBA it already knows. Same shape as
+  KF-238 and KF-242 -- a number or a word compressed to the point of
+  uselessness, un-compressed.
+
+- **Status:** fixed, kernel 0.2.49. The underlying read failure is still open
+  and is now diagnosable in one boot.
+
+### KF-245 - The boot menu clears the whole screen to change one digit
+
+- **Found:** 16 September 2026, by Joshua watching the Gateway's boot menu and
+  asking whether the flashing was normal. It was not.
+
+- **What it was.** `gfx_menu_draw` opens with
+  `fill(0, 0, width, height, paper)` -- it clears the entire framebuffer and
+  redraws every element -- and the countdown called it **once a second** to
+  change one digit. Over an uncached framebuffer that clear is slow enough to
+  see, so the panel blinked black between the wipe and the redraw, on every
+  tick, on the one screen a person looks at while deciding what to boot.
+
+- **Its own comment argued for it**, and the argument was sound: *drawn in full
+  each time rather than patched, because a partial redraw that gets its
+  arithmetic wrong leaves the previous frame's text underneath the new one.*
+  True -- and applied too widely. That hazard is about the **layout** changing;
+  the countdown changes a **digit**.
+
+- **Fixed** with `gfx_menu_countdown`, which answers the objection rather than
+  ignoring it: it computes no layout of its own but uses the one `gfx_menu_draw`
+  recorded, and clears the full width of the content block so no digit of a
+  longer number survives a shorter one. The stale comment is corrected in place
+  rather than deleted -- it now says which case each path is for.
+
+- **Nothing could have caught this but a person looking at it.** It is invisible
+  on a serial console, invisible in a screendump, and every self-test passes on
+  a menu that flashes.
+
+- **Status:** fixed, loader 0.2.49.
+
 ### KF-244 - Connect reports success while the handshake is still in flight
 
 - **Asked for** by the server session, 16 September 2026, and they were right
