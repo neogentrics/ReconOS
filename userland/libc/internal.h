@@ -95,6 +95,29 @@ extern struct recon_stream *recon_stderr;
 
 int fprintf(struct recon_stream *f, const char *format, ...);
 
+/* The five socket primitives, standing beside the other ten.
+ *
+ * `hostsys.c` answers these with real POSIX sockets, which is what makes the
+ * suite over them a differential one: ReconOS's `connect` and the host's talk
+ * to the same server and are required to behave the same way.
+ *
+ * An address is an unsigned 32-bit number in *host* order and a port is an
+ * int, because that is what the kernel takes -- see `recon.h`. The conversion
+ * from a `sockaddr_in`'s network order happens in socket.c, once. */
+long recon_sys_socket(int type);
+long recon_sys_bind(int fd, unsigned int addr, int port);
+long recon_sys_listen(int fd, int backlog);
+long recon_sys_accept(int fd);
+long recon_sys_connect(int fd, unsigned int addr, int port);
+
+/* socket.c -- over the five calls the kernel took numbers for.
+ *
+ * The structures these take are the public header's, which this file is the
+ * second exception to the no-public-headers rule for: `struct sockaddr_in`
+ * defined twice and kept identical by hand is the fault `time.c` avoids the
+ * same way. `socket.c` includes `../include/sys/socket.h` directly, so these
+ * are declared there rather than here. */
+
 /* stdlib.c, with assert.h's macro in front of it */
 void exit(int code);
 

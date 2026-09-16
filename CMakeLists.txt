@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.37
+    VERSION 0.4.38
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -782,6 +782,7 @@ set_source_files_properties(
     userland/libc/posix.c
     userland/libc/scanf.c
     userland/libc/inet.c
+    userland/libc/socket.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -806,6 +807,37 @@ add_executable(recon_libc_inet_tests
     userland/libc/errno.c
     userland/libc/printf.c
     userland/libc/string.c)
+
+# Sockets, against the host's -- and the first thing to exercise the five
+# system calls the kernel took numbers for on 15 September.
+#
+# Differential where it can be: hostsys.c answers the five primitives with real
+# POSIX sockets, so ReconOS's connect and the host's talk to the same listener
+# and are required to behave the same way. The one place it cannot be is
+# `accept`, which on this kernel does not block -- so the stand-in is made
+# non-blocking too, because a stand-in looser than the real call is the one way
+# a stand-in can be worse than none.
+add_executable(recon_libc_socket_tests
+    userland/tests/test_libc_socket.c
+    userland/tests/hostsys.c
+    userland/libc/socket.c
+    userland/libc/posix.c
+    userland/libc/inet.c
+    userland/libc/errno.c
+    userland/libc/stdio.c
+    userland/libc/printf.c
+    userland/libc/string.c
+    userland/libc/ctype.c
+    userland/libc/stdlib.c
+    userland/libc/malloc.c)
+
+# No include directory and no -include here, for the reason stated above the
+# first of these targets: both would hand the test file ReconOS's own headers
+# and its own names, and the comparison would become the implementation against
+# itself. socket.c reaches its headers by relative path, as posix.c does, and
+# gets prefix.h from the list above.
+
+add_test(NAME libc_sockets COMMAND recon_libc_socket_tests)
 
 # sscanf, against the host's.
 #

@@ -58,6 +58,31 @@ long recon_sys_mkdir(const char *path, unsigned long mode)
 	return (long)recon_mkdir(path, recon_strlen(path), mode);
 }
 
+long recon_sys_socket(int type)
+{
+	return (long)recon_socket((u64)type);
+}
+
+long recon_sys_bind(int fd, unsigned int addr, int port)
+{
+	return (long)recon_bind(fd, (u64)addr, (u64)port);
+}
+
+long recon_sys_listen(int fd, int backlog)
+{
+	return (long)recon_listen(fd, (u64)backlog);
+}
+
+long recon_sys_accept(int fd)
+{
+	return (long)recon_accept(fd);
+}
+
+long recon_sys_connect(int fd, unsigned int addr, int port)
+{
+	return (long)recon_connect(fd, (u64)addr, (u64)port);
+}
+
 long recon_sys_page_size(void)
 {
 	struct recon_machine machine;

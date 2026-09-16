@@ -329,7 +329,8 @@ INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
 	     ../userland/libc/stdio.c ../userland/libc/syscalls.c \
 	     ../userland/libc/malloc.c ../userland/libc/mem_recon.c \
 	     ../userland/libc/errno.c ../userland/libc/scanf.c \
-	     ../userland/libc/posix.c ../userland/libc/inet.c
+	     ../userland/libc/posix.c ../userland/libc/inet.c \
+	     ../userland/libc/socket.c
 
 # --- Rules -------------------------------------------------------------------
 

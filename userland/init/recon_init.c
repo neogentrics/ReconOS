@@ -219,6 +219,113 @@ static void exercise_the_heap(char *into, size_t room)
 	}
 }
 
+
+/* --- A socket descriptor, which nothing had ever held ------------------- */
+
+/*
+ * Whether a socket is really a file.
+ *
+ * The kernel session wrote the five calls and said what they could not test:
+ * their self-test cannot hold a descriptor, because a kernel thread has no
+ * process and `fd_install` fails there for sockets exactly as it does for
+ * pipes. So the claim that `SYS_READ`, `SYS_WRITE` and `SYS_CLOSE` serve a
+ * connection was argued from the design and never run.
+ *
+ * This does not try to talk to anything -- there is nobody on the other end of
+ * a boot, and a check that needed one would be a check that usually did not
+ * happen. It asks the question underneath: **is there really a file in the
+ * descriptor table?**
+ *
+ * Closing twice is the sharp one. A socket that was never installed closes
+ * quite happily as many times as it likes; one that is a file refuses the
+ * second time, because the first took it out of the table.
+ */
+static void exercise_a_socket(char *into, size_t room)
+{
+	i64 first, second, closed, again, listener;
+
+	first = recon_socket(1);              /* 1 = a stream */
+	if (first < 0) {
+		snprintf(into, room, "refused (%d) -- no socket on this kernel",
+			 (int)first);
+		return;
+	}
+
+	second = recon_socket(1);
+	if (second < 0) {
+		snprintf(into, room, "one, and the second was refused (%d)",
+			 (int)second);
+		recon_close((int)first);
+		return;
+	}
+
+	if (first == second) {
+		snprintf(into, room,
+			 "two sockets were given the same descriptor (%d)",
+			 (int)first);
+		return;
+	}
+
+	closed = recon_close((int)first);
+	if (closed < 0) {
+		snprintf(into, room, "a socket would not close (%d)",
+			 (int)closed);
+		return;
+	}
+
+	/*
+	 * And again. `SYS_EBADF` is the answer that says the first close really
+	 * took it out of the table -- anything else means the descriptor was
+	 * never in one.
+	 */
+	again = recon_close((int)first);
+	if (again >= 0) {
+		snprintf(into, room,
+			 "closing the same socket twice was allowed, so it was "
+			 "never really a descriptor");
+		recon_close((int)second);
+		return;
+	}
+
+	recon_close((int)second);
+
+	/*
+	 * And the documented refusal. A listener with nobody waiting answers
+	 * EAGAIN rather than blocking, because it has no wait queue -- so a
+	 * server polls. Checked here because a program that read this as an
+	 * error would close a listener that was working.
+	 */
+	listener = recon_socket(1);
+	if (listener >= 0) {
+		i64 bound = recon_bind((int)listener, 0, 9100);
+		i64 heard = recon_listen((int)listener, 4);
+		i64 got = recon_accept((int)listener);
+
+		recon_close((int)listener);
+
+		if (bound < 0 || heard < 0) {
+			snprintf(into, room,
+				 "descriptors work; bind or listen refused "
+				 "(%d, %d)", (int)bound, (int)heard);
+			return;
+		}
+
+		if (got != SYS_EAGAIN) {
+			snprintf(into, room,
+				 "descriptors work; accept with nobody waiting "
+				 "answered %d, not EAGAIN", (int)got);
+			return;
+		}
+
+		snprintf(into, room,
+			 "a descriptor, closed once, refused twice; "
+			 "listening, and accept says EAGAIN");
+		return;
+	}
+
+	snprintf(into, room, "a descriptor, closed once and refused twice");
+}
+
 /* --- Formatting facts a person can read --- */
 
 /*
@@ -380,6 +487,7 @@ int main(void)
 	char storage_line[96];
 	char layout_line[120];
 	char heap_line[120];
+	char socket_line[120];
 	char total[32];
 	char free_bytes[32];
 	i64 answer;
@@ -459,6 +567,7 @@ int main(void)
 	 * addresses after the screen's, so anything that got the two runs
 	 * confused would be drawing into its own allocations. */
 	exercise_the_heap(heap_line, sizeof(heap_line));
+	exercise_a_socket(socket_line, sizeof(socket_line));
 	say_storage(storage_line, sizeof(storage_line));
 
 	memset(&facts, 0, sizeof(facts));
@@ -512,6 +621,9 @@ int main(void)
 		say(line);
 
 		snprintf(line, sizeof(line), "  the heap: %s\n", heap_line);
+		say(line);
+
+		snprintf(line, sizeof(line), "  a socket: %s\n", socket_line);
 		say(line);
 	}
 

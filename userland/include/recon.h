@@ -240,6 +240,52 @@ static inline i64 recon_mkdir(const char *path, u64 path_len, u64 mode)
 	return RECON_CALL3(SYS_MKDIR, path, path_len, mode);
 }
 
+/*
+ * --- Sockets ---
+ *
+ * Five calls, and the shape of them is the point: a socket **is a file**, so
+ * `recon_read`, `recon_write` and `recon_close` serve a connection and only
+ * the things a file cannot do took numbers of their own.
+ *
+ * `type` is 1 for a stream and 2 for a datagram. An address is a `u32` in
+ * *host* order and a port is a number -- not a `struct sockaddr`, which is a
+ * shape carrying an address family this kernel does not have and a byte order
+ * `htons` exists to fix. Neither is a decision a caller should have to make
+ * twice.
+ */
+static inline i64 recon_socket(u64 type)
+{
+	return RECON_CALL1(SYS_SOCKET, type);
+}
+
+static inline i64 recon_bind(int fd, u64 addr, u64 port)
+{
+	return RECON_CALL3(SYS_BIND, fd, addr, port);
+}
+
+static inline i64 recon_listen(int fd, u64 backlog)
+{
+	return RECON_CALL2(SYS_LISTEN, fd, backlog);
+}
+
+/*
+ * The next connection, or `SYS_EAGAIN` when nobody is waiting.
+ *
+ * **It does not block**, and that is a property of the kernel rather than of
+ * this wrapper: a listening socket has no wait queue yet, so a server polls.
+ * Said here because a caller that assumes otherwise writes a loop that spins
+ * on a refusal it reads as an error.
+ */
+static inline i64 recon_accept(int fd)
+{
+	return RECON_CALL1(SYS_ACCEPT, fd);
+}
+
+static inline i64 recon_connect(int fd, u64 addr, u64 port)
+{
+	return RECON_CALL3(SYS_CONNECT, fd, addr, port);
+}
+
 static inline i64 recon_close(int fd)
 {
 	return RECON_CALL1(SYS_CLOSE, fd);

@@ -238,6 +238,30 @@ else
 	fail=$((fail + 1))
 fi
 
+# --- and it could hold a socket ---------------------------------------------
+#
+# The five socket calls landed with no caller, and the kernel session said what
+# that meant: their self-test cannot hold a descriptor, because a kernel thread
+# has no process and fd_install fails there for sockets exactly as it does for
+# pipes. So "a socket is a file" was argued from the design and never run.
+#
+# A program in ring 3 is the only thing that can answer it, and closing twice is
+# the sharp half: a socket that was never really installed closes as many times
+# as it likes.
+say "and it could hold a socket, and let go of it once"
+if echo "$boot" | grep -qa 'a socket: a descriptor, closed once, refused twice'; then
+	echo "$boot" | grep -a 'a socket:' | sed 's/^ *a socket: //' | head -1
+	pass=$((pass + 1))
+else
+	echo "FAILED"
+	if echo "$boot" | grep -qa 'a socket:'; then
+		echo "$boot" | grep -a 'a socket:' | sed 's/^/      /' | head -2
+	else
+		echo "      it never said -- the program did not get that far"
+	fi
+	fail=$((fail + 1))
+fi
+
 # --- and the same disk again, on a machine with no UEFI in it ---------------
 #
 # The disk above booted under OVMF, through the EFI partition. This is the same

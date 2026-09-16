@@ -24,6 +24,25 @@
  * `scripts/measure-libc.py` strips both prefixes, so the coverage figure still
  * reads these as the POSIX names they are.
  */
+/* --- sockets ---
+ *
+ * `recon_libc_`, not `recon_`, and this is the sharpest case of that rule in
+ * the file: `recon_socket`, `recon_bind`, `recon_listen`, `recon_accept` and
+ * `recon_connect` are the *system calls*, sitting in `recon.h`. Renaming the
+ * library's `socket` to `recon_socket` would not collide -- it would
+ * **replace**, silently, and a program asking for a stream would be passing 2
+ * as a domain to a call that takes a type.
+ */
+#define socket      recon_libc_socket
+#define bind        recon_libc_bind
+#define listen      recon_libc_listen
+#define accept      recon_libc_accept
+#define connect     recon_libc_connect
+#define send        recon_libc_send
+#define recv        recon_libc_recv
+#define setsockopt  recon_libc_setsockopt
+#define getsockopt  recon_libc_getsockopt
+
 #define open        recon_libc_open
 #define close       recon_libc_close
 #define read        recon_libc_read

@@ -1,125 +1,104 @@
-Asked for directly: *"whats next? i would like the filesystem"*, after a night
-in which the answer to *what is on the volume* was nothing. The installer
-wrote a bootloader, a kernel and an empty formatted partition, and the first
-screen said so honestly: 0 entries at the root of the volume.
+Said plainly, because it is the thing this version is about:
 
-include/recon_fs.h has described the layout since v0.1.0 and nothing could
-build it, because nothing in the system could create a directory.
+> *"The system and the kernel are two separate systems when they should be one
+> and the same relying on each other."*
 
-### Ten directories, and the second boot is the requirement
+They were separate in a way that can be stated as a build dependency.
+recon_init — the program a person sees when a ReconOS machine starts — was
+121 KiB of .rodata inside the kernel image, pulled in by .incbin. The
+installer wrote an EFI partition with a loader and a kernel, formatted a System
+volume, and put nothing in it. The ten directories v0.4.26 added were
+empty.
 
-SYS_MKDIR is the twenty-sixth system call, over a
-rootfs_create_directory(path, mode) built on the reconfs_create that was
-already there. userland/init/layout.c holds the ten paths -- /System with
-Apps, Config, Themes, Icons, Modules and Logs under it, then /Apps, /Users
-and /Temp -- parents before children, mode 0755.
+So changing a string on the first-boot screen meant rebuilding and reflashing a
+kernel. Not a figure of speech: on real hardware, a stick, a reboot and a
+firmware menu, to change a sentence in a program.
 
-recon_init lays them down on every boot, not only the first. That is the
-requirement rather than a nicety: a first boot that lost power half way and a
-second boot that finds everything already there are the same code path, and
-one boot cannot tell them apart. So the program is asked both questions.
-Installed onto a blank 8 GB disk from a real medium, then booted twice:
+### What was missing was the join, not the parts
+
+Almost everything this needed already existed and had never been connected:
+
+| | |
+|---|---|
+| a kernel that runs a program from a path on the volume | user_exec_path, built, and passing a self-test on every boot |
+| a standalone recon_init.elf | built, 126,880 bytes |
+| a filesystem that can be written by the installer | reconfs_mount, reconfs_create, reconfs_write_named — all take a volume |
+| a medium that carries a system | no |
+| an installer that writes one | no |
+| a kernel that looks for one | no |
+
+Three of those are now yes.
+
+The medium carries /reconos/init.elf — the first file on a ReconOS
+install medium that is neither a loader nor a kernel.
+
+The installer writes it onto the System volume as /System/init.elf. This
+is the first thing the installer has ever written into a ReconFS volume;
+every copy before it was FAT32 to FAT32, because everything before it was what
+firmware reads.
+
+And the kernel asks the volume first, falling back to the copy inside
+itself and saying which it used. That line matters more than it looks: the
+whole point is that the screen can now come from somewhere other than the
+kernel, and a boot that does not say where it got its program cannot be used to
+tell whether any of this works.
+
+### Creating on a volume that is not the one you booted from
+
+rootfs_create_file and rootfs_create_directory did exactly the right three
+moves — walk to the parent, act, rewrite the chain to the root — against
+rootfs(), which is the one volume an installer must never touch.
+
+So the three moves moved down a layer into reconfs_place_file and
+reconfs_place_directory, which take the volume as an argument, and the two
+rootfs_* entry points became those calls with rootfs() filled in. An
+extraction rather than a rewrite: the bodies are the bodies that were there, so
+the suites that covered them cover them still — 67 self-tests, unchanged, on
+the first boot after the move.
+
+### The proof, and why it had to be built this way round
+
+A claim that two things are separate can only be shown by changing one and not
+the other. So:
+
+1. Keep the kernel binary exactly as built.
+2. Change a string in the program and rebuild it.
+3. Build a medium carrying the old kernel and the new program.
+4. Install from it and boot.
 
 
-first boot    the volume: 10 directories, laid out just now
-              storage: 12 entries at the root of the volume
-              65 self-tests passed, 0 failed
+kernel kept:   402df0f6403460f0
+program built: 666db5e4b023ed04
 
-second boot   the volume: 10 directories, all already there
-              storage: 12 entries at the root of the volume
-              65 self-tests passed, 0 failed
+the system: /System/init.elf, from the volume
+first screen [BUILT-WITHOUT-THE-KERNEL]: 1920 x 1200, 7680 bytes a row
+
+is the kernel on that disk the one we kept?
+  yes -- byte for byte the kernel built before the program changed
 
 
-A reader that is not this kernel -- scripts/reconfs-check.py, against the
-partition lifted out of the image -- says the same twelve names.
+Yesterday that was impossible by construction.
 
-The list is data and the directory-maker is a function pointer.
-recon_layout_build(make, already_there, &report) knows nothing about system
-calls, so the whole arrangement -- order, refusals, a half-finished previous
-boot, the report it produces -- is checked on the host in a millisecond by
-recon_init_layout_tests, 100 checks, instead of by installing onto a disk.
-The suite also reads include/recon_fs.h and compares the two lists in both
-directions, so a path in the header and not the layout fails, and so does a
-path in the layout and not the header. Mutation-tested three ways; all three
-caught.
+### And the test asserts it, because the fallback is designed to hide it
 
-And it carries on past a refusal rather than stopping, naming the first one:
-7 of 10 directories -- /System/Apps refused (-9) is a line somebody can act
-on. 1 refused is not.
+scripts/install-then-boot-test.sh gained an eighth check: the system it
+runs came off the volume. Without it the run passes either way — the kernel
+falls back to its built-in copy deliberately and quietly, so an installer that
+stopped writing /System/init.elf would still produce a machine that boots,
+draws a screen and reports 67 self-tests passing, and the file would still have
+printed 7 of 7 forever.
 
-### Four faults were in the way, and none of them was in the new call
+That is the shape KF-229 was: a check sitting on top of the fault it was
+written to catch, unable to fail. Taking the program off the medium turns the
+run red and names the reason — the system: no /System/init.elf (-7), using the
+copy inside the kernel — while every other check still passes, which is also
+the graceful fallback being shown to work.
 
-The call worked on the first try. Making it work on a machine took the rest of
-the day, and every one of these was invisible to every test in the tree.
+### What is still in the kernel image
 
-A directory took seventy seconds to create. Not a hang -- 69, 74, 69 and 69
-seconds, measured. The same disk image attached as virtio-blk instead of NVMe
-took none at all, which is what said where to look. The NVMe driver polls for a
-completion and yields between looks; the thread it yielded to was the boot
-thread, which by then is running for (;;) power_idle_wait() and sleeps for up
-to a second. The scheduler already knew how to prevent this -- pick_next
-takes an idle thread only as a last resort and idle_over_work counts the
-times that rule is broken -- and none of it applied, because the boot thread
-was never marked as an idle thread. It is now, from the moment it stops doing
-any work. KF-226.
-
-The root of a volume could not be listed. reconfs_walk_path refuses a
-path with no leaf, rightly; the two readers that should not care each had a
-branch for the leafless case that the walk made unreachable. Nothing had ever
-asked, because recon_init was the first caller in the system's life. KF-227.
-
-Every refusal from a listing reached a program as "the disk failed." The
-mapping function exists and vfs.c already used it twice; the listing had its
-own two-case version. So the screen said *no volume this kernel can read* three
-lines under *10 directories, laid out just now*, and both sentences came from
-the same volume. KF-228.
-
-And five self-tests passed exactly once per volume. Each creates a file
-with a fixed name and none cleared it first, so the second boot of any
-installed disk reported five failures on a machine with nothing wrong with it.
-KF-229.
-
-### The check that was written to catch that, and could not
-
-The last one is worth its own paragraph, because it had been sitting inside
-its own detector for a month.
-
-scripts/install-then-boot-test.sh has a check called *"and they pass again,
-on a volume already written to"*, whose comment says it is *where a test that
-leaves a file behind shows itself*. It was asked of the BIOS boot -- and over
-BIOS the kernel does not find the disk it booted from (KF-192, open), so that
-boot's report reads root : none found, the five tests that need a volume say
-so, and a boot that never touched a volume was counted as a pass. Measured
-rather than reasoned: the BIOS log says root : none found; file calls will
-say so; the UEFI log says root : nvme0n1p3.
-
-The check now boots the target a second time under UEFI, and fails loudly if
-no volume is mounted rather than passing, because the way this went wrong was
-silence. Taking one of the five clears back out turns the run red and names
-files carry a mode, which is how it is known to work. The number moved from
-*59 passed* on a volume-less boot to *65 passed, second boot on this volume*.
-
-### And the screen stopped guessing
-
-say_storage counted newlines. SYS_LIST separates names with NULs and always
-has -- user.h says so where it is declared. Finding no newlines it counted
-zero, and a fallback two lines down turned that into 1. A volume with twelve
-names at its root reported one entry, which is a number that looks like a
-measurement. A count of zero would have been obviously wrong; a count of one is
-plausible, and this screen had only ever been looked at on machines with no
-volume at all. BG-193.
-
-The line above it now says *why* when it cannot answer, instead of concluding:
-no volume this kernel can read is printed only for ENODEV, and every other
-refusal prints its number. And the storage line goes down the serial cable
-alongside the other two, because the one fact that turned out to be wrong was
-the one that existed only in pixels.
-
-### What this version is really about
-
-Nothing above is a feature the user can point at. What changed is that a
-ReconOS machine, installed from media onto a blank disk, now starts twice in a
-row and is the same machine both times. Until today there had never been a
-second boot.
+The copy. It is the fallback for a machine that has not been installed onto —
+every blank disk in the verification rig, and any medium built before this
+existed. Taking it out is a separate decision and wants a machine that can be
+recovered without it.
 
 ---

@@ -9,6 +9,103 @@ way for the two to disagree.
 
 ---
 
+## v0.4.38 — sockets, and the claim nobody could test
+
+The kernel took five socket numbers on 15 September and they had **no caller
+at all**. This is the caller, and the reason it is worth its own entry is what
+came with them:
+
+> *"The claim that a socket fd works with read/write is argued, not measured.
+> The kernel-side self-test can't take a descriptor — a kernel thread has no
+> process, so `fd_install` fails there for sockets exactly as it does for
+> pipes. Proving it needs a ring-3 program."*
+
+`userland/init/recon_init.c` is a ring-3 program. On an installed disk, booted
+by itself:
+
+```
+  a socket: a descriptor, closed once, refused twice;
+            listening, and accept says EAGAIN
+```
+
+**Closing twice is the sharp half.** A socket that was never really installed
+in the descriptor table closes as many times as it likes; one that is a file
+refuses the second time, because the first took it out. That, and two sockets
+getting different numbers, is what settles "a socket is a file" — and it is the
+tenth check on `install-then-boot-test.sh` now, so it cannot quietly stop being
+true.
+
+`accept` answering `EAGAIN` with nobody waiting is checked in the same breath,
+because it is documented behaviour that reads exactly like a failure: a
+listener has no wait queue yet, so a server polls, and a program that treats
+every -1 as an error closes a listener that is working perfectly.
+
+### What the library adds is almost nothing, and that is the design
+
+A socket is a `struct file`, so `read`, `write` and `close` already serve a
+connection — `posix.c` took **no changes at all**. `send` and `recv` are one
+line each on top of them. The rest of `libc/socket.c` is unpacking a
+`sockaddr_in` into the two numbers the kernel wants and turning a status into an
+`errno`.
+
+Three places it differs from the system it replaces, each written into the
+header because each is a loop somebody would otherwise write wrong:
+
+| | |
+|---|---|
+| `accept` does not block | answers `EAGAIN`; on Linux the same code blocks |
+| an address is two numbers | not a `sockaddr` — so anything that is not `AF_INET` is **refused**, not reinterpreted |
+| `setsockopt` refuses everything | there is no timeout and no `SO_REUSEADDR` underneath |
+
+That last one is the uncomfortable choice and it is the right one.
+`recon_control.c` asks for a receive timeout at five call sites and ignores the
+answer at all five, so refusing costs those callers nothing — while reporting
+success would mean a program that set a timeout waiting for ever on a read that
+was supposed to give up, with nothing anywhere saying why.
+
+`shutdown`, `sendto` and `recvfrom` stay **declared and not defined**: a caller
+fails to link, naming the symbol, at the moment somebody can still decide what
+to do about it.
+
+### Four faults, all of them mine, all in the arrangement that was already there
+
+The suite is differential — `hostsys.c` answers the five primitives with real
+POSIX sockets, so ReconOS's `connect` and the host's talk to the same listener.
+Getting there took four corrections, and every one was a rule the tree already
+stated:
+
+- **`sys/socket.h` redefined `struct in_addr` and `struct sockaddr_in`**, which
+  `netinet/in.h` has owned since v0.4.32. Two of our own headers disagreeing
+  about one struct is the fault `time.c`'s exception exists to prevent.
+- **the target put `-I userland/include` on itself**, which `CMakeLists.txt`
+  says not to do in so many words: *"putting them on the include path here
+  would hand the same header to the test file, and the comparison would become
+  the implementation against itself."*
+- **it put `-include prefix.h` on the test file too**, which renames the
+  *host's* `bind` — so the differential suite would have compared ReconOS
+  against ReconOS.
+- **the test read the host's `errno`** and saw 9 and 11 left over from calls
+  made on the way. Both look enough like answers to be believed. It reads
+  `recon_errno` now, which is what the library sets.
+
+And a fifth in `hostsys.c`, which is the older lesson: its stand-in for
+`listen` makes the socket **non-blocking**, because the kernel's `accept` does
+not block and *"a stand-in with a looser contract than the real call is worse
+than none"* — a test written against a blocking accept would pass on the host
+and hang on the machine.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 2,985 of 3,076 | **3,006 of 3,076** |
+| sockets outstanding | 14 symbols, 35 call sites | **6 symbols, 14 call sites** |
+| symbols outstanding | 37 | **29** |
+
+`stat` and its relatives are now the largest group left at 31 call sites.
+
+---
+
 ## v0.4.37 — a cell wraps inside its column
 
 The board said *"a long cell sets a wide column and the row runs off the

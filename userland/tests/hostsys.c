@@ -20,10 +20,16 @@
 
 #define _GNU_SOURCE
 
+/* Not <arpa/inet.h>: it declares inet_ntoa, internal.h declares its own,
+ * and this file is deliberately not renamed -- so the two would be the
+ * same name disagreeing about a struct. htons and htonl are in
+ * <netinet/in.h>, which is included below. */
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -230,6 +236,101 @@ long recon_sys_mkdir(const char *path, unsigned long mode)
 		}
 	}
 
+	return 0;
+}
+
+/* --- The five socket primitives ---------------------------------------
+ *
+ * Real sockets on the host, because a stand-in that only pretended would let a
+ * suite pass against behaviour the kernel does not have. What is translated is
+ * the *shape*: the kernel takes an address as a number in host order and a
+ * port as a number, where POSIX takes a `sockaddr_in` with both in network
+ * order, so this puts them back the way POSIX wants them.
+ */
+
+static int as_family(unsigned int addr, int port, struct sockaddr_in *into)
+{
+	if (port < 0 || port > 0xFFFF) {
+		/* The same refusal the kernel makes: a port that will not fit
+		 * sixteen bits is refused rather than truncated. */
+		errno = EINVAL;
+		return -1;
+	}
+
+	memset(into, 0, sizeof(*into));
+	into->sin_family = AF_INET;
+	into->sin_port = htons((unsigned short)port);
+	into->sin_addr.s_addr = htonl(addr);
+	return 0;
+}
+
+long recon_sys_socket(int type)
+{
+	int kind = (type == 2) ? SOCK_DGRAM : SOCK_STREAM;
+	int fd = socket(AF_INET, kind, 0);
+
+	return fd < 0 ? as_recon_status() : (long)fd;
+}
+
+long recon_sys_bind(int fd, unsigned int addr, int port)
+{
+	struct sockaddr_in where;
+
+	if (as_family(addr, port, &where) != 0) {
+		return as_recon_status();
+	}
+	if (bind(fd, (struct sockaddr *)&where, sizeof(where)) != 0) {
+		return as_recon_status();
+	}
+	return 0;
+}
+
+long recon_sys_listen(int fd, int backlog)
+{
+	/*
+	 * **Made non-blocking here**, because the kernel's `accept` does not
+	 * block and a stand-in that did would be looser than the real call --
+	 * which this file's own header calls the one way a stand-in can be
+	 * worse than none. A test written against a blocking accept would pass
+	 * here and hang on the machine.
+	 */
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags >= 0) {
+		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	}
+
+	if (listen(fd, backlog) != 0) {
+		return as_recon_status();
+	}
+	return 0;
+}
+
+long recon_sys_accept(int fd)
+{
+	int got = accept(fd, NULL, NULL);
+
+	/* EAGAIN already answers SYS_EAGAIN in the table above, which is what
+	 * "nobody is waiting" is on the kernel. EWOULDBLOCK is the same number
+	 * on Linux and is not required to be anywhere. */
+	if (got < 0) {
+		if (errno == EWOULDBLOCK) {
+			errno = EAGAIN;
+		}
+		return as_recon_status();
+	}
+	return (long)got;
+}
+
+long recon_sys_connect(int fd, unsigned int addr, int port)
+{
+	struct sockaddr_in where;
+
+	if (as_family(addr, port, &where) != 0) {
+		return as_recon_status();
+	}
+	if (connect(fd, (struct sockaddr *)&where, sizeof(where)) != 0) {
+		return as_recon_status();
+	}
 	return 0;
 }
 

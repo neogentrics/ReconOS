@@ -88,6 +88,9 @@ extern int errno;
 #define ENOTSOCK	88
 #define EDESTADDRREQ	89
 #define EMSGSIZE	90
+#define ENOPROTOOPT	92	/* no such option at that level */
+#define EPROTONOSUPPORT	93
+#define ESOCKTNOSUPPORT	94
 #define EOPNOTSUPP	95
 #define EAFNOSUPPORT	97
 #define EADDRINUSE	98
