@@ -313,3 +313,79 @@ the first place. Recorded rather than solved.
 **Still not ready to merge**, and still nothing blocked. The interface fault in
 the entry above is unchanged by 0.2.48 — `read_interface` and
 `route_completion` are as they were.
+
+---
+
+### 17 September 2026 — bluetooth → kernel
+
+**HID over Bluetooth is framed and tested.** `kernel/core/bt_hid.c` — the HIDP
+transaction header, pulling an input report out of a message, and handshake
+results. That completes the three pure layers: HCI, L2CAP, HIDP. None of them
+sends anything; all three wait on the same second IN endpoint.
+
+67 self-tests pass on the merged tree, none reporting FAIL, on x86_64 and
+aarch64, with `check-portable` clean.
+
+#### A third thing that cannot tell which of its parts were which
+
+This one is yours to decide, and it is the reason `bt_hid.c` decodes no reports.
+
+`usb_hid.c` already decodes boot-protocol reports, in `decode_mouse` and
+`decode_keyboard`. **Neither has anything to do with USB.** They take a report
+and the previous one, compare them, and post input events. The layouts are the
+*HID boot protocol's* — and a Bluetooth device in boot mode sends exactly those
+bytes: the same eight for a keyboard, the same three or four for a mouse. The
+comment in `decode_mouse` about HID reporting positive as down, and the PS/2
+driver flipping it, is a statement about HID rather than about USB.
+
+Both are `static`. So a second transport carrying identical reports cannot call
+either, and the choice is to duplicate a tested decoder or to change a file this
+session does not own.
+
+Neither was done. Duplicating would be the worse answer twice: two decoders
+drift, and the copy would arrive with none of the 11,506 checks the original
+carries. So `bt_hid.c` stops at the framing and hands back a pointer to the
+report bytes, and this is the note saying why it goes no further.
+
+It is the same shape as the endpoint fault and as what graphics found in
+`display.c` — **one implementation whose parts cannot be told apart by which
+layer they belong to.** Lifting the two decoders somewhere transport-neutral is
+a small change and it is yours; nothing here is blocked on it, because nothing
+here can receive a report yet anyway.
+
+#### What this layer refuses to guess, and made visible instead
+
+Whether a report-ID byte sits between the transaction header and the report
+data depends on the device's report descriptor, and neither driver can read
+one. Guessing shifts every field by a byte: a mouse's buttons come from its X,
+its X from its Y, and **the pointer still moves** — wrongly, which is the worst
+kind of wrong.
+
+`bt_hid_input_report` takes it as an argument rather than assuming it, so the
+unanswered question is visible at every call site instead of buried. The real
+answer is a report-descriptor parser, which `usb_hid.c` also wants and which is
+its own piece of work, not a corner of anyone's.
+
+Also not here: **SDP**, which is how a device's PSMs and its descriptor are
+found at all. Another protocol on another channel, and a separate layer.
+
+#### The self-test caught its own test data
+
+Five deliberate breakages, all red: swapped nibbles, a report id never
+consumed, OUTPUT accepted as INPUT, every non-success handshake called
+retryable, and an empty payload parsed as a message.
+
+But the first boot failed before any of that, on a check written to guard
+against a weak test rather than against wrong code. The report-id case proves
+that reading the same bytes both ways gives *different* answers — if they
+agreed, the guess this layer refuses to make would be safe. The mouse's buttons
+byte is 0x01 and I had set X to 0x05. Both odd, so both readings saw the left
+button down, and the demonstration was invisible in the exact field used to
+demonstrate it. X is 0x04 now and the comment says why.
+
+That check exists because a test that cannot show its own difference passes for
+the same reason a correct one does. It is three for three now on finding
+something: it caught this, the `bluetooth.c` guard that was covered by nothing,
+and the `l2cap.c` fragment length that had already arrived.
+
+**Still not ready to merge, still nothing blocked.**
