@@ -38,6 +38,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.40** | **A cell can cover several columns.** `colspan` is read, measured across the columns it covers and drawn across them — and finding it turned up BG-206, where an empty cell took no column and put every heading in a two-row header under the wrong one. The README’s check-count badge was measured for the first time while it was being edited, and it had drifted from 1,971 to 4,474,929. |
 | **0.4.39** | **The Recycle Bin, which nothing had ever run.** `coverage.sh --zero` listed fourteen functions of `recon_fs.c` that no suite reached, and they were the whole of the bin — the one part of the filesystem whose entire job is that deleting is *recoverable*, and which fails silently when it is not. |
 | **0.4.38** | **Sockets, and the claim nobody could test.** The kernel took five socket numbers and they had no caller; this is the caller. |
 | **0.4.37** | **A cell wraps inside its column.** The board said a long cell ran the row off the side; half of that was already fixed, and what remained was worse — a cell that overran its column pushed the pen along, so every column after it on that row stopped lining up. |

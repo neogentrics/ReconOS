@@ -957,6 +957,139 @@ static void test_a_cell_is_not_merged_into_the_one_before_it(void) {
     recon_html_free(d);
 }
 
+static void test_a_cell_can_cover_several_columns(void) {
+    printf("colspan, and what is refused\n");
+
+    /*
+     * A header spanning two columns is ordinary on real pages, and a viewer
+     * that ignores it draws the heading in the first column and lines every
+     * row beneath it up against the wrong one -- legible, and wrong.
+     *
+     * The span is checked here rather than in the layout because this is where
+     * it can be wrong quietly: the drawing can only be as right as the number
+     * it is handed.
+     */
+    const char *html =
+        "<table>"
+        "<tr><th>a</th><th colspan=\"2\">b</th><th colspan=\"3\">c</th></tr>"
+        "<tr><td colspan=\"0\">zero</td><td colspan=\"banana\">words</td>"
+        "<td colspan=\"-4\">below</td><td>plain</td></tr>"
+        "</table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    short span[16];
+    int found = 0;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        if (b == NULL || b->kind != RECON_HTML_ROW) {
+            continue;
+        }
+        for (int j = 0; j < b->run_count; j++) {
+            const struct recon_html_run *r =
+                recon_html_run_at(d, b->first_run + j);
+            if (r != NULL && r->starts_cell && found < 16) {
+                span[found++] = r->cell_span;
+            }
+        }
+    }
+
+    check(found == 7, "seven cells across the two rows");
+    if (found == 7) {
+        check(span[0] == 1, "a cell that says nothing covers one column");
+        check(span[1] == 2, "colspan=2 covers two");
+        check(span[2] == 3, "colspan=3 covers three");
+
+        /*
+         * Every one of these is a page being wrong, and the answer to all of
+         * them is one -- never zero, which would make the cell take no column
+         * and shift the rest of the row left.
+         *
+         * colspan="0" means "to the end of the column group" in the standard.
+         * There are no column groups here, so it is read rather than guessed
+         * at: a cell that covers an unknown number of columns covers one.
+         */
+        check(span[3] == 1, "colspan=0 is one, not none");
+        check(span[4] == 1, "a colspan that is not a number is one");
+        check(span[5] == 1, "and a negative one is one");
+        check(span[6] == 1, "an ordinary cell after them is still one");
+    }
+
+    recon_html_free(d);
+}
+
+static void test_an_empty_cell_still_takes_a_column(void) {
+    printf("the blank corner of a two-row header\n");
+
+    /*
+     * **This was a real fault, and colspan is what made it visible.**
+     *
+     * A cell boundary is carried by a run, and a cell with nothing in it
+     * produces no run to carry it -- so the boundary stayed pending and the
+     * *next* cell's text consumed it. One column vanished and every cell after
+     * it on that row shifted left.
+     *
+     * The most ordinary case of that is the blank top-left corner of a table
+     * whose header has two rows, which is to say: every heading under the
+     * wrong column, on a shape that appears on a great many real pages. It was
+     * invisible for as long as the whole row was merely off by one.
+     */
+    const char *html =
+        "<table>"
+        "<tr><th></th><th>area</th><th>headline</th></tr>"
+        "<tr><td>0.4.40</td><td>tables</td><td>a cell can span</td></tr>"
+        "</table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    int header_cells = 0;
+    const char *first = NULL;
+    int first_length = 0;
+
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        if (b == NULL || b->kind != RECON_HTML_ROW || b->level != 1) {
+            continue;
+        }
+        for (int j = 0; j < b->run_count; j++) {
+            const struct recon_html_run *r =
+                recon_html_run_at(d, b->first_run + j);
+            if (r == NULL || !r->starts_cell) {
+                continue;
+            }
+            if (header_cells == 0) {
+                first = r->text;
+                first_length = r->length;
+            }
+            header_cells++;
+        }
+        break;
+    }
+
+    check(header_cells == 3, "three columns in the header, not two");
+    check(first_length == 0, "and the first of them is the empty one");
+
+    /*
+     * Which is the point: "area" has to be the *second* column. If the empty
+     * cell takes no column it becomes the first, and every row under it lines
+     * up one heading to the left of where it belongs.
+     */
+    (void)first;
+
+    check(page_says(d, "area") && page_says(d, "headline"),
+        "both headings are still in the page");
+
+    recon_html_free(d);
+}
+
 static void test_a_table_used_for_layout(void) {
     printf("a table with no cells, and one with text loose in a row\n");
 
@@ -1525,6 +1658,8 @@ int main(void) {
     test_an_id_inside_something_hidden();
     test_a_table_becomes_rows_and_cells();
     test_a_cell_is_not_merged_into_the_one_before_it();
+    test_a_cell_can_cover_several_columns();
+    test_an_empty_cell_still_takes_a_column();
     test_a_table_used_for_layout();
     test_where_a_tag_ends();
     test_a_real_search_form();

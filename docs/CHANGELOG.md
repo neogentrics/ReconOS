@@ -9,6 +9,148 @@ way for the two to disagree.
 
 ---
 
+## v0.4.40 — a cell can cover several columns
+
+`colspan` is the part of table layout real pages use constantly and this viewer
+did not read at all. A header spanning two columns was drawn as one cell in the
+first of them, and **every row under it lined up against the wrong heading** —
+which is worse than not drawing the table, because it is legible and wrong.
+
+The span rides on the run that starts the cell, beside `starts_cell`, because
+that is already where a cell boundary lives — *"a cell is not a paragraph: it
+is a piece of a line"*. One `short` field, and a table with more than
+thirty-two thousand columns is a document doing something other than being a
+table.
+
+Two places had to learn it, and the second is the one that goes wrong quietly:
+
+**Measuring.** A cell covering three columns must not make the first of them
+three columns wide. Its width is spread across the columns it covers, and only
+where they are narrower than their share — so a spanning header cannot shrink a
+column some ordinary cell elsewhere already needs wider. Getting that backwards
+shows up as one enormous column and three thin ones, which is what a viewer
+that ignores the attribute does by accident.
+
+**Drawing.** The pen starts in the first column of the span and its right edge
+is the end of the last, so the text runs across the span instead of wrapping
+inside one column's width. The column index advances *by the span*, or every
+cell after a spanning one is off by however many columns it covered.
+
+The widest-word floor is the exception: it goes to the first column only.
+Spreading an unbreakable word across a span would let every column it covers
+stay too narrow for it, which is the floor failing to be a floor.
+
+### Anything that is not a number above zero is one
+
+`colspan="0"` means *"to the end of the column group"* in the standard. There
+are no column groups here, so it is read as one rather than guessed at — and
+`colspan="banana"` is a page being wrong, not a cell covering nothing. **Zero
+is the dangerous answer**: a cell that takes no column shifts the whole rest of
+the row left, which is the same fault as the one below.
+
+### BG-206 — an empty cell took no column
+
+Finding this is what the work was actually worth.
+
+A cell boundary is carried by a run, and **a cell with nothing in it produces no
+run to carry it**. The boundary stayed pending and the *next* cell's text
+consumed it, so one column simply vanished and everything after it on that row
+shifted left.
+
+The most ordinary shape that hits is the blank top-left corner of a table whose
+header has two rows — `<th></th><th>area</th>` put "area" in the first column.
+Every heading under the wrong one, on a table shape that appears on a great many
+real pages.
+
+It is not colspan's doing and it was not new. It was invisible for as long as
+the whole row was merely off by one and nothing sat above it to disagree with;
+the spanning-header fixture made it obvious in a single photograph.
+
+The fix is the shape the file already uses for a control — *"its run is empty
+and sits at the end of the text"* — so an empty run is a supported thing here
+rather than a new idea. **Written directly rather than through `emit`**, which
+merges a run into the one before it when they look alike, and an empty run looks
+like everything. The first attempt used `emit` and the run disappeared into its
+neighbour, which is the same bug wearing a different hat.
+
+### What proves it
+
+**13 checks** in `test_html.c`, taking the suite from 183 to 196, and both
+mutations bite:
+
+| the code as it was an hour ago | what the suite says |
+|---|---|
+| the parser ignores `colspan` | 2 failures |
+| an empty cell produces no run | 2 failures |
+
+They check the *parser's* answer rather than the drawing, because that is where
+being wrong is quiet: the layout can only be as right as the number it is
+handed. Seven cells in two rows cover the ordinary case and all four refusals —
+`0`, a word, a negative, and an ordinary cell after them.
+
+And three photographs through `scripts/look.sh`, against a `/span` fixture, on
+the real compositor. A photograph proves this build on this fixture on the day
+somebody looked, which is why it is not the only instrument here — but it is
+the one that found BG-206, and no unit test was ever going to.
+
+### The badge said 1,971 checks. A run says 4,474,929.
+
+Adding thirteen checks meant touching the figure on the README badge, and the
+figure turned out to be off by three orders of magnitude.
+
+`check-readme-badges.py` was written on 15 September for exactly this — *"a
+figure on a board is a claim, and a claim needs an instrument"* — and it
+deliberately left this one field alone, for a reason that was right as far as
+it went:
+
+> *"`1971 checks` cannot be derived from the repository — it is a figure from a
+> run, and a run is a thing that happened rather than a thing a file contains.
+> Reading it from a log lying around would be worse than leaving it."*
+
+True, and it skips the third option: **do the run.** A figure unavailable to
+something that only reads files is perfectly available to something willing to
+execute the suites and read what they say. `--run` does that and writes the
+number it just watched happen — no log, no cache, no trusting a build directory
+to be from this commit rather than checking.
+
+The cost of leaving it was not hypothetical. The field had drifted from 1,971
+to 4,474,929 while sitting beside a note explaining why nobody was checking it:
+**the same fault the script exists to fix, one field to the right.** A count
+nobody can check should be visibly uncheckable; a count somebody could have
+checked by running it was just unchecked.
+
+### Two ways it was still wrong, both found by running it
+
+**It was short by a whole suite.** 46 of 47 suites end `N checks, M failures`;
+`malformed-input` ends `10788 cases, 0 failures`, because what it runs are
+inputs rather than assertions. Matching one noun dropped an entire suite from
+the total without a word. Both nouns count now, and the number of suites that
+reported is held against the number that exist — so a suite that stops
+reporting makes the figure complain instead of quietly shrinking.
+
+**And the first fix broke the thing it fixed.** It wrote `4%2C464%2C141`, a
+URL-encoded comma, so the badge would render `4,464,141` — and its own pattern
+then could not read it back. The next run reported every badge as matching the
+tree without ever having looked at that one. **A number its own checker cannot
+parse is a number nobody is checking**, which is precisely the fault the script
+was written against, reintroduced by the fix for it. Plain digits.
+
+`scripts/check.sh` passes `--run`, because by the time it reaches that pass the
+suites are already built — it is the one place that can measure the figure
+rather than note that nobody has, and the run costs about eight seconds.
+
+The README carried the figure twice, too — the badge and a row in the table of
+what the system is. Two copies of one measurement is how the disagreement
+started, so the row says *"47 suites, counted by running them"* and the number
+lives in one place.
+
+### Still missing from tables
+
+`rowspan`, nested tables, and borders. The checkpoint row says so rather than
+being ticked, because the row is a claim.
+
+---
+
 ## v0.4.39 — the Recycle Bin, which nothing had ever run
 
 `scripts/coverage.sh --zero` lists the functions no suite reaches. **Fourteen
@@ -1639,7 +1781,7 @@ crash somewhere else an hour later. The ask is written up in
 
 ---
 
-**The count, which lived only in the version table until 16 September.**
+**The count, which lived only in the version table until 15 September.**
 **2,473 of the 3,113 library calls** in `src/` are answered by it -- counted
 with `nm` over the objects rather than estimated -- and it is held against the
 library it replaces by compiling both into one program and making every call

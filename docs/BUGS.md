@@ -8374,6 +8374,39 @@ regenerated after that tree is pushed.
   a release build says **seventeen in twelve**. Nothing was counting, which is
   the same fault as BG-204 one row down the same board.
 
+### BG-206 — An empty cell took no column, so every heading sat under the wrong one
+
+- **Found in** v0.4.40, by photographing a table whose header has two rows —
+  while building `colspan`, which is not what is broken here.
+- **Was** A cell boundary is carried by a run, and a cell with nothing in it
+  produces no run to carry it. The boundary stayed pending and the *next*
+  cell's text consumed it, so one column vanished and **everything after it on
+  that row shifted left**.
+
+  `<th></th><th>area</th><th>headline</th>` put "area" in the first column and
+  "headline" in the second. The blank top-left corner of a two-row header is the
+  most ordinary empty cell there is, so the consequence is every heading in the
+  table naming the wrong column — legible, confident, and wrong, which is worse
+  than not drawing the table at all.
+- **How long** Not new, and not colspan's doing. It was invisible for as long as
+  a whole row was merely off by one with nothing above it to disagree with; a
+  spanning header sits above the columns and made the misalignment visible in a
+  single photograph.
+- **Fixed in** v0.4.40. `emit_empty_cell` in `src/recon_html.c` writes a
+  zero-length run so the boundary has something to ride on. The shape is
+  already in the file for controls — *"its run is empty and sits at the end of
+  the text"* — so an empty run is supported here rather than a new idea.
+- **The first fix was wrong in a way that looked right.** It called `emit`,
+  which merges a run into the one before it when they look alike, and an empty
+  run looks like everything — so the run was created and immediately absorbed,
+  and the column still vanished. `emit_field` builds one directly for the same
+  reason, and is what it should have been modelled on. **A test passing after a
+  fix is not the same as the fix working**; the photograph is what said so.
+- **What holds it** `test_an_empty_cell_still_takes_a_column` in
+  `tests/test_html.c`, which counts three cells in the header and requires the
+  first to be the empty one. Cutting `emit_empty_cell` back out fails it.
+
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

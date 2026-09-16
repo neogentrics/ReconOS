@@ -16,18 +16,33 @@ morning: *a figure on a board is a claim, and a claim needs an instrument.*
 So this is the instrument. It reads the numbers out of the tree and compares
 them against what the README asserts, and `--fix` writes them back.
 
---- what it deliberately does not do ----------------------------------------
+--- the check count, and the third option ------------------------------------
 
-**It does not invent the test counts.** `1971 checks` cannot be derived from
-the repository -- it is a figure from a run, and a run is a thing that
-happened rather than a thing a file contains. Reading it from a log lying
-around would be worse than leaving it: the log might be from any commit, and a
-badge sourced from whatever last ran is a badge that lies quietly.
+This script used to leave the check count alone, for a reason that was right as
+far as it went: it is a figure from a run, not a thing a file contains, and
+reading it from *a log lying around* would be worse than leaving it, because
+the log might be from any commit.
 
-Those two are reported as *unverifiable from here* rather than silently
-passed, which is the honest state. A count nobody can check should be visibly
-uncheckable, not quietly green.
+**The option it did not take was doing the run.** A figure unavailable to
+something that only reads files is perfectly available to something willing to
+execute the suites and read what they say. `--run` does that, and writes the
+number it just watched happen -- no log, no cache, no trusting a build
+directory to be from this commit rather than checking.
+
+What it cost to leave alone: on 15 September 2026 the badge said **1,971
+checks** and a run said **4,464,141**. It had drifted by three orders of
+magnitude while sitting beside a note explaining why nobody was checking it --
+the same fault this script exists to fix, one field to the right. *A count
+nobody can check should be visibly uncheckable*; a count somebody could have
+checked by running it is just unchecked.
+
+--- what it still does not do -----------------------------------------------
+
+Without `--run` the check count is left exactly as before and reported as a
+figure from a run, because guessing is still worse than admitting. `--run`
+needs a built tree; where there is not one, it says so and changes nothing.
 """
+import subprocess
 import io
 import os
 import re
@@ -58,6 +73,43 @@ def suite_count():
     return len(re.findall(r"^add_test\(", read("CMakeLists.txt"), re.M))
 
 
+def checks_from_a_run():
+    """Run every suite and total what they report. None if it cannot.
+
+    Each suite prints its own `N checks, M failures` line and this adds them
+    up, rather than counting `check(` in the sources -- because a check inside
+    a branch that is never taken is a line in a file, not a check that ran, and
+    the whole point of this figure is that it is a thing that happened.
+
+    **"cases" counts as well as "checks".** The malformed-input suite ends
+    `10788 cases, 0 failures` because what it runs are inputs rather than
+    assertions, and matching only the one noun left the total short by an
+    entire suite without saying so.
+
+    Which is why the number of suites that reported comes back too: the caller
+    holds it against the number that exist, so a suite that stops reporting
+    makes the figure complain rather than quietly shrink.
+    """
+    build = os.path.join(ROOT, "build")
+    if not os.path.isdir(build):
+        return None
+
+    try:
+        out = subprocess.run(
+            ["ctest", "--test-dir", build, "-j8", "-V"],
+            capture_output=True, text=True, timeout=1800).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    lines = re.findall(r"(\d+) (?:checks|cases), (\d+) failures", out)
+    if not lines:
+        return None
+
+    checks = sum(int(c) for c, _ in lines)
+    failures = sum(int(f) for _, f in lines)
+    return checks, failures, len(lines)
+
+
 def desktop_version():
     """The desktop's version, which is what the top badges are about.
 
@@ -76,6 +128,7 @@ def kernel_version():
 
 def main():
     fix = "--fix" in sys.argv
+    run = "--run" in sys.argv
     readme = read("README.md")
     problems = []
     fixed = readme
@@ -105,11 +158,17 @@ def main():
         fixed = re.sub(r"(latest_release-v)[\d.]+(-)", r"\g<1>%s\g<2>" % dv, fixed)
         fixed = re.sub(r"(releases/tag/v)[\d.]+(\))", r"\g<1>%s\g<2>" % dv, fixed)
 
-    # --- the half that can be checked, and the half that cannot --------
+    # --- the suite count from the tree, the check count from a run -----
     #
-    # The suite count is `add_test(` counted. The check count is a figure from
-    # a run and stays unchecked -- reading it from a log lying around would be
-    # worse than leaving it, because the log might be from any commit.
+    # The suite count is `add_test(` counted, which the repository knows. The
+    # check count is a figure from a run -- so with `--run` this does the run
+    # rather than guessing, and without it says plainly that it did not.
+    #
+    # Plain digits, no separators: the first version wrote a URL-encoded comma
+    # so the badge would render `4,464,141`, and this pattern then could not
+    # read it back -- the field went unchecked while the script reported
+    # everything as matching. A number its own checker cannot parse is a number
+    # nobody is checking, which is the fault this file was written against.
     m = re.search(r"tests-(\d+)_suites,_(\d+)_checks", readme)
     if m:
         suites = suite_count()
@@ -119,8 +178,37 @@ def main():
         fixed = re.sub(r"(tests-)\d+(_suites,)", r"\g<1>%d\g<2>" % suites,
                        fixed)
 
-        print("  note: the tests badge's %s checks is a figure from a run, "
-              "not something the tree holds -- left alone" % m.group(2))
+        was = int(m.group(2).replace(",", ""))
+        ran = checks_from_a_run() if run else None
+
+        if ran is None:
+            if run:
+                print("  the run could not happen -- no build directory, or "
+                      "no suite reported a count; the check count is left "
+                      "alone")
+            else:
+                print("  note: the tests badge's %s checks is a figure from a "
+                      "run; pass --run to make the run and write what it says"
+                      % m.group(2))
+        else:
+            checks, failures, reporting = ran
+            if reporting != suites:
+                problems.append("%d of %d suites reported a count; a total "
+                                "missing a suite is not a total"
+                                % (reporting, suites))
+            if failures:
+                problems.append("the run had %d failures, so its count is not "
+                                "a figure to put on a badge" % failures)
+            else:
+                if checks != was:
+                    problems.append("tests badge says %s checks, a run of %d "
+                                    "suites reports %d"
+                                    % (m.group(2), reporting, checks))
+                fixed = re.sub(r"(_suites,_)\d+(_checks)",
+                               r"\g<1>%d\g<2>" % checks, fixed)
+                print("  the check count is from a run: %s checks across %d "
+                      "suites, 0 failures" % ("{:,}".format(checks),
+                                              reporting))
 
     if fix and fixed != readme:
         io.open(os.path.join(ROOT, "README.md"), "w", encoding="utf-8",

@@ -403,6 +403,7 @@ struct builder {
      * one it starts at.
      */
     bool cell_next;
+    short cell_span_next;
 
     /* The stylesheet, when a caller handed one over. */
     struct recon_css_sheet *sheet;
@@ -663,6 +664,8 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
     /* Consumed by being written, so a cell with several runs in it marks
      * only the one it starts at. */
     run->starts_cell = b->cell_next;
+    run->cell_span = b->cell_next ? (b->cell_span_next > 0
+        ? b->cell_span_next : 1) : 1;
     b->cell_next = false;
 }
 
@@ -677,6 +680,40 @@ static void open_block(struct builder *b, enum recon_html_block kind,
  * not been taught about controls draws exactly what it drew before, which is
  * the words around them and nothing where they are.
  */
+/*
+ * A run holding nothing, so an empty cell still takes a column.
+ *
+ * A cell boundary is carried by a run. A cell with nothing in it produces
+ * none, so the boundary stayed pending and the *next* cell's text consumed it
+ * -- one column vanished and every cell after it on that row shifted left.
+ * The blank corner of a two-row header is the most ordinary case of that, and
+ * it puts every heading under the wrong column.
+ *
+ * Written directly rather than through `emit`, which merges a run into the one
+ * before it when they look alike -- and an empty run looks like everything.
+ * `emit_field` builds one the same way for the same reason.
+ */
+static void emit_empty_cell(struct builder *b) {
+    struct recon_html_document *d = b->d;
+
+    if (!b->in_block || d->run_count >= RUNS_MAX) {
+        d->truncated = true;
+        return;
+    }
+
+    struct recon_html_run *run = &d->runs[d->run_count++];
+    memset(run, 0, sizeof(*run));
+    run->text = d->text + d->text_used;
+    run->length = 0;
+    run->style = b->style;
+    run->link = -1;
+    run->field = -1;
+    run->starts_cell = true;
+    run->cell_span = (b->cell_span_next > 0) ? b->cell_span_next : 1;
+
+    b->cell_next = false;
+}
+
 static void emit_field(struct builder *b, int field) {
     struct recon_html_document *d = b->d;
     if (field < 0 || field >= d->field_count || b->hidden_at >= 0) {
@@ -702,6 +739,8 @@ static void emit_field(struct builder *b, int field) {
     run->link = -1;
     run->field = field;
     run->starts_cell = b->cell_next;
+    run->cell_span = b->cell_next ? (b->cell_span_next > 0
+        ? b->cell_span_next : 1) : 1;
 
     b->cell_next = false;
     b->at_block_start = false;
@@ -1656,6 +1695,25 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     named(tag, name_length, "th")) {
                 if (!closing) {
                     b.cell_next = true;
+
+                    /*
+                     * How wide the cell is, in columns.
+                     *
+                     * Anything that is not a number above zero is one: a
+                     * `colspan="0"` means "to the end of the column group",
+                     * which needs column groups this viewer does not have, and
+                     * a `colspan="banana"` is a page being wrong rather than a
+                     * cell covering nothing.
+                     */
+                    char span[16];
+                    b.cell_span_next = 1;
+                    if (attribute(attrs, attrs_length, "colspan", span,
+                            sizeof(span))) {
+                        long wide = strtol(span, NULL, 10);
+                        if (wide > 1 && wide < 1000) {
+                            b.cell_span_next = (short)wide;
+                        }
+                    }
                     /*
                      * A row holding a `<th>` is a header row, recorded as
                      * level 1 -- the field a row otherwise has no use for.
@@ -1670,6 +1728,21 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                      * into the last one's for anything that ignores cells --
                      * the find bar, and a page read as plain text. */
                     b.pending_space = true;
+                } else if (b.cell_next) {
+                    /*
+                     * **An empty cell still takes a column.**
+                     *
+                     * A cell boundary is carried by a run, and a cell with
+                     * nothing in it produces none -- so the flag stayed
+                     * pending and the *next* cell's text consumed it. One
+                     * column vanished and every cell after it on that row
+                     * shifted left, which is what the blank corner of a
+                     * two-row header does to every heading under it.
+                     *
+                     * An empty run is the shape this file already uses for a
+                     * control, so the boundary gets one of its own.
+                     */
+                    emit_empty_cell(&b);
                 }
                 i = after;
                 continue;

@@ -260,9 +260,14 @@ echo "the generated files match their sources"
 # the other session runs goes red for commits this one made.
 echo
 echo "Checking that the README's badges say what the tree says"
-if ! python3 "$REPO_DIR/scripts/check-readme-badges.py"; then
+#
+# With --run, because by here the suites are built and the check count on that
+# badge is a figure from a run -- so this is the one place that can measure it
+# rather than note that nobody has. Left unmeasured it drifted from 1,971 to
+# 4,474,929; the run costs about eight seconds.
+if ! python3 "$REPO_DIR/scripts/check-readme-badges.py" --run; then
     echo
-    echo "Run scripts/check-readme-badges.py --fix and commit what changes."
+    echo "Run scripts/check-readme-badges.py --run --fix and commit what changes."
     exit 1
 fi
 

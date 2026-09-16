@@ -138,6 +138,21 @@ struct recon_html_run {
     bool starts_cell;
 
     /*
+     * How many columns this cell covers, for the run that starts one.
+     *
+     * One unless the page said otherwise, so every cell has an answer and
+     * nothing has to check whether the question applies. A header spanning two
+     * columns is ordinary on real pages, and a viewer that ignored it drew the
+     * heading in the first column and lined every row beneath it up against
+     * the wrong one -- legible, and wrong, which is worse than not drawing it.
+     *
+     * `colspan="0"` means "to the end of the column group" in the standard.
+     * There are no column groups here, so it is read as one rather than
+     * guessed at.
+     */
+    short cell_span;
+
+    /*
      * Which form control this run *is*, or -1 for the overwhelming majority
      * of runs, which are text.
      *

@@ -2261,6 +2261,37 @@ static int widest_word(const struct recon_html_run *r,
     return widest;
 }
 
+/*
+ * What a cell asks of the columns it covers.
+ *
+ * A cell in one column is simple: it is at least that wide. A cell spanning
+ * several is not allowed to make the first of them wide enough for all of it
+ * -- that is the fault that shows up as one enormous column and three thin
+ * ones, and it is what a viewer that ignores `colspan` does by accident.
+ *
+ * So the width is spread across the columns it covers, and **only where they
+ * are narrower than their share**: a spanning header must not shrink a column
+ * that an ordinary cell somewhere else in the table already needs wider. That
+ * makes the rule "every column is at least as wide as the narrowest thing that
+ * forces it", which is the property that keeps the table lined up.
+ *
+ * The same for `least`, which is the floor a column cannot be scaled below --
+ * see the note in `struct columns`.
+ */
+static void bank(struct columns *out, int column, int span, int used) {
+    if (column < 0 || span < 1 || used <= 0) {
+        return;
+    }
+
+    int share = used / span;
+
+    for (int i = column; i < column + span && i < COLUMNS_MAX; i++) {
+        if (share > out->width[i]) {
+            out->width[i] = share;
+        }
+    }
+}
+
 static void measure_columns(struct flow *f, int first, int size,
         struct columns *out) {
     memset(out, 0, sizeof(*out));
@@ -2278,6 +2309,7 @@ static void measure_columns(struct flow *f, int first, int size,
         }
 
         int column = -1;
+        int span = 1;
         int used = 0;
         for (int j = 0; j < row->run_count; j++) {
             const struct recon_html_run *r =
@@ -2288,14 +2320,14 @@ static void measure_columns(struct flow *f, int first, int size,
 
             if (r->starts_cell || column < 0) {
                 /* Bank the column that just ended before starting the next. */
-                if (column >= 0 && column < COLUMNS_MAX &&
-                        used > out->width[column]) {
-                    out->width[column] = used;
-                }
-                column++;
+                bank(out, column, span, used);
+
+                column += (column < 0) ? 1 : span;
+                span = (r->cell_span > 0) ? r->cell_span : 1;
                 used = 0;
-                if (column >= out->count) {
-                    out->count = column + 1;
+
+                if (column + span > out->count) {
+                    out->count = column + span;
                 }
             }
 
@@ -2304,6 +2336,14 @@ static void measure_columns(struct flow *f, int first, int size,
 
             used += run_width(r, with);
 
+            /*
+             * The widest word goes to the *first* column of the span only.
+             *
+             * A word cannot be broken, so somewhere has to be wide enough to
+             * hold it -- but spreading it across a span would let every column
+             * it covers stay too narrow for it, which is the floor failing to
+             * be a floor. The first column is the one the pen starts in.
+             */
             if (column >= 0 && column < COLUMNS_MAX) {
                 int word = widest_word(r, with);
                 if (word > out->least[column]) {
@@ -2311,9 +2351,7 @@ static void measure_columns(struct flow *f, int first, int size,
                 }
             }
         }
-        if (column >= 0 && column < COLUMNS_MAX && used > out->width[column]) {
-            out->width[column] = used;
-        }
+        bank(out, column, span, used);
     }
 
     if (out->count > COLUMNS_MAX) {
@@ -2624,6 +2662,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     /* Which cell of a row is being drawn, and whether the pen still has to
      * move to its column. -1 because the first `starts_cell` makes it 0. */
     int cell_index = -1;
+    int cell_span = 1;
     bool cell_pending = false;
 
     /*
@@ -2672,8 +2711,13 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
          * before column zero, which is what the pen is already doing.
          */
         if (b->kind == RECON_HTML_ROW && run->starts_cell) {
+            /*
+             * Past the columns the last cell covered, not just one -- or every
+             * cell after a spanning one is off by however many it spanned.
+             */
+            cell_index += (cell_index < 0) ? 1 : cell_span;
+            cell_span = (run->cell_span > 0) ? run->cell_span : 1;
             cell_pending = true;
-            cell_index++;
         }
 
         /*
@@ -2814,13 +2858,22 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                     x = wanted;
                     y = row_top;
                     cell_left = wanted;
-                    cell_right = wanted + f->columns.width[cell_index];
+
+                    /* Across every column it covers, so the text runs the
+                     * width of the span rather than wrapping inside the first
+                     * column of it. */
+                    cell_right = wanted;
+                    for (int c = cell_index;
+                            c < cell_index + cell_span &&
+                            c < f->columns.count; c++) {
+                        cell_right += f->columns.width[c];
+                    }
 
                     /* The last column ends at the window, not at the sum of
                      * the measurements -- rounding when the columns were
                      * scaled down leaves a few pixels over, and a cell that
                      * wrapped early because of them would look arbitrary. */
-                    if (cell_index == f->columns.count - 1 ||
+                    if (cell_index + cell_span >= f->columns.count ||
                             cell_right > f->width) {
                         cell_right = f->width;
                     }
