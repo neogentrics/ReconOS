@@ -1030,6 +1030,23 @@ add_executable(recon_server_log_tests
 
 add_test(NAME server_log COMMAND recon_server_log_tests)
 
+# Three answers, and the two ways of confusing them.
+#
+# KF-244 made `connect` say `SYS_OK`, `SYS_EAGAIN` or `SYS_EIO` -- established,
+# in flight, or refused. Not yet and never are different facts, and neither
+# confusion produces an error anywhere: reading never as not-yet spins for ever
+# on a peer that said no, and reading not-yet as never abandons every connection
+# that was about to work, then reports finding nothing.
+#
+# The decision is pure and is driven here exhaustively. The ready and refused
+# paths are also run against real sockets; the pending path cannot be shown on a
+# host, where a blocking connect to loopback finishes before it returns.
+add_executable(recon_server_dial_tests
+    server/dial.c
+    server/tests/test_dial.c)
+
+add_test(NAME server_dial COMMAND recon_server_dial_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the

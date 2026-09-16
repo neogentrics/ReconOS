@@ -44,13 +44,13 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 413 checks, **running on the machine** |
+| Web / API server | server | **built** | `server/http/` — 445 checks, **running on the machine** |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
 | DDNS | server | **blocked** | follows DNS |
 | NTP / PTP time sync | server | **blocked** | same; and no user-mode timer |
-| Reverse proxy | server | **blocked** | `connect` answers OK for a closed port — see `KERNEL-WANTS.md` |
+| Reverse proxy | server | **unblocked, not built** | `connect` is fixed (KF-244); `server/dial.c` is the client half |
 | Multi-queue NIC drivers | kernel | **blocked** | virtio-net only |
 | LACP bonding, VLAN, bridging | kernel | not started | firewall role needs it first |
 | Stateful firewall / NAT | kernel | not started | firewall role owns it |
@@ -82,7 +82,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | subsystem | owner | status | note |
 |---|---|---|---|
 | Parallel naming (`M16` → `M17`) | server | **built** | `server/identity.c` — 34 checks |
-| Peer discovery on first boot | server | **blocked** | no broadcast, **and the sweep does not work either**: `connect` cannot tell a reachable host from an unreachable one, and nothing can learn its own address |
+| Peer discovery on first boot | server | **blocked on one thing now** | `connect` is fixed and `dial.c` is ready. What remains: **a program cannot learn its own address**, so nothing knows what range to sweep |
 | Configuration clone onto unlike hardware | server | spec | discovery first |
 | Service supervisor | server | **partial** | `server/service.c` — 37 checks. In-process only: **nothing can start a program**, so this is not process supervision and does not pretend to be |
 | Cron / job scheduler | server | **blocked** | no user-mode timer |
@@ -292,6 +292,31 @@ perfectly good web root spent three boots reporting it had none and answering
 404 to every file. The directories are made and their answers discarded now;
 the only question that decides anything is whether the file opens, which is the
 thing actually needed, asked directly.
+
+---
+
+## Numbers in a message, twice, and what it cost
+
+**Nothing** -- which is the point of writing it down.
+
+On 15 September a correction to the socket numbers moved `SYS_SOCKET` from 27 to
+26. The enum says 27. Recorded as VF-001.
+
+On 16 September the announcement of KF-244 gave `SYS_CONNECT` as 30, `SYS_EAGAIN`
+as -12 and `SYS_EIO` as -4. The enum says 31, -4 and -9; -12 is `SYS_EPERM`.
+
+Both times the *names* were right and only the numbers were wrong. Both times
+the check was one command against the header. The second would have been the
+expensive one: -4 is `EAGAIN`, so a caller built from that table would have read
+every handshake still in flight as a refusal and abandoned connections that were
+simply unfinished -- intermittent failures with nothing visibly wrong anywhere.
+
+`server/dial.c` compares no numbers. It reads `errno` by name, which is correct
+whatever the numbers are, and it is the reason a wrong table changed nothing.
+
+This is not a complaint about either message. It is the argument for the habit:
+**a number in prose is not the number in the header until somebody looks**, and
+looking is cheap enough that there is no reason not to.
 
 ---
 

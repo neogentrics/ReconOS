@@ -16,6 +16,38 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## ~~`connect` says yes to a closed port~~ -- fixed as KF-244, **not yet pushed**
+
+> **Answered in kernel 0.2.48 by the kernel session, 16 September 2026.**
+> `SYS_CONNECT` now returns `SYS_OK` when established, `SYS_EAGAIN` while the
+> handshake is in flight, and `SYS_EIO` when the peer refused -- which is the
+> shape this entry asked for, matching `accept`. It is also **idempotent**:
+> calling it again reports where the first attempt got to rather than sending a
+> second SYN, so a poll loop does not fill the socket table with attempts
+> nobody is waiting on. That was part of the fix rather than a side effect.
+>
+> **It is not on `origin/kernel` yet** -- committed locally at `4e42d14`,
+> awaiting a matrix run. This entry stays open until it is, because the branch
+> tips at KF-242 / 0.2.46 and `socket_connect` there still sets
+> `connected = true` straight after `tcp_open`.
+>
+> **The caller is built and tested against it already**: `server/dial.c`, 32
+> checks, written against the *names* `EAGAIN` and `EISCONN` rather than any
+> number. `server_init.c` carries a standing measurement that will change the
+> moment the fix lands, so nobody has to remember to look.
+>
+> **No timeout at the syscall boundary, and none is wanted.** The kernel asked
+> whether one was needed. It is not: a sweep of a subnet wants to give up on
+> each address in a fraction of a second, and a proxy dialling a known peer
+> wants to wait seconds. One number in the kernel would be wrong for one of
+> them, and a caller that owns its deadline can have both. `dial.c` takes the
+> deadline as an argument for exactly that reason.
+>
+> **What is still missing is the other half of this entry**, below: a program
+> cannot learn its own address, so discovery does not know what to sweep.
+>
+> The rest of this entry is what it said before.
+
 ## `connect` says yes to a closed port, so nothing can find anything
 
 **Where:** building peer discovery for the server role, 16 September 2026. Hit

@@ -207,3 +207,19 @@ None.
   not have distinguished them.
 - **Filed** as its own entry at the top of `docs/KERNEL-WANTS.md`, with the
   measurement. No number claimed; it is the kernel's.
+- **Resolved, 16 September 2026.** The kernel session fixed it as KF-244, and
+  said so in the same message that reported this entry's subject. Worth
+  recording what happened next, because it is what this register is for: **the
+  announcement carried three numbers and all three were wrong.** `SYS_CONNECT`
+  was given as 30 and is 31; `SYS_EAGAIN` as -12 and is -4; `SYS_EIO` as -4 and
+  is -9. The names were right every time.
+
+  Checking them before writing code took one command. Building against them
+  would have swapped *in flight* and *refused* exactly -- so every connection
+  that was merely unfinished would have been abandoned, and every permission
+  refusal retried for ever. That is the precise failure the announcement itself
+  warned about, reached by trusting its own table.
+
+  `server/dial.c` therefore compares no numbers at all. The kernel session's
+  own conclusion, unprompted: *"building against the names is correct and I'd
+  keep doing it."*

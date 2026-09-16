@@ -18,10 +18,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.12.0 |
+| **Version** | 0.13.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 413 across eleven suites |
+| **Checks** | 445 across twelve suites |
 | **Kernel** | 0.2.41 |
 
 ---
@@ -139,6 +139,7 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | `server_http_range` | 45 | asking for part of a file, and the ways that hands over the wrong part |
 | `server_http_escape` | 21 | escaping text for HTML, and the characters people forget |
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
+| `server_dial` | 32 | three answers, and the two ways of confusing them |
 
 **Each was watched failing before it was believed.** The naming suite was run
 against the `atoi` shape its header rejects and nine cases failed; the HTTP
@@ -216,6 +217,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.13.0** | **A client that can tell *not yet* from *never*.** The kernel fixed `connect` (KF-244) so it answers established, in-flight or refused, and made it idempotent so polling it is the interface. `dial.c` is that loop, with the deadline owned by the caller because the kernel has none and a sweep and a proxy want different ones. It compares **no numbers** — the announcement's table had all three wrong, and building against names instead is what made that harmless. Not yet run on the machine: the fix is committed locally and not pushed. |
 | **0.12.0** | **An access log that admits what it lost.** Every answered request is recorded by the server, including the ones refused before any handler ran — those are the entries somebody comes looking for. A ring drops the oldest to make room, and a log that drops silently looks complete while missing exactly the burst being investigated, so the dropped count is reported beside the entries. Served as plain text, not JSON: a request target can contain a quote via `%22`, and there is no JSON escaper yet. |
 | **0.11.0** | **`Expect: 100-continue`, which was costing every large POST a second.** A client that asks permission before sending a body was never answered, so it waited out its own timeout and sent the body anyway — nothing failed, nothing was reported, and every such request just took a second longer. `curl` does this on any body over about a kilobyte. An expectation the server cannot meet now gets 417 rather than silence, because silence reads as yes. |
 | **0.10.0** | **A Content-Security-Policy that is true.** The console's styles moved out of the page and onto the volume as `/console.css`, which is what made `style-src 'self'` an honest claim rather than one needing `'unsafe-inline'`. Also fixed a bug created by adding the second file: the site layout returned as soon as `index.html` existed, so every machine that already had a page would never have got the stylesheet. |
