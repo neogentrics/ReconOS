@@ -1433,6 +1433,84 @@ bool user_elf_test(void)
 	return false;
 }
 
+/* --- a socket, from ring 3 ---
+ *
+ * The five socket calls had a self-test that could not reach the thing they
+ * exist for. `socket_syscall_test` runs on a kernel thread, a kernel thread
+ * has no process, so `fd_install` fails there and every assertion it can make
+ * is about a refusal. The claim underneath -- **that a socket is an ordinary
+ * descriptor**, which is why there is no SYS_SEND and no SYS_RECV -- had
+ * nothing checking it.
+ *
+ * This runs `user/socket_probe.c` in ring 3 and reads its exit code. Not
+ * whether TCP works, which `net_self_test` covers and which would need a peer:
+ * whether a program can hold a socket the way it holds a file.
+ *
+ * The words below are the program's `enum`, in the same order. Two lists that
+ * must agree, in two files, which is the arrangement this project distrusts --
+ * but the alternative is a number with no sentence, and the program cannot
+ * print because a failing socket test is not a reason to trust its screen.
+ */
+bool user_socket_probe_test(void)
+{
+	extern const unsigned char user_socket_probe_image[];
+	extern const u64 user_socket_probe_image_len;
+
+	static const char *const why[] = {
+		"it ran and did not report",			/* 0 */
+		"SYS_SOCKET did not return a descriptor",
+		"the descriptor it returned was 0, 1 or 2 -- a socket is not "
+			"coming from the same numbering as every other file",
+		"SYS_BIND refused a socket it had just made",
+		"SYS_LISTEN refused a socket it had just bound",
+		"SYS_ACCEPT returned a connection nobody made",
+		"SYS_CLOSE would not take a socket descriptor",
+		"closing the same descriptor twice was allowed",
+		"a socket type nobody defined was accepted",
+		"a closed descriptor still reached the socket layer",
+		"SYS_BIND accepted a pipe's descriptor -- a socket call is trusting the number instead of what it names",
+		"SYS_PIPE would not make a pipe to test against",
+	};
+
+	u64 exits_before  = exits;
+	u64 calls_before  = calls_served;
+	u64 faults_before = faults;
+	enum elf_result r = ELF_OK;
+	struct thread *t;
+	u64 deadline;
+
+	t = user_elf_create("socket-probe", user_socket_probe_image,
+			    user_socket_probe_image_len, &r);
+	if (!t) {
+		kprintf("  socket: could not start the probe%s%s\n",
+			r == ELF_OK ? "" : " -- ",
+			r == ELF_OK ? "" : elf_why(r));
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  socket: the probe never reached its exit call\n");
+		say_how_far_it_got(t, calls_before, faults_before);
+		return false;
+	}
+
+	if (last_exit_code == 55)
+		return true;
+
+	if (last_exit_code > 0 &&
+	    (u64)last_exit_code < sizeof(why) / sizeof(why[0]))
+		kprintf("  socket: %s\n", why[last_exit_code]);
+	else
+		kprintf("  socket: the probe exited with %ld, which is not one "
+			"of its own codes\n", (long)last_exit_code);
+
+	return false;
+}
+
 /*
  * --- A program written in C ---
  *

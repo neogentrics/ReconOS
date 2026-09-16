@@ -440,6 +440,8 @@ void kmain(void)
 		net_self_test() ? "pass" : "FAIL");
 	kprintf("  sockets a program can reach : %s\n",
 		socket_syscall_test() ? "pass" : "FAIL");
+	kprintf("  a socket held by a program   : %s\n",
+		user_socket_probe_test() ? "pass" : "FAIL");
 
 	/* From here to the kernel-log summary is per-subsystem detail: lock
 	 * contention, cache hit rates, the timer wheel's reach. It still goes

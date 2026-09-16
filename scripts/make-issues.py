@@ -198,6 +198,12 @@ AREA = {
     'KF-234': 'kernel',
     'KF-235': 'kernel',
     'KF-236': 'kernel',
+    'KF-237': 'storage',
+    'KF-238': 'kernel',
+    'KF-239': 'kernel',
+    'KF-240': 'kernel',
+    'KF-241': 'storage',
+    'KF-242': 'kernel',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',

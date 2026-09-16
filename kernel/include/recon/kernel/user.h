@@ -402,6 +402,11 @@ bool user_framebuffer_test(void);
  * refused. See the comment on the implementation. */
 bool user_power_test(void);
 
+/* Runs a ring-3 program that makes a socket, binds, listens, accepts and
+ * closes it -- the one claim `socket_syscall_test` cannot reach, because a
+ * kernel thread has no descriptor table. */
+bool user_socket_probe_test(void);
+
 /* A program that signals itself, handles it, and carries on. */
 bool user_signal_test(void);
 
