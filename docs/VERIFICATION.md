@@ -347,3 +347,35 @@ None.
   `HTTP_BODY_MAX` says 64 KiB and the deadline admits about fifteen. The two
   numbers measure different things and both are true; they will agree again
   when the kernel entry is answered.
+
+### VF-014 -- fifteen suites, none of which could see the worst limitation
+
+- **Found in** the connection pool, 16 September 2026. **Found by** writing the
+  suite for it and noticing what the existing ones did not cover.
+- **What it was** `docs/WEB.md` called single-connection serving *the most
+  serious limitation in this document* -- a denial of service costing the
+  attacker one socket -- and 548 checks across fourteen suites had nothing to
+  say about it. Not one of them failed, and not one of them could have.
+- **Why not** Every suite opens one connection, exchanges, and closes. That is
+  the shape that behaves identically whether the server handles one connection
+  or a hundred. The limitation was known, written down, and untested, and the
+  test coverage was excellent everywhere the limitation was not.
+- **The new suite fails 4 of 12 against the old server**, and the eight that
+  pass are the interesting half: the stuck client is still served correctly,
+  with the whole body, across both halves of its request. **A suite that
+  follows one client would call the old server perfectly good.**
+- **And the document was wrong about the cause.** It said the fix needed *the
+  kernel to report readiness on more than a listener; today `accept` is the
+  only call that answers `EAGAIN`*. `recv` reports readiness too -- 0 with
+  `errno` 0 -- and always had. It was being read as a closed connection, which
+  is VF-013.
+
+  So the missing capability and the silent bug were the same fact seen from two
+  sides, and both were written down separately without either being recognised
+  in the other. The concurrency was not blocked on the kernel; it was blocked
+  on a misreading that had also been quietly breaking every request over 4 KiB.
+- **Why it belongs here** Two entries in a row where the answer was already in
+  the tree. VF-010 was a fix applied in one file and not the one next to it;
+  this is a capability described as absent while the code depended on it
+  working. **Reading what is written down is not the same as checking it**, and
+  a limitation nobody tests is a limitation nobody has to be right about.

@@ -66,6 +66,19 @@ So the receive path handles 20 KB happily when it arrives in small pieces and
 stalls on 3.7 KB when it arrives at once. The break is at roughly two segments'
 worth -- 2880 is 2 x 1440.
 
+### What it is not: the server taking the processor
+
+The obvious guess is that a single-process server asking for bytes in a tight
+loop starves whatever would deliver them. **Measured, and it is not that.**
+
+`SYS_YIELD` was put in both loops -- the receive retry and the `accept` spin --
+and the burst rate did not move: a 3700-byte burst took 5.14 s with the yields
+against 5.25 s without. If contention were the mechanism, giving the processor
+away several thousand times a second would have shown up.
+
+Recorded because it is the first thing anyone will suspect, and ruling it out
+is worth more than another table of the same numbers.
+
 ### What this looks like from here
 
 A receive buffer of about two segments that, once full, stops accepting and

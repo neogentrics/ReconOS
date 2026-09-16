@@ -1044,6 +1044,19 @@ add_executable(recon_server_multipart_tests
 
 add_test(NAME server_http_multipart COMMAND recon_server_multipart_tests)
 
+# Two clients, one of them stuck.
+#
+# The property the connection pool exists for, and one no single-request suite
+# can see: a client that stops sending must not stop anybody else. Before the
+# pool, a request stalled mid-body held the whole server until the receive
+# deadline -- fifteen seconds of nothing for every other client.
+add_executable(recon_server_concurrent_tests
+    server/http/request.c
+    server/http/serve.c
+    server/tests/test_http_concurrent.c)
+
+add_test(NAME server_http_concurrent COMMAND recon_server_concurrent_tests)
+
 # A ring of recent entries, and the count that stops it lying.
 #
 # A log that drops silently looks complete, reads plausibly, and has lost

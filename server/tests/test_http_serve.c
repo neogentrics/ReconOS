@@ -35,6 +35,7 @@
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <fcntl.h>
 
 static int failures;
 static int checks;
@@ -105,11 +106,20 @@ static const struct http_route ROUTES[] = {
  * exactly like a server that sent nothing. */
 static unsigned long *BYTES;
 
+/* What a host must do to a fresh socket so it behaves like one on the target.
+ * ReconOS passes NULL here: its sockets never block. See `serve.h`. */
+static void unblock(int fd)
+{
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+}
+
 static struct http_site SITE = {
-	/* The two trailing zeroes are `idle` and `now_ms`. On a host `recv`
-	 * blocks properly, so there is nothing to yield to and no stalled
-	 * read to put a deadline on. See `serve.h`. */
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1", 0, 0, 0, 0, 0
+	/* `idle` and `now_ms` are zero: on a host there is nothing to yield
+	 * to. `unblock` is not -- the server holds several connections at
+	 * once and a blocking socket would stop the loop on whichever one
+	 * went quiet. See `serve.h`. */
+	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1",
+	0, 0, 0, 0, 0, unblock
 };
 
 /* --- the client ---------------------------------------------------------- */
@@ -217,6 +227,25 @@ int main(void)
 		return 1;
 	}
 
+
+	/*
+	 * Make `accept` non-blocking, the way it already is on the kernel this
+	 * code targets.
+	 *
+	 * `serve.c` holds several connections at once and gives each a turn, so
+	 * it must be able to ask "is anyone new waiting?" and be told no. On
+	 * ReconOS there is no wait queue on a listener and `accept` answers
+	 * `EAGAIN` by itself; the host is the odd one out, and a blocking
+	 * `accept` there stops the whole loop -- including the connections
+	 * already in flight that are the only reason it would ever return.
+	 *
+	 * So the suite makes the host behave like the target. That is more
+	 * faithful than testing against a listener the real system does not
+	 * have, and `fcntl` is used here, in host-only test code, precisely
+	 * because `serve.c` cannot use it.
+	 */
+	fcntl(listener, F_SETFL, fcntl(listener, F_GETFL, 0) | O_NONBLOCK);
+
 	child = fork();
 	if (child < 0) {
 		printf("  FAIL  fork\n");
@@ -235,16 +264,24 @@ int main(void)
 		 * because it is indistinguishable from success. */
 		alarm(20);
 
-		/* Serve exactly as many connections as the parent opens, then
-		 * leave. A child that ran forever would hang the suite on any
-		 * failure, and a suite that can hang is a suite that gets
-		 * disabled. */
-		while (served < 28) {
+		/*
+		 * Run until the parent signals, bounded by the alarm above.
+		 *
+		 * This used to count connections and stop at 28, which stopped
+		 * meaning anything when `http_serve_once` became one step of a
+		 * multiplexing loop rather than one whole connection served.
+		 * The count is gone rather than adjusted: a number that has to
+		 * track how many steps a request takes is a number that will
+		 * be wrong after the next change to the loop.
+		 */
+		(void)served;
+		for (;;) {
 			int rc = http_serve_once(listener, &SITE);
 
 			if (rc < 0)
 				break;
-			served += rc;
+			if (rc == 0)
+				usleep(200);	/* nothing to do; do not spin */
 		}
 		close(listener);
 		_exit(0);

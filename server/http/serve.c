@@ -17,13 +17,25 @@
  * network, and a stand-in is looser than the real call in exactly the places a
  * server breaks.
  *
- * --- accept does not block on this kernel ---
+ * --- nothing blocks on this kernel, and that is what makes the pool possible ---
  *
  * There is no wait queue on a listener, so `accept` answers `EAGAIN` when
- * nobody is waiting. This file treats that as "not yet" rather than as an
- * error, which is also correct on a host where `accept` blocks and simply
- * never returns it. One loop, both systems, no `fcntl` -- which ReconOS does
- * not have.
+ * nobody is waiting. `recv` is the same: it answers 0 with `errno` 0 when
+ * nothing has arrived. Both are already non-blocking, which is why this file
+ * can hold several connections and give each a turn without `poll` or
+ * `select`, neither of which exists.
+ *
+ * **That was not understood for a long time.** `recv`'s zero was read as a
+ * closed connection, which silently dropped every request over about 4 KiB
+ * (VF-013), while `docs/WEB.md` recorded that concurrency was blocked on the
+ * kernel gaining exactly the capability it already had (VF-014).
+ *
+ * A host is the odd one out: there both calls block, and a blocking call stops
+ * the whole loop including the connections that would have freed it. So the
+ * host suites make their sockets non-blocking with `fcntl`, which this file
+ * cannot call because ReconOS does not have it -- the site supplies it through
+ * the `unblock` hook instead. One loop, both systems, and the one call that
+ * differs lives on the side that knows which system it is.
  */
 
 #include "serve.h"
@@ -133,10 +145,13 @@ static int send_all(int fd, const char *buf, size_t len,
  *
  * --- Why there is a bound at all ---
  *
- * This server is one process serving one connection at a time. A client that
- * sends half a request and stops would otherwise hold the whole machine, and
- * it does not have to be malicious to do it -- a laptop closing its lid does
- * the same thing.
+ * A client that sends half a request and stops would otherwise hold a slot for
+ * ever, and it does not have to be malicious to do it -- a laptop closing its
+ * lid does the same thing.
+ *
+ * Since the connection pool this is no longer the whole machine, which is the
+ * point of the pool. It is still a slot out of `HTTP_CONNS_MAX`, and enough
+ * quiet clients would still take all of them.
  *
  * --- Why fifteen seconds, and what it actually buys on this kernel ---
  *
@@ -625,88 +640,348 @@ static void note(const struct http_site *site, const struct http_request *req,
 	site->log(site->log_ctx, req, status, now - before);
 }
 
-/* --- one connection ------------------------------------------------------ */
+/* --- connections, several at once ----------------------------------------
+ *
+ * --- Why there is a pool here and not a process per connection ---
+ *
+ * There is no `fork`. A connection cannot be handed to anything else, so
+ * serving more than one at a time means holding more than one here.
+ *
+ * What makes that possible without `poll` or `select` -- neither of which
+ * exists -- is the same behaviour that caused VF-013: on this kernel `accept`
+ * answers `EAGAIN` with nobody waiting and `recv` answers 0 with nothing
+ * buffered. Both are already non-blocking. A loop that asks each connection
+ * for whatever it has and moves on is therefore the natural shape, not a
+ * workaround for a missing call.
+ *
+ * --- What is concurrent, stated exactly ---
+ *
+ * **Reading is. Answering is not.**
+ *
+ * Reading is the part that waits: a request arriving in a burst can take
+ * seconds, and until this existed those seconds belonged to nobody else. One
+ * upload held the whole machine -- measured at 15 seconds, because that is
+ * where `RECV_DEADLINE_MS` cut it off.
+ *
+ * Once a whole request is in hand, it is dispatched and answered without
+ * interruption. That is deliberate rather than unfinished: a handler writes
+ * into a response, or into a sink that goes straight to the socket, and making
+ * either resumable would mean every handler becoming a state machine. The
+ * answering is also the fast half -- handlers here read memory and `send_all`
+ * is bounded.
+ *
+ * So a slow *client* no longer blocks anyone. A slow *handler* still would.
+ * None of the handlers in this tree is slow, and the day one is, this comment
+ * is where the next person should start.
+ */
 
-static void serve_connection(int fd, const struct http_site *site)
+/*
+ * How many connections are held at once.
+ *
+ * Each slot carries its own `HTTP_CONN_BUF`, so this is the multiplier on the
+ * server's memory and not a free number. Four is chosen to be obviously
+ * affordable rather than by measurement; nothing here has been under enough
+ * load to justify a different one, and a number invented under no load is not
+ * a tuning decision worth pretending to.
+ *
+ * A fifth client is not refused -- it waits in the listen backlog, which is
+ * where a connection waits on every other server too.
+ */
+#define HTTP_CONNS_MAX 4
+
+/* Which half of a request a connection is in the middle of. */
+#define CONN_FREE  0
+#define CONN_HEAD  1	/* reading the request head */
+#define CONN_BODY  2	/* head parsed; reading the body it declared */
+
+struct http_conn {
+	int    fd;
+	int    state;
+	size_t have;		/* bytes in `buf` */
+	size_t need;		/* head + body, once the head is parsed */
+	int    requests;	/* answered on this connection so far */
+
+	/* Where the current wait started, and how many empty reads it has
+	 * taken. Reset when the head starts and again when the body does, so
+	 * the deadline is on silence rather than on size -- a long request
+	 * that keeps arriving is never cut off for being long. */
+	unsigned long stalls;
+	unsigned long since;
+
+	/* What the byte counter said when this request started, so the log can
+	 * report what this one cost. */
+	unsigned long sent_before;
+
+	struct http_request req;
+
+	char buf[HTTP_CONN_BUF];
+};
+
+/*
+ * The pool.
+ *
+ * Static rather than automatic: this is far more than a user process on this
+ * system should assume it has in stack, and it must outlive any one call.
+ */
+static struct http_conn CONNS[HTTP_CONNS_MAX];
+
+static void conn_drop(struct http_conn *c)
 {
-	/* Static rather than automatic: one connection is served at a time, and
-	 * 72 KiB is more stack than a user process on this system should assume
-	 * it has. Safe precisely because the server is single-threaded, which is
-	 * itself recorded as a limitation in `docs/WEB.md`. */
-	static char buf[HTTP_CONN_BUF];
-	size_t have = 0;
-	unsigned long stalls = 0;
-	int got;
-	/* When the current wait started. Reset for the head and again for the
-	 * body, so a long request that keeps arriving is never cut off for
-	 * being long -- the deadline is on silence, not on size. */
-	unsigned long since = 0;
-	int requests = 0;
+	if (c->fd >= 0)
+		close(c->fd);
+	c->fd = -1;
+	c->state = CONN_FREE;
+	c->have = 0;
+	c->requests = 0;
+}
+
+/* Move whatever arrived after this request to the front, and go round again.
+ * A client may pipeline, and those bytes are the next request. */
+static void conn_next(struct http_conn *c)
+{
+	size_t used = c->req.head_length + c->req.content_length;
+	size_t left = c->have - used;
+	size_t k;
+
+	for (k = 0; k < left; k++)
+		c->buf[k] = c->buf[used + k];
+	c->have = left;
+	c->requests++;
+	c->state = CONN_HEAD;
+	c->stalls = 0;
+}
+
+/*
+ * Answer one complete request.
+ *
+ * Everything from here to the end of the function ran inside the old
+ * `serve_connection` loop and is unchanged in substance: the request is whole,
+ * in `c->buf`, and this decides what to send back.
+ *
+ * Returns 1 to keep the connection, 0 to close it.
+ */
+static int conn_answer(struct http_conn *c, const struct http_site *site)
+{
+	struct http_request *req = &c->req;
+	struct http_response res;
+	char *buf = c->buf;
+	int fd = c->fd;
+	unsigned long sent_before = c->sent_before;
+	int verdict, keep, head_only, i, matched = 0;
+
+	head_only = (strcmp(req->method, "HEAD") == 0);
+	keep = req->keep_alive;
 
 	/* A bound on requests per connection. Not a performance decision: a
 	 * connection that is never closed is a descriptor that is never given
 	 * back, and this server has no timer to close an idle one with. */
-	while (requests < 64) {
-		struct http_request req;
-		struct http_response res;
-		int verdict, status, keep, head_only, i, matched = 0;
-		size_t need;
+	if (c->requests >= 64)
+		keep = 0;
 
-		/* What the counter said before this request, so the log can
-		 * report what this one cost. */
-		unsigned long sent_before =
-			site->bytes_sent ? *site->bytes_sent : 0;
+	/* Dispatch. A HEAD is routed as the GET it mirrors, so a site
+	 * never has to write each handler twice. */
+	http_response_simple(&res, 404, "text/plain", "404 Not Found\n", 14);
+	for (i = 0; (size_t)i < site->route_count; i++) {
+		const struct http_route *rt = &site->routes[i];
+		const char *m = head_only ? "GET" : req->method;
 
-		/* Read until the head is complete.
-		 *
-		 * `have > 0` is what tells a partly-read request from an idle
-		 * keep-alive connection: some of a head has arrived, so the
-		 * rest is coming. With nothing read yet, a zero means the
-		 * client is finished and the connection should close rather
-		 * than be spun on. See `read_more`. */
-		stalls = 0;
-		since = site->now_ms ? site->now_ms() : 0;
-		for (;;) {
-			verdict = http_request_parse(buf, have, &req);
-			if (verdict != HTTP_PARTIAL)
-				break;
-			if (have >= sizeof(buf)) {
-				send_status(fd, 431, site->server_name, site->bytes_sent);
-				return;
+		if (rt->method && strcmp(rt->method, m) != 0)
+			continue;
+		if (!prefix_matches(req->target, rt->prefix, rt->exact))
+			continue;
+
+		/* A route that is both, or neither, is a route whose
+		 * author had not decided. 500 rather than a precedence
+		 * rule: the fault is in the site, and answering it
+		 * plausibly would hide it. */
+		if ((rt->handler && rt->stream)
+		    || (!rt->handler && !rt->stream)) {
+			send_status(fd, 500, site->server_name,
+			            site->bytes_sent);
+			return 0;
+		}
+
+		if (rt->stream) {
+			struct http_sink sink;
+
+			memset(&sink, 0, sizeof(sink));
+			sink.fd = fd;
+			sink.head_only = head_only;
+			sink.keep_alive = keep;
+			sink.minor = req->minor;
+			sink.declared = HTTP_LENGTH_UNKNOWN;
+			sink.bytes_sent = site->bytes_sent;
+			sink.server_name = site->server_name;
+
+			verdict = rt->stream(req,
+			                     req->content_length ?
+			                         buf + req->head_length : 0,
+			                     req->content_length,
+			                     &sink,
+			                     rt->ctx ? rt->ctx : site->ctx);
+
+			/* Refused before anything reached the wire, so
+			 * a status can still be sent honestly. */
+			if (verdict != HTTP_OK && !sink.begun) {
+				int s = http_status_for(verdict);
+
+				if (s == 0)
+					s = 500;
+				send_status(fd, s, site->server_name,
+				            site->bytes_sent);
+				return 0;
 			}
-			got = read_more(fd, buf, &have, sizeof(buf),
-			                have > 0, &stalls, since, site);
+
+			{
+				int done = http_stream_end(&sink);
+
+				note(site, req, sink.status, sent_before);
+				if (done != HTTP_OK || verdict != HTTP_OK)
+					return 0;	/* framing in doubt;
+							 * close, do not reuse */
+			}
+
+			if (!sink.keep_alive)
+				return 0;
+
+			conn_next(c);
+			return 1;
+		}
+
+		verdict = rt->handler(req,
+		                      req->content_length ?
+		                          buf + req->head_length : 0,
+		                      req->content_length,
+		                      &res,
+		                      rt->ctx ? rt->ctx : site->ctx);
+		if (verdict != HTTP_OK) {
+			int s = http_status_for(verdict);
+
+			if (s == 0)
+				s = 500;
+			send_status(fd, s, site->server_name,
+			            site->bytes_sent);
+			return 0;
+		}
+		matched = 1;
+		break;
+	}
+
+	/* A path that exists under a route that does not take this
+	 * method is 405, not 404 -- the difference is whether the
+	 * resource is there, and a client can act on that. */
+	if (!matched) {
+		for (i = 0; (size_t)i < site->route_count; i++) {
+			const struct http_route *rt = &site->routes[i];
+
+			if (prefix_matches(req->target, rt->prefix,
+			                   rt->exact)) {
+				http_response_simple(&res, 405, "text/plain",
+				                     "405 Method Not Allowed\n",
+				                     23);
+				break;
+			}
+		}
+	}
+
+	if (res.close)
+		keep = 0;
+
+	if (send_response(fd, req, &res, site->server_name, keep,
+	                  head_only, site->bytes_sent) != 0) {
+		/* Logged even though the send failed. What was
+		 * attempted is the useful record; a request that
+		 * vanishes from the log because the client went away
+		 * is a request nobody can account for. */
+		note(site, req, res.status, sent_before);
+		return 0;
+	}
+	note(site, req, res.status, sent_before);
+
+	if (!keep)
+		return 0;
+
+	conn_next(c);
+	return 1;
+}
+
+/*
+ * Move one connection along by as much as it can go without waiting.
+ *
+ * Returns 1 if anything happened, 0 if the connection had nothing for us.
+ * Closes and frees the slot itself when the connection is finished.
+ *
+ * **Every read here is a single attempt.** The loops that used to surround
+ * them are gone; that is the whole change. A connection with nothing to give
+ * returns immediately so the next one gets a turn, and comes back to exactly
+ * where it was because the state is in the slot rather than on the stack.
+ */
+static int conn_step(struct http_conn *c, const struct http_site *site)
+{
+	const struct http_site *s = site;
+	int verdict, got;
+
+	if (c->state == CONN_HEAD) {
+		c->sent_before = s->bytes_sent ? *s->bytes_sent : 0;
+
+		verdict = http_request_parse(c->buf, c->have, &c->req);
+		if (verdict == HTTP_PARTIAL) {
+			if (c->have >= sizeof(c->buf)) {
+				send_status(c->fd, 431, s->server_name,
+				            s->bytes_sent);
+				conn_drop(c);
+				return 1;
+			}
+			/* `c->have > 0` is what tells a partly-read request
+			 * from an idle keep-alive connection: some of a head
+			 * has arrived, so the rest is coming. With nothing
+			 * read yet, a zero means the client is finished and
+			 * the connection should close rather than be spun on.
+			 * See `read_more`. */
+			if (c->have == 0)
+				c->since = s->now_ms ? s->now_ms() : 0;
+			got = read_more(c->fd, c->buf, &c->have,
+			                sizeof(c->buf), c->have > 0,
+			                &c->stalls, c->since, s);
 			if (got < 0) {
 				/* Half a request line, and then silence. The
 				 * client is owed an answer and the log is owed
-				 * an entry; `note` takes a NULL request because
-				 * there is none that could be described. */
-				send_status(fd, 408, site->server_name,
-				            site->bytes_sent);
-				note(site, 0, 408, sent_before);
-				return;
+				 * an entry; `note` takes a NULL request
+				 * because there is none that could be
+				 * described. */
+				send_status(c->fd, 408, s->server_name,
+				            s->bytes_sent);
+				note(s, 0, 408, c->sent_before);
+				conn_drop(c);
+				return 1;
 			}
-			if (!got)
-				return;	/* closed, or failed; nothing to say */
+			if (!got) {
+				conn_drop(c);
+				return 1;
+			}
+			return 1;
 		}
 
 		if (verdict != HTTP_OK) {
-			status = http_status_for(verdict);
-			send_status(fd, status, site->server_name, site->bytes_sent);
+			verdict = http_status_for(verdict);
+			send_status(c->fd, verdict, s->server_name,
+			            s->bytes_sent);
 
 			/* Logged with no request, because there is none that
 			 * could be described -- and a refused request is
 			 * exactly the entry somebody will come looking for. */
-			note(site, 0, status, sent_before);
-			return;		/* the framing is in doubt; do not
-					 * try to find the next request */
+			note(s, 0, verdict, c->sent_before);
+			conn_drop(c);	/* the framing is in doubt; do not try
+					 * to find the next request */
+			return 1;
 		}
 
-		/* Read the body, if one was framed. */
-		need = req.head_length + req.content_length;
-		if (need > sizeof(buf)) {
-			send_status(fd, 413, site->server_name, site->bytes_sent);
-			return;
+		/* The body, if one was framed. */
+		c->need = c->req.head_length + c->req.content_length;
+		if (c->need > sizeof(c->buf)) {
+			send_status(c->fd, 413, s->server_name, s->bytes_sent);
+			conn_drop(c);
+			return 1;
 		}
 
 		/*
@@ -714,36 +989,39 @@ static void serve_connection(int fd, const struct http_site *site)
 		 *
 		 * A client sending a large body may ask permission first: it
 		 * sends the head, waits, and only sends the body once the
-		 * server says carry on. **A server that never answers leaves it
-		 * waiting until its own timeout expires** -- typically a
+		 * server says carry on. **A server that never answers leaves
+		 * it waiting until its own timeout expires** -- typically a
 		 * second, sometimes much more -- and then it sends the body
 		 * anyway. Nothing fails, so nothing is reported; the request
 		 * merely takes a second longer than it should, every time.
 		 *
-		 * `curl` sends this on any body over about a kilobyte, so it is
-		 * not a rare shape. It is the most ordinary large POST there is.
+		 * `curl` sends this on any body over about a kilobyte, so it
+		 * is not a rare shape. It is the most ordinary large POST
+		 * there is.
 		 *
 		 * The interim reply is written straight to the socket rather
-		 * than through `send_response`, because it is not a response: it
-		 * carries no body, no length and none of the security headers,
-		 * and a real response follows it on the same connection. Putting
-		 * headers on it would have the client read them as the real
-		 * reply's.
+		 * than through `send_response`, because it is not a response:
+		 * it carries no body, no length and none of the security
+		 * headers, and a real response follows it on the same
+		 * connection. Putting headers on it would have the client read
+		 * them as the real reply's.
 		 *
 		 * Only for HTTP/1.1. The mechanism did not exist in 1.0, and a
 		 * 1.0 client handed an interim reply reads it as *the* reply.
 		 */
-		if (req.minor >= 1 && req.content_length > 0) {
-			const char *expect = http_header_get(&req, "expect");
+		if (c->req.minor >= 1 && c->req.content_length > 0) {
+			const char *expect = http_header_get(&c->req, "expect");
 
 			if (expect && seq_fold(expect, "100-continue")) {
 				static const char CARRY_ON[] =
 					"HTTP/1.1 100 Continue\r\n\r\n";
 
-				if (send_all(fd, CARRY_ON,
+				if (send_all(c->fd, CARRY_ON,
 				             sizeof(CARRY_ON) - 1,
-				             site->bytes_sent) != 0)
-					return;
+				             s->bytes_sent) != 0) {
+					conn_drop(c);
+					return 1;
+				}
 			} else if (expect) {
 				/*
 				 * An expectation this server does not
@@ -751,192 +1029,44 @@ static void serve_connection(int fd, const struct http_site *site)
 				 * client asked whether something would be
 				 * honoured, and silence would be read as yes.
 				 */
-				send_status(fd, 417, site->server_name,
-				            site->bytes_sent);
-				return;
-			}
-		}
-		/* The body. Always in progress by definition: the head has
-		 * been read and declared a length, so the bytes are promised.
-		 * A zero here is *not yet* every time. */
-		stalls = 0;
-		since = site->now_ms ? site->now_ms() : 0;
-		while (have < need) {
-			got = read_more(fd, buf, &have, sizeof(buf), 1, &stalls,
-			                since, site);
-			if (got < 0) {
-				/* The head arrived and declared a length the
-				 * body never reached. Unlike above there *is* a
-				 * request to describe, so the entry names the
-				 * target somebody will be looking for. */
-				send_status(fd, 408, site->server_name,
-				            site->bytes_sent);
-				note(site, &req, 408, sent_before);
-				return;
-			}
-			if (!got)
-				return;
-		}
-
-		head_only = (strcmp(req.method, "HEAD") == 0);
-		keep = req.keep_alive;
-
-		/* Dispatch. A HEAD is routed as the GET it mirrors, so a site
-		 * never has to write each handler twice. */
-		http_response_simple(&res, 404, "text/plain", "404 Not Found\n",
-		                     14);
-		for (i = 0; (size_t)i < site->route_count; i++) {
-			const struct http_route *rt = &site->routes[i];
-			const char *m = head_only ? "GET" : req.method;
-
-			if (rt->method && strcmp(rt->method, m) != 0)
-				continue;
-			if (!prefix_matches(req.target, rt->prefix, rt->exact))
-				continue;
-
-			/* A route that is both, or neither, is a route whose
-			 * author had not decided. 500 rather than a precedence
-			 * rule: the fault is in the site, and answering it
-			 * plausibly would hide it. */
-			if ((rt->handler && rt->stream)
-			    || (!rt->handler && !rt->stream)) {
-				send_status(fd, 500, site->server_name,
-				            site->bytes_sent);
-				return;
-			}
-
-			if (rt->stream) {
-				struct http_sink sink;
-
-				memset(&sink, 0, sizeof(sink));
-				sink.fd = fd;
-				sink.head_only = head_only;
-				sink.keep_alive = keep;
-				sink.minor = req.minor;
-				sink.declared = HTTP_LENGTH_UNKNOWN;
-				sink.bytes_sent = site->bytes_sent;
-				sink.server_name = site->server_name;
-
-				verdict = rt->stream(&req,
-				                     req.content_length ?
-				                         buf + req.head_length : 0,
-				                     req.content_length,
-				                     &sink,
-				                     rt->ctx ? rt->ctx : site->ctx);
-
-				/* Refused before anything reached the wire, so
-				 * a status can still be sent honestly. */
-				if (verdict != HTTP_OK && !sink.begun) {
-					int s = http_status_for(verdict);
-
-					if (s == 0)
-						s = 500;
-					send_status(fd, s, site->server_name,
-					            site->bytes_sent);
-					return;
-				}
-
-				{
-					int done = http_stream_end(&sink);
-
-					note(site, &req, sink.status,
-					     sent_before);
-					if (done != HTTP_OK
-					    || verdict != HTTP_OK)
-						return;	/* framing in doubt;
-							 * close, do not reuse */
-				}
-
-				if (!sink.keep_alive)
-					return;
-
-				/* Carry any pipelined bytes and go round. */
-				{
-					size_t used = req.head_length
-					            + req.content_length;
-					size_t left = have - used;
-					size_t k;
-
-					for (k = 0; k < left; k++)
-						buf[k] = buf[used + k];
-					have = left;
-				}
-				requests++;
-				matched = 2;
-				break;
-			}
-
-			verdict = rt->handler(&req,
-			                      req.content_length ?
-			                          buf + req.head_length : 0,
-			                      req.content_length,
-			                      &res,
-			                      rt->ctx ? rt->ctx : site->ctx);
-			if (verdict != HTTP_OK) {
-				int s = http_status_for(verdict);
-
-				if (s == 0)
-					s = 500;
-				send_status(fd, s, site->server_name,
-				            site->bytes_sent);
-				return;
-			}
-			matched = 1;
-			break;
-		}
-
-		/* A streaming route has already answered in full and moved the
-		 * buffer on. Nothing below applies to it. */
-		if (matched == 2)
-			continue;
-
-		/* A path that exists under a route that does not take this
-		 * method is 405, not 404 -- the difference is whether the
-		 * resource is there, and a client can act on that. */
-		if (!matched) {
-			for (i = 0; (size_t)i < site->route_count; i++) {
-				const struct http_route *rt = &site->routes[i];
-
-				if (prefix_matches(req.target, rt->prefix,
-				                   rt->exact)) {
-					http_response_simple(&res, 405,
-					                     "text/plain",
-					                     "405 Method Not Allowed\n",
-					                     23);
-					break;
-				}
+				send_status(c->fd, 417, s->server_name,
+				            s->bytes_sent);
+				conn_drop(c);
+				return 1;
 			}
 		}
 
-		if (res.close)
-			keep = 0;
-
-		if (send_response(fd, &req, &res, site->server_name, keep,
-		                  head_only, site->bytes_sent) != 0) {
-			/* Logged even though the send failed. What was
-			 * attempted is the useful record; a request that
-			 * vanishes from the log because the client went away
-			 * is a request nobody can account for. */
-			note(site, &req, res.status, sent_before);
-			return;
-		}
-		note(site, &req, res.status, sent_before);
-
-		if (!keep)
-			return;
-
-		/* Carry any bytes of the next request that already arrived. */
-		{
-			size_t used = req.head_length + req.content_length;
-			size_t left = have - used;
-			size_t k;
-
-			for (k = 0; k < left; k++)
-				buf[k] = buf[used + k];
-			have = left;
-		}
-		requests++;
+		c->state = CONN_BODY;
+		c->stalls = 0;
+		c->since = s->now_ms ? s->now_ms() : 0;
 	}
+
+	/* CONN_BODY. Always in progress by definition: the head has been read
+	 * and declared a length, so the bytes are promised. A zero here is
+	 * *not yet* every time. */
+	if (c->have < c->need) {
+		got = read_more(c->fd, c->buf, &c->have, sizeof(c->buf), 1,
+		                &c->stalls, c->since, s);
+		if (got < 0) {
+			/* The head arrived and declared a length the body
+			 * never reached. Unlike above there *is* a request to
+			 * describe, so the entry names the target somebody
+			 * will be looking for. */
+			send_status(c->fd, 408, s->server_name, s->bytes_sent);
+			note(s, &c->req, 408, c->sent_before);
+			conn_drop(c);
+			return 1;
+		}
+		if (!got) {
+			conn_drop(c);
+			return 1;
+		}
+		return 1;
+	}
+
+	if (!conn_answer(c, site))
+		conn_drop(c);
+	return 1;
 }
 
 /* --- the listener --------------------------------------------------------- */
@@ -971,18 +1101,69 @@ int http_listen(unsigned port)
 
 int http_serve_once(int listener, const struct http_site *site)
 {
-	int fd = accept(listener, 0, 0);
+	static int started;
+	int worked = 0;
+	int i, free_slot = -1;
 
-	if (fd < 0) {
-		/* Nobody waiting. The common answer on this kernel. */
-		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-			return 0;
-		return -1;
+	if (!started) {
+		for (i = 0; i < HTTP_CONNS_MAX; i++)
+			CONNS[i].fd = -1;
+		started = 1;
 	}
 
-	serve_connection(fd, site);
-	close(fd);
-	return 1;
+	for (i = 0; i < HTTP_CONNS_MAX; i++)
+		if (CONNS[i].fd < 0) {
+			free_slot = i;
+			break;
+		}
+
+	/*
+	 * Accept only with somewhere to put it.
+	 *
+	 * With every slot busy the connection stays in the listen backlog,
+	 * which is where a connection waits on every other server too.
+	 * Accepting it anyway and closing it would turn "wait a moment" into
+	 * "refused", and a client cannot tell the difference between a server
+	 * that is busy and one that is broken.
+	 *
+	 * **It also matters that this is not attempted at all when full.** On
+	 * a host `accept` blocks, so calling it with nowhere to put the result
+	 * would stop the whole loop -- including the connections that are
+	 * mid-request and the only reason a slot will ever free up.
+	 */
+	if (free_slot >= 0) {
+		int fd = accept(listener, 0, 0);
+
+		if (fd >= 0) {
+			struct http_conn *c = &CONNS[free_slot];
+
+			/* Whatever this system needs doing to a fresh socket
+			 * so it does not block. Nothing, on the target. */
+			if (site->unblock)
+				site->unblock(fd);
+
+			c->fd = fd;
+			c->state = CONN_HEAD;
+			c->have = 0;
+			c->need = 0;
+			c->requests = 0;
+			c->stalls = 0;
+			c->since = site->now_ms ? site->now_ms() : 0;
+			worked = 1;
+		} else if (errno != EAGAIN && errno != EWOULDBLOCK
+		           && errno != EINTR) {
+			/* Nobody waiting is the common answer on this kernel
+			 * and is not a failure. Anything else is. */
+			return -1;
+		}
+	}
+
+	/* Give every live connection a turn. */
+	for (i = 0; i < HTTP_CONNS_MAX; i++)
+		if (CONNS[i].fd >= 0)
+			worked |= conn_step(&CONNS[i], site);
+
+	return worked;
 }
 
 int http_serve_forever(int listener, const struct http_site *site)
@@ -992,10 +1173,31 @@ int http_serve_forever(int listener, const struct http_site *site)
 
 		if (rc < 0)
 			return rc;
-		/* rc == 0 is "nobody yet". There is no sleep here because
-		 * ReconOS has no timer call in user mode; `SYS_YIELD` is the
-		 * right thing and is reached through the library's `sched_
-		 * yield` when one exists. Until then this spins, and
-		 * `docs/WEB.md` carries the row. */
+
+		/*
+		 * `rc == 0` is "nobody yet", which on this kernel is the
+		 * common answer -- `accept` does not block.
+		 *
+		 * This used to spin, with a comment saying `SYS_YIELD` was the
+		 * right thing and would be reached "when one exists". It does
+		 * exist, and the site now carries it for the receive loop, so
+		 * the reason this was still a spin was that nobody came back
+		 * to the comment after the hook arrived.
+		 *
+		 * **It was expected to help with VF-013 and does not.** The
+		 * guess was that a server asking `accept` as fast as it can
+		 * competes with the work that would deliver the bytes it is
+		 * waiting for. Measured with the yield in both loops, a 3700-
+		 * byte burst took 5.14s against 5.25s without it -- which is
+		 * no change. Whatever stalls a burst is not this process
+		 * taking the processor, and the guess is written down because
+		 * it is the obvious one and the next person will have it too.
+		 *
+		 * Kept anyway. Burning a whole processor to wait is wrong on
+		 * its own terms, and on a machine with anything else to do it
+		 * is the difference between idle and busy.
+		 */
+		if (rc == 0 && site->idle)
+			site->idle();
 	}
 }

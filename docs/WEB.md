@@ -126,7 +126,7 @@ can run, not by what it can send.
 | **File download** | **built** | streams from the volume in 8 KiB blocks, and resumes: `Range`, `If-Range`, 206 and 416. |
 | **Server-sent events** | **unblocked** | the sink it needed now exists; the event framing is not written. |
 | **WebSocket** | specified | needs the `Upgrade` handshake, SHA-1 for the accept key, and a framing layer. The connection stops being HTTP after the handshake, so it needs its own loop. |
-| **Long-polling** | **blocked** | needs a request to be parked without occupying the only process. See concurrency below. |
+| **Long-polling** | **unblocked, not built** | a request can now be parked without occupying the only process — `HTTP_CONNS_MAX` of them. What is missing is a handler that can be resumed, since dispatch is still synchronous. |
 | **CGI-style external programs** | **blocked** | nothing in user mode can start a program — `KERNEL-WANTS.md` carries the entry. |
 | **FastCGI / a persistent app backend** | **blocked** | same, plus a socket to talk to it over. |
 | **Reverse proxy to another machine** | **blocked** | `connect` exists and does not work: it answers `SYS_OK` for a closed port and returns before the handshake. Measured 16 September; `KERNEL-WANTS.md` has it. This row previously said *buildable today*, which was wrong — see VF-009. |
@@ -154,20 +154,39 @@ contradiction.** A request framed two ways is dangerous because two *different*
 parsers must agree about a body neither wrote. A response this server frames is
 written by this server, once, with one framing chosen at `http_stream_begin`.
 
-**Concurrency.** The server is single-threaded and serves one connection to
-completion before accepting the next. A slow client therefore blocks every
-other client — which is not merely slow, it is a denial of service that costs
-the attacker one socket. This is the most serious limitation in this document
-and it is why long-polling is marked blocked rather than unwritten.
+~~**Concurrency.**~~ **Built**, 16 September, and the paragraph that stood here
+was wrong about why it could not be.
 
-The three ways out, in the order they become available:
+It said the server was single-threaded and served one connection to completion
+before accepting the next, which was true, and that the way out needed *the
+kernel to report readiness on more than a listener; today `accept` is the only
+call that answers `EAGAIN`*. That last part was not true. `recv` reports
+readiness too — it answers 0 with `errno` 0 when nothing has arrived — and it
+had been doing so all along. Nobody knew, because the code read that zero as a
+closed connection, which is the fault VF-013 is about.
 
-1. **A read deadline.** Partial: it bounds the damage rather than removing it,
-   and needs a timer call user mode does not have.
-2. **A process per connection.** Needs a way to start a program — blocked.
-3. **Non-blocking sockets and a poll loop.** The right answer. Needs the
-   kernel to report readiness on more than a listener; today `accept` is the
-   only call that answers `EAGAIN`.
+So the capability that was said to be missing was the same behaviour that was
+silently breaking every request over 4 KiB. Finding the bug is what revealed
+the feature.
+
+`serve.c` now holds `HTTP_CONNS_MAX` connections and gives each a turn. What is
+concurrent is **reading**, which is where the seconds are: a stalled request no
+longer holds anybody else for the fifteen seconds of `RECV_DEADLINE_MS`.
+Dispatch and the response are still synchronous per request, deliberately —
+making a handler resumable would mean every handler becoming a state machine,
+and no handler here is slow.
+
+Measured on the machine: with one client stuck mid-body, three others were
+answered in about 0.2 s each. `server/tests/test_http_concurrent.c` is the
+suite, and against the previous `serve.c` — recovered from git and compiled
+unchanged — 4 of its 12 checks fail.
+
+The other two ways out, for the record:
+
+1. **A process per connection.** Still needs a way to start a program —
+   blocked.
+2. **A blocking `recv` with a timeout.** Would make the loop cheaper rather
+   than more capable; it is in `docs/KERNEL-WANTS.md` for that reason.
 
 ### A field given twice has no value
 
@@ -397,8 +416,9 @@ Each step is chosen so the thing before it is what makes it possible.
    hash rather than a modification time, because this C library has no `stat`
    — which costs a second read of every file and buys a validator that changes
    when the content does and not when anything else does.
-8. **Concurrency**, once the kernel can report readiness on more than a
-   listener.
+8. ~~**Concurrency**~~ **Built**, 16 September. Not by waiting for a new
+   kernel call — by discovering that the one needed already existed and was
+   being misread. See above, and VF-013.
 9. **TLS**, and with it Basic auth, HSTS, HTTP/2 and SNI. Everything in
    section 5 waits on this.
 

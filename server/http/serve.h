@@ -327,6 +327,26 @@ struct http_site {
 	 * is never reached.
 	 */
 	unsigned long (*now_ms)(void);
+
+	/*
+	 * Called on each newly accepted socket, or NULL.
+	 *
+	 * **It exists so a host can behave like the target, and ReconOS passes
+	 * NULL.** On ReconOS a socket never blocks: `recv` with nothing
+	 * buffered answers 0 and returns. That is what lets this server hold
+	 * several connections and give each a turn without `poll`, which does
+	 * not exist here.
+	 *
+	 * A host socket blocks, so a connection that has gone quiet stops the
+	 * whole loop -- including the other connections, which is the exact
+	 * property the pool exists to provide. The host suites pass a function
+	 * that sets `O_NONBLOCK`.
+	 *
+	 * `serve.c` cannot do it itself: `fcntl` is not available on ReconOS,
+	 * and this file is compiled unchanged for both. The hook keeps the one
+	 * call that differs on the side that knows which system it is.
+	 */
+	void (*unblock)(int fd);
 };
 
 /* Open a listening socket on `port`, bound to every address.
