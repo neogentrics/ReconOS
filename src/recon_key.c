@@ -325,3 +325,301 @@ recon_keysym recon_key_from_name(const char *name) {
 
     return RECON_KEY_NoSymbol;
 }
+
+/* --- The machine's own keyboard ----------------------------------------- */
+
+/*
+ * One row of the layout: what a key produces, plain and with Shift.
+ *
+ * Indexed by USB HID usage code. The gaps are keys this layout has no meaning
+ * for, and they stay `RECON_KEY_NoSymbol` -- **a real answer**, because a
+ * keyboard can send a code for a key nobody here has and inventing a letter
+ * for it would type something the person did not press.
+ */
+struct layout_row {
+    recon_keysym plain;
+    recon_keysym shifted;
+};
+
+/*
+ * The US layout, by HID usage code.
+ *
+ * The letters and digits are runs and are filled in by the lookup rather than
+ * written out a hundred times -- `KEY_A` is 4 and `KEY_Z` is 29, contiguous,
+ * which `kernel/include/recon/kernel/input.h` states by naming only the two
+ * ends. What is written out is everything that is *not* a run, because that is
+ * where a table earns its place: the punctuation, where plain and shifted have
+ * no arithmetic relationship at all.
+ */
+#define HID_A            4
+#define HID_Z            29
+#define HID_1            30
+#define HID_9            38
+#define HID_0            39
+#define HID_ENTER        40
+#define HID_ESCAPE       41
+#define HID_BACKSPACE    42
+#define HID_TAB          43
+#define HID_SPACE        44
+#define HID_MINUS        45
+#define HID_EQUAL        46
+#define HID_LEFTBRACKET  47
+#define HID_RIGHTBRACKET 48
+#define HID_BACKSLASH    49
+#define HID_NONUS_HASH   50
+#define HID_SEMICOLON    51
+#define HID_APOSTROPHE   52
+#define HID_GRAVE        53
+#define HID_COMMA        54
+#define HID_PERIOD       55
+#define HID_SLASH        56
+#define HID_CAPSLOCK     57
+#define HID_F1           58
+#define HID_F12          69
+#define HID_PRINTSCREEN  70
+#define HID_SCROLLLOCK   71
+#define HID_PAUSE        72
+#define HID_INSERT       73
+#define HID_HOME         74
+#define HID_PAGEUP       75
+#define HID_DELETE       76
+#define HID_END          77
+#define HID_PAGEDOWN     78
+#define HID_RIGHT        79
+#define HID_LEFT         80
+#define HID_DOWN         81
+#define HID_UP           82
+#define HID_NUMLOCK      83
+#define HID_KP_DIVIDE    84
+#define HID_KP_MULTIPLY  85
+#define HID_KP_MINUS     86
+#define HID_KP_PLUS      87
+#define HID_KP_ENTER     88
+#define HID_KP_1         89
+#define HID_KP_9         97
+#define HID_KP_0         98
+#define HID_KP_PERIOD    99
+#define HID_LEFTCTRL     224
+#define HID_LEFTSHIFT    225
+#define HID_LEFTALT      226
+#define HID_LEFTMETA     227
+#define HID_RIGHTCTRL    228
+#define HID_RIGHTSHIFT   229
+#define HID_LEFTALT_GR   230
+#define HID_RIGHTMETA    231
+
+#define HID_MAX 232
+
+static const struct layout_row US[HID_MAX] = {
+    /*
+     * The punctuation, where plain and shifted are unrelated numbers and a
+     * table is the only honest way to say so.
+     */
+    [HID_MINUS]         = { RECON_KEY_minus,        RECON_KEY_underscore },
+    [HID_EQUAL]         = { RECON_KEY_equal,        RECON_KEY_plus },
+    [HID_LEFTBRACKET]   = { RECON_KEY_bracketleft,  RECON_KEY_braceleft },
+    [HID_RIGHTBRACKET]  = { RECON_KEY_bracketright, RECON_KEY_braceright },
+    [HID_BACKSLASH]     = { RECON_KEY_backslash,    RECON_KEY_bar },
+    /*
+     * The key a US keyboard does not have, and which arrives anyway.
+     *
+     * HID 50 is the extra key beside the left Shift on most of the world's
+     * keyboards. On a US layout it produces what the backslash key does, which
+     * is what every other system does with it -- and is better than nothing,
+     * because somebody typing on a board that has it gets a character rather
+     * than silence.
+     */
+    [HID_NONUS_HASH]    = { RECON_KEY_backslash,    RECON_KEY_bar },
+    [HID_SEMICOLON]     = { RECON_KEY_semicolon,    RECON_KEY_colon },
+    [HID_APOSTROPHE]    = { RECON_KEY_apostrophe,   RECON_KEY_quotedbl },
+    [HID_GRAVE]         = { RECON_KEY_grave,        RECON_KEY_asciitilde },
+    [HID_COMMA]         = { RECON_KEY_comma,        RECON_KEY_less },
+    [HID_PERIOD]        = { RECON_KEY_period,       RECON_KEY_greater },
+    [HID_SLASH]         = { RECON_KEY_slash,        RECON_KEY_question },
+
+    /* The ones that are the same whatever is held. */
+    [HID_ENTER]         = { RECON_KEY_Return,       RECON_KEY_Return },
+    [HID_ESCAPE]        = { RECON_KEY_Escape,       RECON_KEY_Escape },
+    [HID_BACKSPACE]     = { RECON_KEY_BackSpace,    RECON_KEY_BackSpace },
+    [HID_SPACE]         = { RECON_KEY_space,        RECON_KEY_space },
+    [HID_CAPSLOCK]      = { RECON_KEY_Caps_Lock,    RECON_KEY_Caps_Lock },
+
+    /*
+     * Tab, and the one key whose shifted form is a different key entirely.
+     *
+     * Shift-Tab is `ISO_Left_Tab`, not Tab -- which is how every toolkit
+     * written since X11 tells "move to the next control" from "move to the
+     * previous one". A layout that returned plain Tab for both would make
+     * Shift-Tab walk forwards, and the fault would look like a focus bug
+     * rather than a keyboard one.
+     */
+    [HID_TAB]           = { RECON_KEY_Tab,          RECON_KEY_ISO_Left_Tab },
+
+    [HID_PRINTSCREEN]   = { RECON_KEY_Print,        RECON_KEY_Print },
+    [HID_SCROLLLOCK]    = { RECON_KEY_Scroll_Lock,  RECON_KEY_Scroll_Lock },
+    [HID_PAUSE]         = { RECON_KEY_Pause,        RECON_KEY_Pause },
+    [HID_INSERT]        = { RECON_KEY_Insert,       RECON_KEY_Insert },
+    [HID_HOME]          = { RECON_KEY_Home,         RECON_KEY_Home },
+    [HID_PAGEUP]        = { RECON_KEY_Page_Up,      RECON_KEY_Page_Up },
+    [HID_DELETE]        = { RECON_KEY_Delete,       RECON_KEY_Delete },
+    [HID_END]           = { RECON_KEY_End,          RECON_KEY_End },
+    [HID_PAGEDOWN]      = { RECON_KEY_Page_Down,    RECON_KEY_Page_Down },
+    [HID_RIGHT]         = { RECON_KEY_Right,        RECON_KEY_Right },
+    [HID_LEFT]          = { RECON_KEY_Left,         RECON_KEY_Left },
+    [HID_DOWN]          = { RECON_KEY_Down,         RECON_KEY_Down },
+    [HID_UP]            = { RECON_KEY_Up,           RECON_KEY_Up },
+    [HID_NUMLOCK]       = { RECON_KEY_Num_Lock,     RECON_KEY_Num_Lock },
+
+    /*
+     * The keypad, as the keys it prints.
+     *
+     * Not as the navigation the keys *also* mean with Num Lock off -- this
+     * machine has no Num Lock state to consult, and the kernel sends the same
+     * code either way. Somebody who presses the 7 on the number pad meant a
+     * seven; that is the same argument `recon_key_to_char` makes about the
+     * same keys, and the two agree on purpose.
+     */
+    [HID_KP_DIVIDE]     = { RECON_KEY_KP_Divide,    RECON_KEY_KP_Divide },
+    [HID_KP_MULTIPLY]   = { RECON_KEY_KP_Multiply,  RECON_KEY_KP_Multiply },
+    [HID_KP_MINUS]      = { RECON_KEY_KP_Subtract,  RECON_KEY_KP_Subtract },
+    [HID_KP_PLUS]       = { RECON_KEY_KP_Add,       RECON_KEY_KP_Add },
+    [HID_KP_ENTER]      = { RECON_KEY_KP_Enter,     RECON_KEY_KP_Enter },
+    [HID_KP_PERIOD]     = { RECON_KEY_KP_Decimal,   RECON_KEY_KP_Decimal },
+
+    /* The modifiers themselves, which are keys too and have names. */
+    [HID_LEFTCTRL]      = { RECON_KEY_Control_L,    RECON_KEY_Control_L },
+    [HID_LEFTSHIFT]     = { RECON_KEY_Shift_L,      RECON_KEY_Shift_L },
+    [HID_LEFTALT]       = { RECON_KEY_Alt_L,        RECON_KEY_Alt_L },
+    [HID_LEFTMETA]      = { RECON_KEY_Super_L,      RECON_KEY_Super_L },
+    [HID_RIGHTCTRL]     = { RECON_KEY_Control_R,    RECON_KEY_Control_R },
+    [HID_RIGHTSHIFT]    = { RECON_KEY_Shift_R,      RECON_KEY_Shift_R },
+    [HID_LEFTALT_GR]    = { RECON_KEY_Alt_R,        RECON_KEY_Alt_R },
+    [HID_RIGHTMETA]     = { RECON_KEY_Super_R,      RECON_KEY_Super_R },
+};
+
+/*
+ * The digits, whose shifted forms are the one part of a US keyboard with no
+ * pattern at all: 1 gives !, 2 gives @, 3 gives #, and so on with no rule
+ * anybody could derive. Written down in the order the keys sit.
+ */
+static const recon_keysym DIGIT_SHIFTED[10] = {
+    RECON_KEY_exclam,      /* 1 */
+    RECON_KEY_at,          /* 2 */
+    RECON_KEY_numbersign,  /* 3 */
+    RECON_KEY_dollar,      /* 4 */
+    RECON_KEY_percent,     /* 5 */
+    RECON_KEY_asciicircum, /* 6 */
+    RECON_KEY_ampersand,   /* 7 */
+    RECON_KEY_asterisk,    /* 8 */
+    RECON_KEY_parenleft,   /* 9 */
+    RECON_KEY_parenright,  /* 0 */
+};
+
+recon_keysym recon_key_from_hid(unsigned keycode, unsigned modifiers)
+{
+    bool shift = (modifiers & RECON_MOD_SHIFT) != 0;
+    bool caps = (modifiers & RECON_MOD_CAPS) != 0;
+
+    /*
+     * Letters, where Shift and Caps Lock combine by *exclusive or*.
+     *
+     * Caps on and Shift held gives a small letter, which is what a keyboard
+     * does and what somebody holding Shift to "undo" Caps Lock expects. A
+     * layout that treated them as "either one capitalises" would make Caps
+     * Lock impossible to type around.
+     */
+    if (keycode >= HID_A && keycode <= HID_Z) {
+        unsigned n = keycode - HID_A;
+        return (shift != caps)
+            ? (recon_keysym)(RECON_KEY_A + n)
+            : (recon_keysym)(RECON_KEY_a + n);
+    }
+
+    /*
+     * Digits, where Caps Lock does nothing.
+     *
+     * Shift-2 is an at-sign whether or not Caps Lock is on. Everybody who has
+     * used a keyboard knows this and almost nobody writes it down, which is
+     * exactly why it is written down here -- it is one `||` away from being
+     * wrong, and the fault would be somebody's password typing as `@` when
+     * they meant `2`.
+     */
+    if (keycode >= HID_1 && keycode <= HID_0) {
+        unsigned n = (keycode == HID_0) ? 9 : (keycode - HID_1);
+        if (shift) {
+            return DIGIT_SHIFTED[n];
+        }
+        return (keycode == HID_0)
+            ? RECON_KEY_0
+            : (recon_keysym)(RECON_KEY_1 + n);
+    }
+
+    /* The keypad digits, which are their own keys and not the number row. */
+    if (keycode >= HID_KP_1 && keycode <= HID_KP_9) {
+        return (recon_keysym)(RECON_KEY_KP_1 + (keycode - HID_KP_1));
+    }
+    if (keycode == HID_KP_0) {
+        return RECON_KEY_KP_0;
+    }
+
+    /* The function keys, which are a run like the letters. */
+    if (keycode >= HID_F1 && keycode <= HID_F12) {
+        return (recon_keysym)(RECON_KEY_F1 + (keycode - HID_F1));
+    }
+
+    if (keycode >= HID_MAX) {
+        return RECON_KEY_NoSymbol;
+    }
+
+    return shift ? US[keycode].shifted : US[keycode].plain;
+}
+
+unsigned recon_key_modifiers_after(unsigned held, unsigned keycode,
+    bool pressed)
+{
+    unsigned bit = 0;
+
+    switch (keycode) {
+    case HID_LEFTCTRL:
+    case HID_RIGHTCTRL:
+        bit = RECON_MOD_CTRL;
+        break;
+    case HID_LEFTSHIFT:
+    case HID_RIGHTSHIFT:
+        bit = RECON_MOD_SHIFT;
+        break;
+    case HID_LEFTALT:
+    case HID_LEFTALT_GR:
+        bit = RECON_MOD_ALT;
+        break;
+    case HID_LEFTMETA:
+    case HID_RIGHTMETA:
+        bit = RECON_MOD_LOGO;
+        break;
+
+    case HID_CAPSLOCK:
+        /*
+         * **A latch, not something held.** It turns over on a press and does
+         * nothing on a release -- which is the whole difference between it
+         * and Shift, and the reason it is a separate case rather than another
+         * bit in the list above.
+         */
+        return pressed ? (held ^ RECON_MOD_CAPS) : held;
+
+    default:
+        /* Not a modifier. Nothing about what is held has changed. */
+        return held;
+    }
+
+    /*
+     * A release clears the bit whether or not a press was ever seen.
+     *
+     * The kernel's own queue makes the same choice about a release for a key
+     * nobody saw pressed -- *"a no-op, never a decrement"* -- and the reason
+     * is the same one: the machine's idea of what is held has to be able to
+     * recover from having missed something. A Shift that is stuck on because
+     * one event was lost is a keyboard that types in capitals until it is
+     * rebooted.
+     */
+    return pressed ? (held | bit) : (held & ~bit);
+}

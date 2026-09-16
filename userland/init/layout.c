@@ -35,6 +35,16 @@ const char *const RECON_LAYOUT[] = {
 	"/System/Config",	/* settings */
 	"/System/Themes",	/* skins */
 	"/System/Icons",	/* icon sets */
+
+	/*
+	 * The machine's own fonts.
+	 *
+	 * There is no /usr/share/fonts here, which is the whole reason this
+	 * entry exists: a desktop with no font draws nothing a person can read.
+	 * A medium carries DejaVu Sans and Sans Mono and the installer writes
+	 * them here.
+	 */
+	"/System/Fonts",
 	"/System/Modules",	/* the .rex and .rts a session loads */
 	"/System/Logs",		/* including the boot report */
 

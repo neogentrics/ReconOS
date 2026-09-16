@@ -148,6 +148,46 @@ above -- so it is worth having, second.
 
 ---
 
+## A machine has no font, and the medium is carrying two
+
+**Where:** answering "how long until the desktop runs on the kernel", 16
+September 2026. The answer had three parts and this is the smallest of them.
+
+The desktop reads fonts from `/usr/share/fonts/...`. A machine running the
+ReconOS kernel has no `/usr/share` at all, and **a desktop with no font draws
+nothing anybody can read** — not a degraded screen, a blank one.
+
+**Everything except one copy is done, and it was done on this side:**
+
+- `scripts/make-medium.sh` puts **DejaVu Sans** at `/reconos/fonts/Sans.ttf`
+  and **DejaVu Sans Mono** at `/reconos/fonts/Mono.ttf` on the medium, with the
+  licence beside them at `/reconos/fonts/COPYRIGHT` — the terms say a copy
+  carries the notice, and a stick with the font on it is a copy. Verified on a
+  built image: 759,720 and 343,140 bytes, and 3,859 of notice.
+- `/System/Fonts` is the eleventh directory of the volume layout
+  (`include/recon_fs.h` and `userland/init/layout.c`, which a suite holds to
+  each other in both directions). Every boot lays it down, the same as the
+  other ten.
+- `src/recon_ui.c` looks in `/System/Fonts/Sans.ttf` and `Mono.ttf` **before**
+  the host's paths, so a machine that has been given fonts of its own uses
+  them, and Linux falls through to `/usr/share` exactly as before.
+
+**What is left is one function**, next to `install_copy_system` in
+`kernel/core/install_copy.c`: read `/reconos/fonts/*` off the medium's EFI
+partition and write it to `/System/Fonts/` on the ReconFS volume. The same
+shape as the system copy that file already does — FAT32 in, ReconFS out — and
+against files that are on the medium today rather than files somebody has to
+produce first.
+
+**And absent should be tolerated the way a missing system is**, for the reason
+that entry already gives: *"refusing the whole install would turn a medium that
+is merely older into a machine that will not start."* A medium built before
+this existed has no `/reconos/fonts`, and a disk installed from one should
+still boot — with no font, and saying so, which is a legible failure rather
+than a blank screen.
+
+---
+
 ## The desktop's drawing can run on ReconOS, and nothing builds it there
 
 **Where:** finishing the panel seam, 15 September 2026. Not a missing system
@@ -214,6 +254,22 @@ drawing touches, and all three are answered.
 calls landed. With sockets answered this is **the largest group left** in the C
 library, and it is the one standing between the desktop and its own filesystem
 layer: eight of the eleven symbols are called from `src/recon_fs.c`.
+
+> **Confirmed from the other end, 16 September 2026.** The kernel session asked
+> what a desktop program on the volume would have to be built from, and rather
+> than write a list from memory it was put to the linker: a small program that
+> draws a wallpaper, a window frame and some text, linked against an archive of
+> every source that builds freestanding.
+>
+> **It resolved everything except three symbols** — `recon_fs_write`,
+> `recon_fs_append` and `recon_fs_mkdir` — which come from `recon_theme.c` and
+> `recon_fonts.c`, both of which are core drawing and both of which have to
+> read and write their settings. So `src/recon_fs.c` is in a desktop program
+> whether or not anybody wanted it there, and that file is blocked here.
+>
+> Two instruments, from opposite directions, naming the same call. The entry
+> was written by counting call sites in the library; the probe knew nothing
+> about that and arrived at the same place.
 
 **What the desktop does today, measured with `nm` over its objects rather than
 with a grep** -- a grep counts the word and the linker counts the call:

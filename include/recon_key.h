@@ -45,6 +45,7 @@
 #ifndef RECON_KEY_H_INCLUDED
 #define RECON_KEY_H_INCLUDED
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /*
@@ -59,6 +60,27 @@ typedef uint32_t recon_keysym;
 
 /* No key. Zero, so a zeroed structure holds one by default. */
 #define RECON_KEY_NoSymbol ((recon_keysym)0)
+
+/*
+ * What is held down while a key is pressed.
+ *
+ * These were in `recon_appwin.h`, named "as the compositor reports them",
+ * and the values match `wlr_keyboard_modifier` because that is what arrives
+ * on Linux. They are here now because **the ReconOS kernel reports the same
+ * set from its own keyboard**, and a modifier is a fact about a key rather
+ * than about a window.
+ *
+ * `CAPS` is the odd one and is worth naming: it is a *latch* rather than
+ * something held. It goes on and off on a press, and it affects letters and
+ * nothing else -- Shift-2 is an at-sign whether or not Caps Lock is on, which
+ * is the rule anybody who has typed on a keyboard knows and almost nobody has
+ * written down.
+ */
+#define RECON_MOD_SHIFT (1u << 0)
+#define RECON_MOD_CAPS  (1u << 1)
+#define RECON_MOD_CTRL  (1u << 2)
+#define RECON_MOD_ALT   (1u << 3)
+#define RECON_MOD_LOGO  (1u << 6)
 
 enum {
     /* --- printable, where the value is the character --- */
@@ -267,5 +289,55 @@ uint32_t recon_key_to_char(recon_keysym sym);
  * accepting a name for a key this system could never deliver.
  */
 recon_keysym recon_key_from_name(const char *name);
+
+/* --- what the machine's own keyboard sends ------------------------------ */
+
+/*
+ * The ReconOS kernel delivers **USB HID usage codes**, and they name
+ * *positions* rather than letters.
+ *
+ * That distinction is the whole reason this half exists. `KEY_A` is 4, and it
+ * is 4 whether the key under that finger produces an `a`, a `q` or an `\u00e4`
+ * -- the number says which switch closed. Turning it into a *meaning* needs a
+ * layout, and on Linux that is what xkbcommon does. This is that, for a
+ * machine with no xkbcommon on it.
+ *
+ * The numbering is not a choice either: `kernel/core/input.c` says it, and the
+ * reason is worth keeping in view -- *"USB HID is what every keyboard made
+ * this century actually reports, so a USB driver will hand these up with no
+ * translation at all. It is the PS/2 driver -- the older, stranger one -- that
+ * does the converting, which is the right way round."*
+ */
+
+/*
+ * What key it is, given what was held down.
+ *
+ * `RECON_KEY_NoSymbol` for a keycode this layout has no meaning for -- which
+ * is a real answer and not a failure: a keyboard can send a code for a key
+ * nobody here has, and inventing a letter for it would type something the
+ * person did not press.
+ *
+ * **Ctrl and Alt do not change which key it is.** Ctrl-C is the letter C with
+ * Ctrl held, not a control character -- the caller decides what that means,
+ * and a caller that wanted a character would get one it could not tell from a
+ * typed one. Shift and Caps Lock *do* change it, because they change what the
+ * key produces.
+ *
+ * One layout, `us`, because that is the one the machine has. A second one is
+ * a table and a way to choose it, and neither is written until something asks.
+ */
+recon_keysym recon_key_from_hid(unsigned keycode, unsigned modifiers);
+
+/*
+ * The modifiers after this event, given the ones before it.
+ *
+ * Pure, so that the thing which is easy to get wrong -- a latch, and two keys
+ * that set the same bit -- can be tested without a keyboard. A release of a
+ * modifier nobody saw pressed clears the bit and is not an error, the same way
+ * the kernel's queue treats a release nobody saw: the machine's idea of what
+ * is held has to be able to recover from having missed something.
+ */
+unsigned recon_key_modifiers_after(unsigned held, unsigned keycode,
+    bool pressed);
 
 #endif /* RECON_KEY_H_INCLUDED */

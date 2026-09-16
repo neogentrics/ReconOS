@@ -349,6 +349,268 @@ static void test_the_keypad(void) {
         "KP_Left is not a character");
 }
 
+/* --- The machine's own keyboard --- */
+
+/*
+ * The keycodes `kernel/include/recon/kernel/input.h` names, copied here.
+ *
+ * Copied rather than included: that header is the kernel's and pulls in the
+ * kernel's own types. What matters is that **every code the kernel can send
+ * has a meaning**, and the check below is what says so -- if the kernel names
+ * a new key and this list is updated without the layout being, it fails.
+ */
+static const struct {
+    unsigned code;
+    const char *what;
+} KERNEL_NAMES[] = {
+    { 4, "KEY_A" }, { 29, "KEY_Z" }, { 30, "KEY_1" }, { 39, "KEY_0" },
+    { 40, "KEY_ENTER" }, { 41, "KEY_ESCAPE" }, { 42, "KEY_BACKSPACE" },
+    { 43, "KEY_TAB" }, { 44, "KEY_SPACE" }, { 45, "KEY_MINUS" },
+    { 46, "KEY_EQUAL" }, { 57, "KEY_CAPSLOCK" }, { 58, "KEY_F1" },
+    { 69, "KEY_F12" }, { 79, "KEY_RIGHT" }, { 80, "KEY_LEFT" },
+    { 81, "KEY_DOWN" }, { 82, "KEY_UP" },
+    { 224, "KEY_LEFTCTRL" }, { 225, "KEY_LEFTSHIFT" },
+    { 226, "KEY_LEFTALT" }, { 227, "KEY_LEFTMETA" },
+    { 228, "KEY_RIGHTCTRL" }, { 229, "KEY_RIGHTSHIFT" },
+    { 230, "KEY_RIGHTALT" }, { 231, "KEY_RIGHTMETA" },
+};
+
+static void test_every_key_the_kernel_can_send(void) {
+    printf("every keycode the kernel names means something\n");
+
+    /*
+     * The one check that catches the layout drifting from the machine. A
+     * keycode the kernel can deliver and this cannot name is a key that does
+     * nothing when pressed -- and nothing else in this suite would notice,
+     * because every other check asks about a key it already knows.
+     */
+    int unnamed = 0;
+    for (size_t i = 0; i < sizeof(KERNEL_NAMES) / sizeof(KERNEL_NAMES[0]);
+            i++) {
+        if (recon_key_from_hid(KERNEL_NAMES[i].code, 0) ==
+                RECON_KEY_NoSymbol) {
+            printf("  FAIL: %s (%u) means nothing\n", KERNEL_NAMES[i].what,
+                KERNEL_NAMES[i].code);
+            unnamed++;
+        }
+    }
+    check(unnamed == 0, "every one of them has a meaning");
+
+    /* And the whole letter and digit runs, not just their ends. */
+    int gaps = 0;
+    for (unsigned c = 4; c <= 39; c++) {
+        if (recon_key_from_hid(c, 0) == RECON_KEY_NoSymbol) {
+            gaps++;
+        }
+    }
+    check(gaps == 0, "and so does every code between A and 0");
+}
+
+static void test_letters_and_the_two_that_change_them(void) {
+    printf("shift and caps lock, which do not simply add up\n");
+
+    check(recon_key_from_hid(4, 0) == RECON_KEY_a, "HID 4 is a");
+    check(recon_key_from_hid(29, 0) == RECON_KEY_z, "and HID 29 is z");
+    check(recon_key_from_hid(4, RECON_MOD_SHIFT) == RECON_KEY_A,
+        "with Shift it is A");
+    check(recon_key_from_hid(4, RECON_MOD_CAPS) == RECON_KEY_A,
+        "and with Caps Lock it is also A");
+
+    /*
+     * **Both together give a small letter**, which is what a keyboard does
+     * and what somebody holding Shift to type around Caps Lock expects. A
+     * layout where "either one capitalises" would make Caps Lock impossible
+     * to work around, and the fault would look like a stuck Shift.
+     */
+    check(recon_key_from_hid(4, RECON_MOD_SHIFT | RECON_MOD_CAPS) ==
+        RECON_KEY_a, "and with both it is a again");
+
+    /* Every letter, both ways, because one right by luck is what a broken
+     * run looks like. */
+    int wrong = 0;
+    for (unsigned n = 0; n < 26; n++) {
+        if (recon_key_from_hid(4 + n, 0) != (recon_keysym)(RECON_KEY_a + n) ||
+                recon_key_from_hid(4 + n, RECON_MOD_SHIFT) !=
+                    (recon_keysym)(RECON_KEY_A + n)) {
+            wrong++;
+        }
+    }
+    check(wrong == 0, "and all twenty-six behave the same way");
+}
+
+static void test_caps_lock_does_not_touch_the_digits(void) {
+    printf("Caps Lock is for letters, and only letters\n");
+
+    /*
+     * **Shift-2 is an at-sign whether or not Caps Lock is on.** Everybody who
+     * has used a keyboard knows it and almost nobody writes it down, which is
+     * why it is written down: the implementation is one `||` away from being
+     * wrong, and the fault would be somebody's password typing as `@` when
+     * they meant `2`.
+     */
+    check(recon_key_from_hid(31, RECON_MOD_CAPS) == RECON_KEY_2,
+        "Caps Lock and the 2 key gives a two");
+    check(recon_key_from_hid(31, RECON_MOD_SHIFT) == RECON_KEY_at,
+        "Shift and the 2 key gives an at-sign");
+    check(recon_key_from_hid(31, RECON_MOD_SHIFT | RECON_MOD_CAPS) ==
+        RECON_KEY_at, "and both together still gives an at-sign");
+
+    /* The number row in order, and the symbols above it, which have no rule. */
+    check(recon_key_from_hid(30, 0) == RECON_KEY_1, "HID 30 is 1");
+    check(recon_key_from_hid(39, 0) == RECON_KEY_0,
+        "and HID 39 is 0, which sits after 9 rather than before 1");
+    check(recon_key_from_hid(30, RECON_MOD_SHIFT) == RECON_KEY_exclam,
+        "Shift-1 is an exclamation mark");
+    check(recon_key_from_hid(38, RECON_MOD_SHIFT) == RECON_KEY_parenleft,
+        "Shift-9 is an opening bracket");
+    check(recon_key_from_hid(39, RECON_MOD_SHIFT) == RECON_KEY_parenright,
+        "and Shift-0 is a closing one");
+}
+
+static void test_shift_tab_is_a_different_key(void) {
+    printf("the one key whose shifted form is another key entirely\n");
+
+    /*
+     * Shift-Tab is `ISO_Left_Tab`, not Tab. It is how every toolkit written
+     * since X11 tells "next control" from "previous control" -- so a layout
+     * returning plain Tab for both would make Shift-Tab walk *forwards*, and
+     * the fault would be read as a focus bug rather than a keyboard one.
+     */
+    check(recon_key_from_hid(43, 0) == RECON_KEY_Tab, "Tab is Tab");
+    check(recon_key_from_hid(43, RECON_MOD_SHIFT) == RECON_KEY_ISO_Left_Tab,
+        "and Shift-Tab is ISO_Left_Tab, which is a different key");
+}
+
+static void test_ctrl_and_alt_do_not_change_the_key(void) {
+    printf("Ctrl-C is the letter C with Ctrl held\n");
+
+    /*
+     * **Not a control character.** The caller decides what Ctrl means, and a
+     * caller handed a control character could not tell it from one that was
+     * typed -- which is how a text box ends up with a 0x03 in it.
+     */
+    check(recon_key_from_hid(6, RECON_MOD_CTRL) == RECON_KEY_c,
+        "Ctrl and the C key is a small c");
+    check(recon_key_from_hid(6, RECON_MOD_CTRL | RECON_MOD_SHIFT) ==
+        RECON_KEY_C, "and with Shift as well it is a capital C");
+    check(recon_key_from_hid(6, RECON_MOD_ALT) == RECON_KEY_c,
+        "Alt does not change it either");
+    check(recon_key_from_hid(6, RECON_MOD_LOGO) == RECON_KEY_c,
+        "nor does the logo key");
+}
+
+static void test_what_it_has_no_meaning_for(void) {
+    printf("a key this layout does not have\n");
+
+    /*
+     * `RECON_KEY_NoSymbol` is a real answer. A keyboard can send a code for a
+     * key nobody here has -- a media key, a second language's key -- and
+     * inventing a letter for it would type something the person did not press.
+     */
+    check(recon_key_from_hid(0, 0) == RECON_KEY_NoSymbol,
+        "keycode zero is not a key");
+    check(recon_key_from_hid(150, 0) == RECON_KEY_NoSymbol,
+        "nor is one in the gap this layout does not fill");
+    check(recon_key_from_hid(9999, 0) == RECON_KEY_NoSymbol,
+        "nor is one past the end of the table");
+    check(recon_key_from_hid(0xFFFFFFFFu, 0) == RECON_KEY_NoSymbol,
+        "and nonsense is refused rather than indexed with");
+}
+
+static void test_what_the_symbols_turn_into(void) {
+    printf("and the characters they become are the swept ones\n");
+
+    /*
+     * The chain to something already verified.
+     *
+     * There is no reference to compare this layout against -- xkbcommon's
+     * `us` keymap is indexed by evdev codes and the kernel sends HID usage
+     * codes, and the table between them is the thing that would have to be
+     * written to do the comparison.
+     *
+     * But a symbol this produces goes into `recon_key_to_char`, which *is*
+     * swept against xkbcommon. So a plausible-looking wrong symbol still
+     * shows up as the wrong character -- which is what would actually be
+     * typed.
+     */
+    check(recon_key_to_char(recon_key_from_hid(4, 0)) == 'a',
+        "the A key types an a");
+    check(recon_key_to_char(recon_key_from_hid(4, RECON_MOD_SHIFT)) == 'A',
+        "and with Shift an A");
+    check(recon_key_to_char(recon_key_from_hid(40, 0)) == '\r',
+        "Enter types a return");
+    check(recon_key_to_char(recon_key_from_hid(43, 0)) == '\t',
+        "Tab types a tab");
+    check(recon_key_to_char(recon_key_from_hid(56, RECON_MOD_SHIFT)) == '?',
+        "and Shift and the slash key types a question mark");
+
+    /* An arrow is not a character, which is the other half of that function. */
+    check(recon_key_to_char(recon_key_from_hid(79, 0)) == 0,
+        "the right arrow types nothing");
+}
+
+static void test_what_is_held(void) {
+    printf("keeping track of what is held down\n");
+
+    unsigned held = 0;
+
+    held = recon_key_modifiers_after(held, 225, true);   /* left shift */
+    check(held == RECON_MOD_SHIFT, "pressing left Shift holds Shift");
+
+    held = recon_key_modifiers_after(held, 224, true);   /* left ctrl */
+    check(held == (RECON_MOD_SHIFT | RECON_MOD_CTRL),
+        "and Ctrl as well holds both");
+
+    held = recon_key_modifiers_after(held, 225, false);
+    check(held == RECON_MOD_CTRL, "letting Shift go leaves Ctrl");
+
+    /* Both sides of the keyboard set the same bit -- a shortcut must not care
+     * which Shift somebody used. */
+    held = recon_key_modifiers_after(0, 229, true);      /* right shift */
+    check(held == RECON_MOD_SHIFT, "the right Shift holds the same bit");
+    held = recon_key_modifiers_after(0, 228, true);      /* right ctrl */
+    check(held == RECON_MOD_CTRL, "and so does the right Ctrl");
+
+    /* A letter is not a modifier and changes nothing. */
+    check(recon_key_modifiers_after(RECON_MOD_CTRL, 4, true) ==
+        RECON_MOD_CTRL, "pressing a letter changes nothing");
+
+    /*
+     * **A release clears the bit whether or not a press was seen.**
+     *
+     * The kernel's queue makes the same choice for a release nobody saw
+     * pressed, and the reason is the same: a Shift stuck on because one event
+     * was lost is a keyboard that types in capitals until it is restarted.
+     */
+    check(recon_key_modifiers_after(0, 225, false) == 0,
+        "releasing a Shift that was never pressed leaves nothing held");
+}
+
+static void test_caps_lock_is_a_latch(void) {
+    printf("Caps Lock turns over rather than being held\n");
+
+    unsigned held = 0;
+
+    held = recon_key_modifiers_after(held, 57, true);
+    check(held == RECON_MOD_CAPS, "pressing it turns it on");
+
+    /*
+     * And the release does nothing, which is the whole difference between it
+     * and Shift. A version that cleared on release would make Caps Lock work
+     * only while the key was held down -- which is a keyboard nobody has.
+     */
+    held = recon_key_modifiers_after(held, 57, false);
+    check(held == RECON_MOD_CAPS, "and letting it go leaves it on");
+
+    held = recon_key_modifiers_after(held, 57, true);
+    check(held == 0, "pressing it again turns it off");
+
+    /* And it does not disturb anything else that is held. */
+    held = recon_key_modifiers_after(RECON_MOD_CTRL, 57, true);
+    check(held == (RECON_MOD_CTRL | RECON_MOD_CAPS),
+        "turning it on beside Ctrl keeps Ctrl");
+}
+
 int main(void) {
     printf("ReconOS key tests\n\n");
 
@@ -359,6 +621,15 @@ int main(void) {
     test_the_unicode_range();
     test_the_keys_that_are_not_letters();
     test_the_keypad();
+    test_every_key_the_kernel_can_send();
+    test_letters_and_the_two_that_change_them();
+    test_caps_lock_does_not_touch_the_digits();
+    test_shift_tab_is_a_different_key();
+    test_ctrl_and_alt_do_not_change_the_key();
+    test_what_it_has_no_meaning_for();
+    test_what_the_symbols_turn_into();
+    test_what_is_held();
+    test_caps_lock_is_a_latch();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -100,7 +100,9 @@ static void test_the_list(void)
 	printf("the list, and the order it has to be in\n");
 
 	check(n > 0, "there is a layout at all");
-	check(n == 10, "and it is the ten directories the desktop names");
+	/* Eleven since v0.4.51, when /System/Fonts arrived -- a machine
+	 * running its own kernel has no /usr/share/fonts to borrow from. */
+	check(n == 11, "and it is the eleven directories the desktop names");
 
 	/*
 	 * **Parents before children**, which is load-bearing rather than tidy:

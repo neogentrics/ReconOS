@@ -41,6 +41,17 @@
  * one takes its icons with it.
  */
 #define RECON_DIR_SYSTEM_ICONS "/System/Icons"
+
+/*
+ * Where a machine keeps its own fonts.
+ *
+ * New in v0.4.51, and it exists because of what is *not* on a ReconOS
+ * machine: there is no `/usr/share/fonts` to borrow from, and a desktop with
+ * no font draws nothing anybody can read. An installation medium carries two
+ * and the installer writes them here -- borrowed once, owned afterwards, the
+ * same as the trusted roots and the icons.
+ */
+#define RECON_DIR_SYSTEM_FONTS "/System/Fonts"
 #define RECON_DIR_APPS "/Apps"
 #define RECON_DIR_USERS "/Users"
 #define RECON_DIR_SYSTEM_MODULES "/System/Modules"

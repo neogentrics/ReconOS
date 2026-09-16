@@ -9,6 +9,95 @@ way for the two to disagree.
 
 ---
 
+## v0.4.51 — a keyboard and something to read with
+
+Joshua asked how long until the desktop runs on the kernel. Checking rather
+than guessing turned up that **`/dev/input` already exists and a program can
+open it** — so the machine can already deliver keys — and that what stood in the
+way was a keymap and a font. Both are here.
+
+### The keymap: positions to meanings
+
+The kernel delivers **USB HID usage codes**, and they name *positions*. `KEY_A`
+is 4, and it is 4 whether the key under that finger produces an `a`, a `q` or
+an `ä`. Turning a position into a meaning needs a layout, which on Linux is
+what xkbcommon does — **and there is no xkbcommon on a ReconOS machine.**
+
+`recon_key_from_hid(keycode, modifiers)` is that, for the `us` layout, in the
+file that already owns what a key is and already builds with no Linux under it.
+The modifier bits moved there too, from `recon_appwin.h` where they were named
+*"as the compositor reports them"*: they are not the compositor's any more.
+
+**Four rules that every keyboard has and almost nobody writes down:**
+
+| the rule | what breaks without it |
+|---|---|
+| Shift and Caps Lock combine by **exclusive or** | Caps Lock becomes impossible to type around, and reads as a stuck Shift |
+| Caps Lock does not touch the digits | somebody's password types `@` when they meant `2` |
+| Shift-Tab is `ISO_Left_Tab`, a *different key* | Shift-Tab walks forwards, and it looks like a focus bug |
+| Ctrl-C is the letter C with Ctrl held | a text box gets a `0x03` in it |
+
+And one about the machine rather than the layout: **a release clears a modifier
+whether or not a press was seen.** The kernel's own queue makes the same choice
+for a release nobody saw, and the reason is the same — a Shift stuck on because
+one event was lost is a keyboard that types in capitals until it is restarted.
+
+**43 checks, and five mutations all caught.** Every one of those mutations
+produces a keyboard that *works* — letters appear, keys respond — and is wrong
+in a way somebody would blame on themselves before they blamed the machine.
+
+There is no reference to sweep against: xkbcommon's `us` keymap is indexed by
+*evdev* codes and the kernel sends *HID usage* codes, and the table between
+those two is the thing that would have to be written to do the comparison. So
+the checks hold properties — and one chains to something already verified: a
+symbol this produces goes into `recon_key_to_char`, which **is** swept against
+xkbcommon, so a plausible-looking wrong symbol still shows up as the wrong
+character. Which is what would actually be typed.
+
+### The font: borrowed once at the medium, owned afterwards
+
+The desktop read the host's fonts — `/usr/share/fonts/...` — which is another
+borrowed thing nobody had written down. A machine running its own kernel has no
+`/usr/share`, and **a desktop with no font draws nothing anybody can read**: not
+a degraded screen, a blank one.
+
+- `/System/Fonts` is the **eleventh** directory of the volume layout, laid down
+  every boot like the other ten. The suite holds
+  `include/recon_fs.h` and `userland/init/layout.c` to each other in both
+  directions, so adding to one alone fails — which it did, first try.
+- `scripts/make-medium.sh` carries **DejaVu Sans** and **Sans Mono** on the
+  medium, verified on a built image at 759,720 and 343,140 bytes.
+- `src/recon_ui.c` looks in `/System/Fonts` **before** the host's paths. Linux
+  falls through exactly as before, and the order says the right thing either
+  way: a machine given fonts of its own meant those fonts.
+
+**And the licence ships with them.** The Bitstream Vera terms say *"the above
+copyright and trademark notices and this permission notice shall be included in
+all copies"* — a stick with the font on it is a copy, and `THIRD_PARTY.md`
+travels with the repository rather than with the stick. So the notice goes on
+the medium beside the fonts. The file is renamed and the font is **not
+modified**: the clause about renaming applies to modified fonts, and this is
+byte for byte the file the host had, still identifying itself as DejaVu Sans.
+
+### And the linker was asked what a desktop program needs
+
+The kernel session asked for the source list. Rather than write one from
+memory, a small program that draws a wallpaper, a window frame and some text
+was linked against an archive of every source that builds freestanding.
+
+**It resolved everything except three symbols** — `recon_fs_write`,
+`recon_fs_append` and `recon_fs_mkdir`, from `recon_theme.c` and
+`recon_fonts.c`, both core drawing and both needing to read and write their
+settings.
+
+So the desktop is gated on `src/recon_fs.c`, which is gated on `stat` — which
+is already the largest open entry in `docs/KERNEL-WANTS.md`, and that entry
+already names `recon_fs.c` as what it blocks. **Two instruments from opposite
+directions naming the same call**: the entry was written by counting call sites
+in the library, and the probe knew nothing about that.
+
+---
+
 ## v0.4.50 — the host must not show through
 
 `coverage.sh --zero` named five functions of `recon_fs.c` that no suite ran,

@@ -76,7 +76,7 @@ ESP_MB=$(( (ESP_END - ESP_LBA + 1) / 2048 ))
 truncate -s "${ESP_MB}M" "$W/esp.part"
 mkfs.vfat -F 32 -n RECONOS "$W/esp.part" >/dev/null
 
-mmd -i "$W/esp.part" ::/EFI ::/EFI/BOOT ::/reconos
+mmd -i "$W/esp.part" ::/EFI ::/EFI/BOOT ::/reconos ::/reconos/fonts
 
 mcopy -i "$W/esp.part" "$L64" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$W/esp.part" "$K64" ::/reconos/kernel-x86_64.elf
@@ -92,6 +92,58 @@ INIT=kernel/build/x86_64/user/recon_init.elf
 if [ -f "$INIT" ]; then
 	mcopy -i "$W/esp.part" "$INIT" ::/reconos/init.elf
 fi
+
+# --- and the fonts ---------------------------------------------------------
+#
+# A machine running its own kernel has no /usr/share, and a desktop with no
+# font draws nothing anybody can read. So the medium carries two, and the
+# installer writes them to /System/Fonts -- borrowed once here, owned by the
+# machine afterwards, which is what the trusted roots and the icons already do.
+#
+# **Taken from the host that builds the medium**, which is why the licence is
+# in THIRD_PARTY.md: a file that ships is a file whose terms ship with it. Two
+# rather than three: the Terminal wants a fixed pitch and everything else wants
+# a proportional one, and bold falls back to the regular face rather than
+# costing another 700 KiB on every stick.
+#
+# Absent is tolerated, the same as the system above. A medium made on a machine
+# with no DejaVu still installs; the desktop then finds no font of its own and
+# says so, which is a legible failure rather than a blank screen.
+FONT_SANS=""
+FONT_MONO=""
+for d in /usr/share/fonts/truetype/dejavu /usr/share/fonts/dejavu \
+	 /usr/share/fonts/TTF; do
+	[ -z "$FONT_SANS" ] && [ -f "$d/DejaVuSans.ttf" ] && \
+		FONT_SANS="$d/DejaVuSans.ttf"
+	[ -z "$FONT_MONO" ] && [ -f "$d/DejaVuSansMono.ttf" ] && \
+		FONT_MONO="$d/DejaVuSansMono.ttf"
+done
+
+if [ -n "$FONT_SANS" ]; then
+	mcopy -i "$W/esp.part" "$FONT_SANS" ::/reconos/fonts/Sans.ttf
+fi
+if [ -n "$FONT_MONO" ]; then
+	mcopy -i "$W/esp.part" "$FONT_MONO" ::/reconos/fonts/Mono.ttf
+fi
+
+# The notice, because the licence says a copy carries it.
+#
+# *"The above copyright and trademark notices and this permission notice shall
+# be included in all copies of one or more of the Font Software typefaces."* A
+# medium with the font on it is a copy. THIRD_PARTY.md is not enough on its
+# own: that file travels with the repository and the font travels with the
+# stick.
+#
+# Written from the host's own copy of the terms where there is one, so the
+# words are the licence's rather than a paraphrase of it.
+for c in /usr/share/doc/fonts-dejavu-core/copyright \
+	 /usr/share/doc/fonts-dejavu/copyright \
+	 /usr/share/licenses/dejavu-fonts/LICENSE; do
+	if [ -n "$FONT_SANS" ] && [ -f "$c" ]; then
+		mcopy -i "$W/esp.part" "$c" ::/reconos/fonts/COPYRIGHT
+		break
+	fi
+done
 
 # aarch64 if it built. A medium that carries one architecture is still a useful
 # medium; one that silently carries the wrong one is not, which is why each

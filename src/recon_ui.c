@@ -97,7 +97,21 @@ int recon_text_line_spacing(void) {
     return g_line_spacing;
 }
 
+/*
+ * ReconOS's own first, then the host's.
+ *
+ * `/System/Fonts` is where an installed machine keeps its fonts, and it is
+ * looked at before `/usr/share` for the reason the trusted roots are:
+ * **borrowed once, owned afterwards.** A machine running its own kernel has no
+ * `/usr/share` at all, and a desktop with no font draws nothing anybody can
+ * read.
+ *
+ * Harmless on Linux, where the path simply does not exist and the search falls
+ * through to the host's -- which is the same order of preference either way:
+ * if this machine has been given a font of its own, that is the font it meant.
+ */
 static const char *const FONT_SEARCH_PATHS[] = {
+    "/System/Fonts/Sans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -398,6 +412,7 @@ struct recon_font *recon_font_system(int pixel_height) {
  * one that misses a fix.
  */
 static const char *const MONO_SEARCH_PATHS[] = {
+    "/System/Fonts/Mono.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
@@ -408,6 +423,7 @@ static const char *const MONO_SEARCH_PATHS[] = {
 };
 
 static const char *const BOLD_SEARCH_PATHS[] = {
+    "/System/Fonts/Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",

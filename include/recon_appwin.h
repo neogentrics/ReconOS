@@ -28,17 +28,13 @@ struct recon_panel;
 struct recon_appwin;
 
 /*
- * Keyboard modifiers, as the compositor reports them.
+ * The keyboard modifiers moved to `recon_key.h`, which this file already
+ * includes.
  *
- * Named here so an application can test for Ctrl without including wlroots
- * headers for one constant, or -- worse -- writing the bit as a number and
- * hoping. These match wlr_keyboard_modifier, which is what actually arrives.
+ * They were named here "as the compositor reports them", and they are not the
+ * compositor's any more: the ReconOS kernel reports the same set from its own
+ * keyboard, so they belong with the keys rather than with the windows.
  */
-#define RECON_MOD_SHIFT (1u << 0)
-#define RECON_MOD_CAPS  (1u << 1)
-#define RECON_MOD_CTRL  (1u << 2)
-#define RECON_MOD_ALT   (1u << 3)
-#define RECON_MOD_LOGO  (1u << 6)
 
 /* Hit-region ids at or above this belong to the application. */
 #define RECON_APPWIN_HIT_USER 1000

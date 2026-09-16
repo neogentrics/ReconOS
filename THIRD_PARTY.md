@@ -224,9 +224,41 @@ of replacing it.
 
 ### Fonts
 
-No font is bundled. ReconOS loads one from the host system at runtime, so no
-font license applies to this repository. `RECONOS_FONT` overrides the choice.
-When ReconOS ships its own font, it belongs here.
+**DejaVu Sans and DejaVu Sans Mono** — carried on an installation medium as
+`/reconos/fonts/Sans.ttf` and `Mono.ttf`, and written to `/System/Fonts` on the
+machine that is installed.
+
+- **Used for:** everything the desktop draws with. A machine running the
+  ReconOS kernel has no `/usr/share/fonts` to borrow from, and a desktop with
+  no font draws nothing anybody can read.
+- **License:** the Bitstream Vera Fonts Copyright. *"Copyright (c) 2003 by
+  Bitstream, Inc. All Rights Reserved. Bitstream Vera is a trademark of
+  Bitstream, Inc. DejaVu changes are in public domain."* Permission is granted
+  to reproduce and distribute, including to sell copies, on the conditions
+  below.
+- **Where it comes from:** the machine that builds the medium, taken by
+  `scripts/make-medium.sh`. Nothing in this repository holds a copy — the
+  binary is not checked in, which is why this section describes a file that
+  ships rather than a file that is here.
+
+**Two conditions, and both are met deliberately rather than by luck:**
+
+1. *"The above copyright and trademark notices and this permission notice shall
+   be included in all copies."* A medium is a copy, so `make-medium.sh` puts
+   the notice on it beside the fonts as `/reconos/fonts/COPYRIGHT`. This
+   section is not enough on its own: it travels with the repository, and the
+   font travels with the stick.
+
+2. *"The Font Software may be modified... only if the fonts are renamed to
+   names not containing either the words 'Bitstream' or the word 'Vera'."*
+   **The font is not modified.** The medium gives the *file* a shorter name --
+   `Sans.ttf` rather than `DejaVuSans.ttf` -- and the font inside still
+   identifies itself as DejaVu Sans, byte for byte the file the host had. A
+   renamed file is not a renamed font, and the clause is about the second.
+
+The desktop still falls back to the host's fonts when there is no
+`/System/Fonts`, which is what happens on Linux, and `RECONOS_FONT` still
+overrides the choice.
 
 ## Cursor themes
 
