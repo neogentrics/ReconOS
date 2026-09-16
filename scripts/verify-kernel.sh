@@ -624,6 +624,12 @@ python3 scripts/check-syscall-numbers.py || { echo "the system call numbers disa
 # and every firmware this script can reach behaves. KF-233.
 python3 scripts/check-menu-recovery.py || { echo "recovery is not offered on every path"; exit 1; }
 
+# And the README's badges, which are the first thing anybody sees and were
+# wrong by 176 bugs and 33 versions on 15 September. Nobody had been careless;
+# nothing was counting. A figure measured once by hand is a sentence, and a
+# sentence cannot notice it has stopped being true.
+python3 scripts/check-readme-badges.py || { echo "the README's badges do not match the tree"; exit 1; }
+
 X64_ELF=$ROOT/kernel/build/x86_64/reconos-kernel.elf
 ARM_IMG=$ROOT/kernel/build/aarch64/reconos-kernel.img
 
