@@ -178,6 +178,35 @@ void recon_shell_first_frame(struct recon_panel *panel, int width, int height,
             THEME(SURFACE_TEXT_DIM));
     }
 
+    /*
+     * What somebody has typed, in a field of its own.
+     *
+     * A field rather than another line, because it is the one thing here that
+     * is not a fact printed at startup: it changes while somebody watches, and
+     * a changing thing that looks like the fixed things around it reads as a
+     * fact that keeps being wrong.
+     *
+     * Drawn even when empty, so a machine where nothing arrives shows an empty
+     * field rather than nothing at all -- which is the difference between "no
+     * keyboard" and "this frame never got that far".
+     */
+    if (facts->typed != NULL) {
+        int field_h = recon_font_line_height(font) * 2;
+
+        y += recon_font_line_height(font);
+        recon_fill_rect(panel, win_x + pad, y, text_width, field_h,
+            THEME(FIELD));
+        recon_fill_rect(panel, win_x + pad, y, text_width, 1,
+            THEME(FIELD_BORDER));
+        recon_fill_rect(panel, win_x + pad, y + field_h - 1, text_width, 1,
+            THEME(FIELD_BORDER));
+
+        recon_draw_text(panel, font, win_x + pad * 2,
+            y + (field_h - recon_font_line_height(font)) / 2
+                + recon_font_ascent(font),
+            text_width - pad * 2, facts->typed, THEME(FIELD_TEXT));
+    }
+
     /* --- The task bar --- */
 
     recon_fill_rect(panel, 0, height - bar, width, bar, THEME(BAR));

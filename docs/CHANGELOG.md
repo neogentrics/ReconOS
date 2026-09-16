@@ -9,6 +9,77 @@ way for the two to disagree.
 
 ---
 
+## v0.4.55 — the desktop can be typed at
+
+The desktop program reads `/dev/input` and redraws. A key goes down, the kernel
+turns a scancode into a **position**, `recon_key.c` turns the position into a
+**meaning**, and the frame shows the letter — which is the whole path, and the
+first time any of it has had a caller.
+
+`recon_key_from_hid` was written and mutation-tested in v0.4.51 **with nothing
+calling it at all.** This is the caller.
+
+### The kernel's design and this one already agreed
+
+Reading `kernel/include/recon/kernel/input.h` rather than assuming turned up
+that the two halves had independently reached the same three decisions, which
+is worth more than the code:
+
+| the decision | why both sides made it |
+|---|---|
+| An event carries a **keycode**, not a character | a kernel that hands up characters has to contain a layout table, and a program wanting the *position* (WASD, which is ZQSD on a French keyboard) can never get it back |
+| **Repeat is its own kind**, not folded into press | a text field wants repeats and a game does not; collapsing them makes the first impossible to tell from the second |
+| Modifier state is **derived from events**, never counted | a counter goes negative on a release nobody saw a press for, wraps, and leaves the machine believing Shift is held for ever |
+
+### The hazard is a struct written down twice
+
+`userland/include/sys/input.h` mirrors a kernel struct, and the two headers
+cannot be one file — the kernel's pulls in kernel types and its VFS. **A struct
+read with the wrong layout does not fail; it returns numbers.** A `code` read
+at the wrong offset is a different key, and a `kind` read at the wrong offset
+is a press that arrives as a release.
+
+So it is held from both directions: `_Static_assert` on every offset and the
+total size makes a disagreement a **compile error**, and the suite **reads the
+kernel's header as text** and requires seventeen constants to match — which is
+what catches the kernel changing a number underneath us. The same arrangement
+`layout.c` and `recon_fs.h` already use for the directory list.
+
+And at run time, a read whose length is not a whole number of events is
+**dropped rather than parsed**: half an event read as a whole one is a keypress
+that never happened.
+
+### 74 checks, 11 of 12 mutations caught, and two findings in the misses
+
+Every mutation produces a keyboard that *works* — letters appear, keys respond
+— and is wrong in a way somebody would blame on themselves. Two survived, and
+they were different in kind:
+
+- **A Caps Lock branch was dead, and its comment was wrong.** It claimed to
+  catch a case *"the comparison above cannot see"* — pressing Caps Lock when it
+  is already on. But the modifiers differ from before in *both* directions, so
+  the general rule catches it either way. Deleted. The same fault as the
+  v0.4.45 comment calling an early return a guard when the formula was exact at
+  both ends: **a comment claiming a guard has to be a guard.**
+- **The other cannot be caught, provably.** Swapping `keyboard->modifiers` for
+  `before` changes nothing, because the line above returns unless the two are
+  equal. It is recorded as an equivalent mutant rather than chased — writing a
+  check that appeared to catch it would be writing a check that cannot fail,
+  and three of those were written yesterday already.
+
+### Two small gaps closed on the way
+
+`recon.h` had `u8`, `u32`, `u64` and `i64` and **not `u16` or `i32`** — so a
+program could not spell a sixteen-bit field at all, and anything describing one
+had to reach for `unsigned short` and hope.
+
+And `sys/input.h` deliberately does **not** include `sys/types.h`, the sibling
+a file in that directory would reach for by habit: it defines `off_t`, which
+collides with the host's the moment anything includes both — and a suite that
+drives this struct is exactly such a thing.
+
+---
+
 ## v0.4.54 — there is a desktop program
 
 `userland/desktop/` is the program that runs from the volume. It asks the

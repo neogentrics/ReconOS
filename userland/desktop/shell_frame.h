@@ -51,6 +51,18 @@ struct recon_shell_facts {
     const char *display;    /* "1920 x 1080, 7680 bytes a row" */
     const char *volume;     /* "System volume, 11 folders" */
     const char *note;       /* one line under the rest, or NULL */
+
+    /*
+     * What somebody has typed, or NULL before they have.
+     *
+     * Drawn apart from the rest, because it is the only line on this frame
+     * that is not a fact about the machine -- it is the machine answering.
+     * The first keystroke that appears here is the proof that the whole path
+     * works: a key went down, the kernel turned a scancode into a position,
+     * `/dev/input` delivered it, `recon_key.c` turned the position into a
+     * meaning, and the drawing layer put it on a screen.
+     */
+    const char *typed;
 };
 
 /*

@@ -35,9 +35,20 @@
 #ifndef RECON_USER_H
 #define RECON_USER_H
 
+/*
+ * The widths, in the kernel's spelling.
+ *
+ * `u16` and `i32` arrived later than the others, when `<sys/input.h>` needed
+ * to mirror a kernel struct that uses both. That they were missing is worth a
+ * line: a program could not spell a sixteen-bit field at all, so anything
+ * describing one had to reach for `unsigned short` and hope -- which is the
+ * spelling these typedefs exist to avoid.
+ */
 typedef unsigned char       u8;
+typedef unsigned short      u16;
 typedef unsigned int        u32;
 typedef unsigned long long  u64;
+typedef int                 i32;
 typedef long long           i64;
 
 /*

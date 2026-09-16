@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.54
+    VERSION 0.4.55
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -1081,6 +1081,33 @@ target_include_directories(recon_init_screen_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/boot/include")
 
 add_test(NAME first_screen COMMAND recon_init_screen_tests)
+
+# Events from /dev/input, turned into keystrokes.
+#
+# keyboard.c makes no system call, so the stream can be driven from a table of
+# events written by hand -- including the ones a real keyboard only produces
+# once something has already gone wrong, which are the ones worth testing and
+# the hardest to arrange on a machine.
+#
+# It runs from the source directory because one of its checks reads the
+# kernel's own header and requires the keycodes to agree. That duplication is
+# real -- the two headers cannot be one file -- so it is tested rather than
+# trusted.
+add_executable(recon_desktop_keyboard_tests
+    userland/tests/test_desktop_keyboard.c
+    userland/desktop/keyboard.c
+    src/recon_key.c)
+
+# Deliberately NOT userland/include: a test compiled against this library's
+# own <stdio.h> is a test comparing ReconOS against ReconOS, and the immediate
+# symptom is losing the host's printf. sys/input.h is reached by relative path
+# instead, which is the exception libc/posix.c already takes.
+target_include_directories(recon_desktop_keyboard_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/userland/desktop")
+
+add_test(NAME desktop_keyboard COMMAND recon_desktop_keyboard_tests
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # The desktop's first frame, drawn on the host.
 #

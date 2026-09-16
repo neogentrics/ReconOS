@@ -52,6 +52,9 @@
 #include "recon_theme.h"
 #include "recon_ui.h"
 
+#include "../include/sys/input.h"
+
+#include "keyboard.h"
 #include "shell_frame.h"
 
 /*
@@ -75,6 +78,70 @@ enum {
     NO_PANEL                  = 25,
     NO_FONT                   = 26,
 };
+
+/*
+ * How much of what somebody types is kept.
+ *
+ * A line, and no more. This is a first frame and not a text editor: what the
+ * field is for is showing that a key reached the screen, and a buffer that
+ * scrolled would be the beginning of an editor nobody asked for. When it is
+ * full the oldest character goes, which is the choice the kernel's input queue
+ * makes and for the same reason -- the most recent thing somebody did is the
+ * thing they are looking for.
+ */
+#define TYPED_MAX 64
+
+/*
+ * Put one keystroke into the line.
+ *
+ * Returns true when the line changed, because redrawing a whole screen for a
+ * keystroke that changed nothing is how a machine comes to feel slow. Ctrl
+ * held means the keystroke is a command and not text, which nothing here has
+ * anything to do with yet -- but putting the letter in the field would be
+ * wrong rather than merely unhelpful, because Ctrl-C is the letter C with Ctrl
+ * held and a field that shows a "c" for it is lying about what happened.
+ */
+static bool remember(char *line, size_t *length,
+             const struct recon_keystroke *stroke)
+{
+    u32 c;
+
+    if ((stroke->modifiers & (RECON_MOD_CTRL | RECON_MOD_ALT)) != 0) {
+        return false;
+    }
+
+    if (stroke->symbol == RECON_KEY_BackSpace) {
+        if (*length == 0) {
+            return false;
+        }
+        line[--(*length)] = '\0';
+        return true;
+    }
+
+    /*
+     * Only what can be drawn. `recon_key_to_char` answers 0 for a key with no
+     * character -- an arrow, a function key -- and those have somewhere to go
+     * later and nowhere to go now.
+     *
+     * The ASCII bound is this program's, not the layout's: the font can draw
+     * far more, and the line below writes one byte per character. A UTF-8
+     * encoder here would be the second one in the tree.
+     */
+    c = recon_key_to_char(stroke->symbol);
+    if (c == 0 || c < 32 || c > 126) {
+        return false;
+    }
+
+    if (*length + 1 >= TYPED_MAX) {
+        /* Oldest out, which keeps the end of the line -- the part somebody is
+         * looking at -- rather than the beginning. */
+        memmove(line, line + 1, *length - 1);
+        (*length)--;
+    }
+    line[(*length)++] = (char)c;
+    line[*length] = '\0';
+    return true;
+}
 
 /* A size in bytes, as something a person reads. */
 static void say_bytes(char *into, size_t room, u64 bytes)
@@ -219,19 +286,99 @@ int main(void)
     facts.volume = volume_line;
     facts.note = "The desktop's own drawing layer, on its own kernel.";
 
+    char typed[TYPED_MAX];
+    size_t typed_length = 0;
+
+    typed[0] = '\0';
+    facts.typed = typed;
+
     recon_shell_first_frame(panel, (int)screen.width, (int)screen.height,
         &facts);
     recon_panel_commit(panel);
 
     /*
-     * And stay up.
+     * --- And then it listens ---
      *
-     * There is nothing to wait for yet -- no pointer, and no loop to deliver
-     * a key to. Returning would end the process and leave whatever the kernel
-     * shows afterwards on the screen, which would make a frame that drew
-     * correctly look like one that crashed.
+     * `/dev/input` is opened *after* the first frame is on the screen, and
+     * that order is deliberate: a machine with no keyboard driver still shows
+     * a desktop, and shows it before finding out. The other order gives a
+     * black screen on a machine whose only fault is that nothing is plugged
+     * in, which is the least diagnosable outcome there is.
+     *
+     * So a failure here is reported on the screen that already exists rather
+     * than through an exit code nobody will see.
      */
+    i64 keyboard_fd = recon_open("/dev/input", 10, OPEN_READ, 0);
+
+    if (keyboard_fd < 0) {
+        facts.typed = NULL;
+        facts.note = "No keyboard: /dev/input could not be opened.";
+        recon_shell_first_frame(panel, (int)screen.width,
+            (int)screen.height, &facts);
+        recon_panel_commit(panel);
+
+        for (;;) {
+            recon_yield();
+        }
+    }
+
+    struct recon_keyboard keys;
+    memset(&keys, 0, sizeof(keys));
+
     for (;;) {
-        recon_yield();
+        /*
+         * Several events at a time. A key pressed and released is two, and a
+         * repeat arrives faster than a screen is drawn -- so reading one at a
+         * time would redraw between the halves of every keystroke.
+         */
+        struct recon_input_event batch[16];
+        i64 got = recon_read((int)keyboard_fd, batch, sizeof(batch));
+
+        if (got <= 0) {
+            /*
+             * Nothing, or an error. Yielding rather than spinning, and not
+             * giving up: a read that failed once is not a machine with no
+             * keyboard, and a desktop that exited on one would take the
+             * screen with it.
+             */
+            recon_yield();
+            continue;
+        }
+
+        /*
+         * A length that is not a whole number of events means this program
+         * and the kernel disagree about how big one is -- which is the
+         * failure `sys/input.h` is arranged around, and the only place it can
+         * be noticed at run time. The events are dropped rather than
+         * misparsed: half an event read as a whole one is a keypress that
+         * never happened.
+         */
+        u64 count = (u64)got / sizeof(struct recon_input_event);
+
+        if ((u64)got % sizeof(struct recon_input_event) != 0) {
+            facts.note = "The keyboard sent something this program cannot read.";
+            count = 0;
+        }
+
+        bool changed = false;
+
+        for (u64 i = 0; i < count; i++) {
+            struct recon_keystroke stroke;
+
+            if (!recon_keyboard_event(&keys, &batch[i], &stroke)) {
+                continue;
+            }
+            if (remember(typed, &typed_length, &stroke)) {
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            continue;
+        }
+
+        recon_shell_first_frame(panel, (int)screen.width,
+            (int)screen.height, &facts);
+        recon_panel_commit(panel);
     }
 }
