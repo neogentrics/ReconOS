@@ -271,12 +271,15 @@ static bool alloc_structures(struct xhci *x)
 	 * event ring and its table. All of them have to be physically
 	 * contiguous and none of them is large, so a page apiece is simpler
 	 * than an allocator and wastes a few kilobytes once. */
-	x->backing = pmm_alloc_pages(4 + scratch);
+	/* Four for the rings and tables, **one for the scratchpad pointer
+	 * array**, and then the scratchpad buffers themselves. The array used
+	 * to share page 4 with the first buffer, which is KF-243. */
+	x->backing = pmm_alloc_pages(5 + scratch);
 	if (!x->backing)
 		return false;
 
-	x->backing_pages = 4 + scratch;
-	kmemset(phys_to_virt(x->backing), 0, (4 + scratch) * PAGE_SIZE);
+	x->backing_pages = 5 + scratch;
+	kmemset(phys_to_virt(x->backing), 0, (5 + scratch) * PAGE_SIZE);
 
 	x->dcbaa_phys = x->backing;
 	x->dcbaa      = phys_to_virt(x->dcbaa_phys);
@@ -297,11 +300,32 @@ static bool alloc_structures(struct xhci *x)
 	if (scratch) {
 		u64 *array = phys_to_virt(x->backing + 4 * PAGE_SIZE);
 
+		/* **The buffers start at page 5, not page 4.** (KF-243)
+		 *
+		 * They used to start at 4 -- the array's own page -- so
+		 * `array[0]` pointed at the array. The controller was handed
+		 * its pointer table as scratch memory, wrote there the first
+		 * time it needed buffer zero, and destroyed the addresses of
+		 * the other 575. The next read was a garbage physical address,
+		 * the bus faulted, and it halted with `HSE` set.
+		 *
+		 * Two devices enumerated before it: scratchpads are the
+		 * controller's own working memory and it does not reach all of
+		 * them at once. The third one did.
+		 *
+		 * The comment below already said the shape of this -- *a
+		 * controller that asks for them and is not given them does not
+		 * report an error; it misbehaves later* -- written about not
+		 * allocating them. Allocating them on top of each other is the
+		 * same sentence.
+		 *
+		 * **QEMU asks for zero**, so none of this has ever run in
+		 * 1578 self-tests across twenty-eight boot paths. */
 		for (i = 0; i < scratch; i++)
-			array[i] = x->backing + (4 + i) * PAGE_SIZE;
+			array[i] = x->backing + (5 + i) * PAGE_SIZE;
 
-		/* The array itself lives in the first scratchpad page, and slot
-		 * zero of the DCBAA points at it. */
+		/* The array has page 4 to itself, and slot zero of the DCBAA
+		 * points at it. */
 		x->dcbaa[0] = x->backing + 4 * PAGE_SIZE;
 	}
 
