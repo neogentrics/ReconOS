@@ -461,6 +461,26 @@ void virtio_net_print_summary(void);
 struct socket;
 
 struct socket *socket_create(int type);
+
+/* --- a socket as a file ----------------------------------------------------
+ *
+ * In `core/socket_file.c`. Wrapping the socket in a `struct file` is what lets
+ * `SYS_READ`, `SYS_WRITE` and `SYS_CLOSE` serve a connection, so only the five
+ * things a file cannot do needed system calls of their own.
+ *
+ * `file_socket` returns null for a descriptor naming anything else, which is
+ * the difference between an error and reading a pipe's private pointer as a
+ * socket. The type is decided by the ops table rather than by a flag, because
+ * the ops table is what actually governs behaviour and a flag is a second
+ * statement of the same fact that can disagree with it. */
+struct file;
+struct file *socket_file_create(struct socket *s);
+struct socket *file_socket(struct file *f);
+bool file_is_socket(const struct file *f);
+
+/* Drives the five calls through `syscall_dispatch`, and checks above all that
+ * a descriptor naming something else is refused rather than followed. */
+bool socket_syscall_test(void);
 bool socket_bind(struct socket *s, ipv4_addr addr, u16 port);
 bool socket_listen(struct socket *s, unsigned backlog);
 struct socket *socket_accept(struct socket *s);

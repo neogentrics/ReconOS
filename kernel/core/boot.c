@@ -369,6 +369,92 @@ bool boot_handoff_registers_clear(const char **dirty, unsigned *checked)
 	return true;
 }
 
+/* Which volume the loader read this kernel from.
+ *
+ * Its own function because it is printed twice: here in its place, and again at
+ * the end of a `noinit` boot, where two hundred lines of report have pushed the
+ * first copy off a fifty-line panel. **One author for the wording**, so the two
+ * copies cannot drift into disagreeing about the same fact.
+ *
+ * Printed at all because KF-222 was a file written to the wrong disk and its
+ * fix could only ask *is this one of ours* -- the kernel had no way to ask *is
+ * this the one I booted from*, since nothing told it. Now something does, and
+ * the first use of a new fact should be to show it: a value carried and never
+ * displayed is one nobody can check, and this one is meant to decide where
+ * files get written.
+ *
+ * Three states, said apart. A GUID is unique across every disk in the machine;
+ * an LBA is unique only within one disk; and a loader that could not tell says
+ * so rather than reporting block zero.
+ */
+void boot_print_medium(void)
+{
+	unsigned i;
+	bool have_guid = false;
+
+	for (i = 0; i < 16; i++)
+		if (info.boot_part_guid[i])
+			have_guid = true;
+
+	if (have_guid)
+		kprintf("  booted from  : block %llu, partition "
+			"%02x%02x%02x%02x-%02x%02x-%02x%02x\n",
+			(unsigned long long)info.boot_part_lba,
+			info.boot_part_guid[3], info.boot_part_guid[2],
+			info.boot_part_guid[1], info.boot_part_guid[0],
+			info.boot_part_guid[5], info.boot_part_guid[4],
+			info.boot_part_guid[7], info.boot_part_guid[6]);
+	else if (info.boot_part_lba)
+		/* `0x%x` rather than `%#x`: this printer has no alternate form,
+		 * and refuses an unsupported conversion rather than
+		 * guessing at its width (KF-129). It refused this one on
+		 * the first BIOS boot after it was written. */
+		kprintf("  booted from  : block %llu of drive 0x%x -- "
+			"no GPT, so this names a volume only on this "
+			"disk\n",
+			(unsigned long long)info.boot_part_lba,
+			info.boot_disk);
+	else
+		kprintf("  booted from  : the loader did not say\n");
+}
+
+/* What the loader's menu offered, and what was done with it.
+ *
+ * Its own function for boot_print_medium's reason: printed twice, once in place
+ * and once at the end of a boot whose report has scrolled off a small screen.
+ *
+ * **The interesting line is the one that says a menu never ran.** Everything
+ * else here is ordinary bookkeeping; that case is KF-233, where the loader gave
+ * up before offering recovery and then started ReconOS without pausing. The
+ * loader prints as much on the firmware console and immediately draws over it,
+ * so on a laptop this file is the only place it can be read.
+ */
+void boot_print_menu(void)
+{
+	if (!info.menu_known) {
+		/* The usual answer. A BIOS boot, a Multiboot2 boot under GRUB,
+		 * or a ReconBoot older than the field -- none of them have a
+		 * menu of ours to report on, and saying "no menu ran" about
+		 * them would be an accusation rather than a fact. */
+		kprintf("  boot menu    : this loader does not have one\n");
+		return;
+	}
+
+	if (!info.menu_shown) {
+		kprintf("  boot menu    : never offered -- %u entr%s found and "
+			"no menu ran (KF-233)\n", info.menu_entries,
+			info.menu_entries == 1 ? "y" : "ies");
+		return;
+	}
+
+	kprintf("  boot menu    : %u entr%s, %s, %s\n",
+		info.menu_entries, info.menu_entries == 1 ? "y" : "ies",
+		info.menu_drawn ? "drawn on the screen" : "text only",
+		info.menu_picked ? "and one was chosen"
+		: info.menu_key ? "somebody was there and took the default"
+		: "nobody pressed a key");
+}
+
 void boot_print_summary(void)
 {
 	kprintf("\nBoot\n");
@@ -376,47 +462,8 @@ void boot_print_summary(void)
 	kprintf("  protocol     : %s\n", info.protocol ? info.protocol : "none");
 	kprintf("  loader       : %s\n", info.loader);
 
-	/* Which volume the loader read this kernel from.
-	 *
-	 * Printed because KF-222 was a file written to the wrong disk and its
-	 * fix could only ask *is this one of ours* -- the kernel had no way to
-	 * ask *is this the one I booted from*, since nothing told it. Now
-	 * something does, and the first use of a new fact should be to show it:
-	 * a value carried and never displayed is one nobody can check, and this
-	 * one is meant to decide where files get written.
-	 *
-	 * Three states, said apart. A GUID is unique across every disk in the
-	 * machine; an LBA is unique only within one disk; and a loader that
-	 * could not tell says so rather than reporting block zero. */
-	{
-		unsigned i;
-		bool have_guid = false;
-
-		for (i = 0; i < 16; i++)
-			if (info.boot_part_guid[i])
-				have_guid = true;
-
-		if (have_guid)
-			kprintf("  booted from  : block %llu, partition "
-				"%02x%02x%02x%02x-%02x%02x-%02x%02x\n",
-				(unsigned long long)info.boot_part_lba,
-				info.boot_part_guid[3], info.boot_part_guid[2],
-				info.boot_part_guid[1], info.boot_part_guid[0],
-				info.boot_part_guid[5], info.boot_part_guid[4],
-				info.boot_part_guid[7], info.boot_part_guid[6]);
-		else if (info.boot_part_lba)
-			/* `0x%x` rather than `%#x`: this printer has no alternate form,
-			 * and refuses an unsupported conversion rather than
-			 * guessing at its width (KF-129). It refused this one on
-			 * the first BIOS boot after it was written. */
-			kprintf("  booted from  : block %llu of drive 0x%x -- "
-				"no GPT, so this names a volume only on this "
-				"disk\n",
-				(unsigned long long)info.boot_part_lba,
-				info.boot_disk);
-		else
-			kprintf("  booted from  : the loader did not say\n");
-	}
+	boot_print_medium();
+	boot_print_menu();
 
 	{
 		const char *dirty = 0;

@@ -720,6 +720,64 @@ pipes and shared memory are built, sockets are not.
 
 ---
 
+---
+
+## An open bug is not a closed door
+
+**Read this before deciding the kernel is too broken to build against.**
+
+`docs/BUGS.md` records every fault found, and it is long because faults are
+looked for rather than waited for. It is **not** a list of reasons to stop.
+The kernel boots on twenty-eight paths, passes 1530 self-tests with none
+skipped, runs programs, draws on the screen and writes to disks -- with those
+entries open, because almost all of them describe something already fixed or
+something narrow.
+
+The rule, and it came from Joshua directly after the desktop session stalled on
+this twice:
+
+> Ignore the open KF entries. Build against the kernel. Only stop if an entry
+> **names the thing you are working on** and says it does not work.
+
+Everything else in the kernel is live. A recorded bug means somebody went
+looking, which is the opposite of a warning.
+
+**What to check instead of the bug list:** this file, and the audit. This file
+says what the kernel offers and what it does not. If a capability is not here
+and not in `docs/KERNEL.md`, it is missing -- and *missing* is a different
+question from *buggy*.
+
+---
+
+## The one gap that blocks the most work: sockets
+
+Recorded at the top because it is the answer to "what can the OS side build
+next", and the answer is smaller than it looks.
+
+The kernel has **27 system calls** and not one of them touches the network:
+
+```
+SYS_OPEN SYS_READ SYS_WRITE SYS_CLOSE SYS_CREATE SYS_MKDIR SYS_LIST SYS_SEEK
+SYS_PIPE SYS_MAP SYS_SCREEN SYS_POWER SYS_TIME SYS_WALLTIME SYS_RANDOM
+SYS_MACHINE SYS_KILL SYS_EXIT SYS_YIELD SYS_GETPID SYS_GETUID SYS_GETGID
+SYS_GETCAPS SYS_DROPCAP SYS_SIGACTION SYS_SIGMASK SYS_SIGRETURN
+```
+
+**A userland program cannot open a socket, so it cannot serve anything.** That
+is why no network role -- server, thin client, firewall -- can be started on
+the OS side today. Not because they are hard: because the doorway is absent.
+
+**The hard part is already built and passing.** `tcp_open_listener`,
+`tcp_accept_ready` and `udp_bind_port` exist in `kernel/core/net.c` and work;
+the TCP state machine, the listener path and the random-ISN rule are all in
+place and tested. What is missing is the system call that lets a program reach
+them.
+
+So this is one well-defined kernel-side item that unblocks three of the five
+roles in `docs/ROLES.md` simultaneously, and it is the next thing the kernel
+track is building.
+
+
 ## Time
 
 **Where:** file timestamps in the explorer, the clock, the certificate's

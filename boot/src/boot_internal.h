@@ -67,6 +67,14 @@ BOOLEAN menu_boot(unsigned index, EFI_HANDLE self);
  * this first. */
 BOOLEAN menu_is_recovery(unsigned index);
 
+/* What the last menu_choose observed: RECONBOOT_MENU_* bits.
+ *
+ * Kept by the menu and asked for by the caller, rather than returned through
+ * menu_choose, because menu_choose's return value is *the decision* and the
+ * one place a bootloader must not be clever is the line that decides what
+ * starts. */
+unsigned menu_observed(void);
+
 /* --- The menu, drawn ------------------------------------------------------
  *
  * An attempt, with the text menu behind it. Every reason to say no -- no
@@ -86,6 +94,15 @@ void gfx_report(BOOLEAN used);
 /* How many entries the menu will hold. Shared so the graphical renderer can
  * size a screen against it without a second, drifting number. */
 #define MENU_MAX 8
+
+/* How many of those the *scan* may fill. One fewer, and the difference is
+ * recovery's slot.
+ *
+ * `add_recovery` returns without doing anything when the table is full, which
+ * is KF-233's fault reached by a different door: the entry that is not a system
+ * is the entry a machine full of systems loses. Rarer than the three return
+ * paths and exactly as silent. Reserving the slot is cheaper than noticing. */
+#define MENU_SYSTEMS_MAX (MENU_MAX - 1)
 
 /* How long the menu waits before starting the default.
  *

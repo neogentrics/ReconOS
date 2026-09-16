@@ -295,9 +295,29 @@ bool time_self_test(void)
 	 * not from this tick. A fifth of a second is long enough to tell 100 from
 	 * 200 and short enough to pay for on every boot; the tolerance is wide
 	 * because a loaded guest genuinely loses ticks, and a factor of two is
-	 * what this is for. */
+	 * what this is for.
+	 *
+	 * --- and it counted the wrong thing for two days (KF-235) ------------
+	 *
+	 * It asked `time_ticks()`. That was the interrupt's own count when this
+	 * was written, and KF-204 made it `arch_monotonic_ns() / tick`, derived
+	 * from the very counter the loop below times itself against. Substitute
+	 * and the whole check collapses:
+	 *
+	 *     rate = (dmono / tick) * 1e9 / dmono  ==  1e9 / tick  ==  TICK_HZ
+	 *
+	 * **Exactly TIME_TICK_HZ, on every machine, whatever the hardware is
+	 * doing.** The one thing this exists to catch -- a tick arriving at some
+	 * rate other than the one every conversion in the kernel assumes -- had
+	 * become the one thing it could not report. A 201 Hz tick would pass it
+	 * now, which is the fault it was written for, by name, in the paragraph
+	 * above.
+	 *
+	 * `time_tick_interrupts()` is the interrupt's own count and has been all
+	 * along; `smp.c` and `power.c` already ask it whether the tick is alive.
+	 * Nothing asked it how fast. It does now. */
 	{
-		u64 t0 = time_ticks();
+		u64 t0 = time_tick_interrupts();
 		u64 n0 = time_monotonic_ns();
 		u64 elapsed, rate;
 
@@ -305,7 +325,7 @@ bool time_self_test(void)
 			arch_cpu_relax();
 
 		elapsed = time_monotonic_ns() - n0;
-		rate = (time_ticks() - t0) * 1000000000ULL / elapsed;
+		rate = (time_tick_interrupts() - t0) * 1000000000ULL / elapsed;
 
 		if (rate > (u64)TIME_TICK_HZ * 3 / 2 ||
 		    rate < (u64)TIME_TICK_HZ / 2) {

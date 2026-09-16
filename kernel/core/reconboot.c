@@ -105,6 +105,19 @@ bool reconboot_parse(paddr_t handoff)
 			boot_info()->boot_part_guid[i] = bi->boot_part_guid[i];
 	}
 
+	if (RECONBOOT_HAS(bi, menu_flags)) {
+		boot_info()->menu_known   = true;
+		boot_info()->menu_entries = bi->menu_entries;
+		boot_info()->menu_shown   =
+			(bi->menu_flags & RECONBOOT_MENU_SHOWN)  != 0;
+		boot_info()->menu_drawn   =
+			(bi->menu_flags & RECONBOOT_MENU_DRAWN)  != 0;
+		boot_info()->menu_key     =
+			(bi->menu_flags & RECONBOOT_MENU_KEY)    != 0;
+		boot_info()->menu_picked  =
+			(bi->menu_flags & RECONBOOT_MENU_PICKED) != 0;
+	}
+
 	kstrlcpy(loader_name, bi->loader, sizeof(loader_name));
 	boot_info()->loader = loader_name;
 

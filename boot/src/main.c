@@ -1409,6 +1409,15 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 
 		unsigned found = menu_discover(from);
 
+		/* Recorded whether or not a menu happens. Zero entries and no
+		 * SHOWN bit is the one combination that says the loader gave
+		 * up before offering anything, and it is the combination
+		 * nobody could see before: the console lines that would have
+		 * said so are painted over by the menu a moment later, on a
+		 * machine with no serial port to read them from. */
+		boot_info.menu_entries = found;
+		boot_info.menu_flags   = 0;
+
 		if (found) {
 			int pick;
 
@@ -1441,6 +1450,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 			 * we carry on and start ReconOS -- a machine that ends
 			 * up somewhere is better than one that ends up
 			 * nowhere. */
+			boot_info.menu_flags = menu_observed();
+
 			if (pick >= 0) {
 				if (menu_is_recovery((unsigned)pick))
 					recovery_chosen = TRUE;

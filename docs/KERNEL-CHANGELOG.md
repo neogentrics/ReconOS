@@ -88,6 +88,48 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.40 -- 15 September 2026 -- two faults found by reading, one of them in a test
+
+**KF-234: a timer was due before the instant it was asked for.** `timer_start`
+filed deadlines at `time_ticks() + ticks`, and `time_ticks()` is the monotonic
+counter *truncated* to a tick -- the tick the caller is in, not the moment they
+asked at. So a 50 ms sleep could come due after 40. The deadline is the ceiling
+of the sum in nanoseconds now, plus an explicit floor above the wheel's hand,
+because a deadline correct against the clock can still land in a slot the hand
+has just emptied and wait a full turn of the wheel there.
+
+This is the Gateway's `a 50 ms sleep took 43132 us` line, and it reproduces
+under QEMU at **43459 us** -- two hundred microseconds apart, on a different
+machine, from a fault fifty-six boots had failed to show. Nothing about the
+hardware was needed. What was needed was a test that chose **when** it asked.
+
+**The test took three attempts and the first two failed in opposite
+directions**, which is recorded in KF-234 because it is the useful part. Asking
+at nine tenths of a tick -- where the error is largest -- passed six times out
+of six, because the tick rolled over during setup and made the sleep a whole
+tick *longer* than asked. Printing the phase to find out why made it rarer
+still: the print crossed the boundary the test needed not to cross. The
+end-to-end timing was then abandoned for the promise itself, which is
+arithmetic: file a timer, read `expires` back, cancel it, assert it is not due
+before `asked + ns`, across all ten phases of a tick. Five boots, five
+failures, at 77-96 us each.
+
+**KF-235: the check that the tick arrives at the assumed rate cannot fail.** It
+compared `time_ticks()` against `time_monotonic_ns()` -- and KF-204 had made the
+first *derived from* the second, so it computed exactly `TIME_TICK_HZ` on every
+machine regardless of hardware. The 201 Hz incident its own comment describes
+would pass it. Nobody edited this check; a change in another file altered what
+its inputs meant. It asks `time_tick_interrupts()` now, which is the interrupt's
+own count and has existed all along.
+
+**KF-232 was corrected rather than closed.** It had attributed the sleep line to
+"the monotonic clock running ahead of real time" -- wrong, and wrong in the
+opposite direction from its earlier ruling-out of the same mechanism. What is
+left open is `0 of 3 timers fired` beside an MSI that was sent and did not
+arrive, which is a different shape and still only ever seen on one machine.
+
+---
+
 ## 0.2.39 -- 15 September 2026 -- memory a program can ask for
 
 `SYS_MAP` with an **fd of -1** returns a demand-paged anonymous range. That was
@@ -154,6 +196,70 @@ past what was asked for, and the same address handed out twice.
 
 **Still no release call.** That is now its own entry in `KERNEL-WANTS.md` rather
 than half of one.
+
+## 0.2.38 -- 15 September 2026 -- a recovery entry that could not disappear
+
+**KF-233.** `menu_discover` added recovery at the bottom of the loader's scan,
+after three `return 0` paths, and its caller shows no menu at all when the count
+is zero. So the one entry that depends on nothing the scan finds was the entry
+the scan's failure removed -- and it is the entry you want precisely when a
+machine is misbehaving. *A recovery environment reachable only when everything
+else already worked is not a recovery environment.*
+
+One line was doing two jobs. Recovery is added **last** so the numbering of the
+disk's systems does not move, which is still right; it is now also added
+**unconditionally**, which is a separate line. The scan is `scan_for_systems`
+and may give up however it likes.
+
+The same fault has a second door: `add_recovery` returns silently when the table
+is full, so eight systems on one machine cost you the ninth entry. The scan is
+bounded by `MENU_SYSTEMS_MAX` now and the slot it leaves is reserved.
+
+`boot-menu-test.sh` asserts recovery is listed and passed in every matrix run
+that contained this bug, because it exercises the path where the scan succeeds
+-- the path that was never broken. **A check nobody performs is a check nobody
+fails.** The three broken paths need firmware that misbehaves, so the new check
+is structural: `scripts/check-menu-recovery.py` asserts `menu_discover` leaves
+by one door with `add_recovery()` before it. Four doors on the old code, one on
+the new, measured both ways.
+
+**Kali is in the table of loaders**, both `shimx64.efi` and `grubx64.efi`. It
+was installed on the machine that found all this and was never going to be
+offered, because seven names find seven systems and an eighth is invisible
+however healthy it is.
+
+**And the menu now says what it did.** Four facts travel in the handoff's
+appended region -- how many entries, drawn or text, whether a key was pressed,
+whether one was chosen -- and the kernel prints them in the boot report, which
+is written to disk. The loader already said this on the firmware console and
+then painted the graphical menu over the same pixels, so on a machine with no
+serial port nobody had ever read it. `menu_known` is separate from all four,
+because a BIOS boot, a GRUB boot and an older loader arrive as zeroes and so
+does a menu that never ran.
+
+```
+boot menu    : 1 entry, drawn on the screen, nobody pressed a key
+```
+
+Matrix 55: 1530 self-tests across every path, no failures, none skipped.
+
+---
+
+## The gap between 0.2.15 and 0.2.38
+
+**Twenty-three versions below this one have no entry here, and they should.**
+0.2.16 through 0.2.37 were this session's, one bug each, and every one of them
+was written up in `docs/BUGS.md` -- which is where the reasoning lives and is
+not the thing that is missing. What is missing is this file doing what its own
+first line says it does.
+
+Named rather than filled. Twenty-three retrospective entries reconstructed from
+the register would be new prose about old work whose account already exists
+somewhere better, and this file has an entry of its own about a document that
+kept asserting something after it stopped being true. Recording the hole is the
+honest version of that lesson; quietly closing the numbers over it is not.
+
+---
 
 ## 0.2.15 -- 13 September 2026
 

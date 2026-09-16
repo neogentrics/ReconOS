@@ -217,6 +217,23 @@ enum {
 	 * one in order to get the easy one. */
 	SYS_POWER,
 
+	/* --- sockets ---------------------------------------------------------
+	 *
+	 * Appended, which is the whole reason they can be added at all: a call
+	 * inserted anywhere but the end shifts every number after it, and a
+	 * program built against the other header then reaches the next call
+	 * along **and is told it succeeded**. `scripts/check-syscall-numbers.py`
+	 * exists because of that and checks all three copies.
+	 *
+	 * **There is no send and no receive here.** A socket is a file, so
+	 * `SYS_WRITE` sends and `SYS_READ` receives, and `SYS_CLOSE` closes.
+	 * Only the five things a file cannot do need a number of their own. */
+	SYS_SOCKET,	/* (type) -> fd */
+	SYS_BIND,	/* (fd, addr, port) */
+	SYS_LISTEN,	/* (fd, backlog) */
+	SYS_ACCEPT,	/* (fd) -> fd, or EAGAIN when nobody is waiting */
+	SYS_CONNECT,	/* (fd, addr, port) */
+
 	SYS_MAX
 };
 

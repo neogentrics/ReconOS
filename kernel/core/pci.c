@@ -388,7 +388,17 @@ void pci_print_summary(void)
 		 * all three, and "SATA controller" with the wrong programming
 		 * interface is a different driver's device. Printing what was
 		 * matched against saves guessing at why nothing attached. */
-		kprintf("    %u:%u.%u  %x:%x  %s [%x/%x/%x]\n", d->bus, d->slot,
+		/* **Hexadecimal, like every other tool that prints one.**
+		 *
+		 * This was `%u:%u.%u` -- bus, slot and function in decimal,
+		 * beside vendor and device in hex on the same line. So the
+		 * Gateway's xHCI printed as `0:21.0` where `lspci` calls it
+		 * `00:15.0`, and 0x15 is 21. Nothing was wrong with the scan;
+		 * the address simply could not be looked up anywhere, which is
+		 * the only reason it is printed. KF-231's shape exactly, and
+		 * found the same way -- by holding our output beside a tool
+		 * that reads the same hardware. (KF-236) */
+		kprintf("    %02x:%02x.%x  %x:%x  %s [%x/%x/%x]\n", d->bus, d->slot,
 			d->func, d->vendor, d->device,
 			class_name(d->class_code, d->subclass),
 			d->class_code, d->subclass, d->prog_if);

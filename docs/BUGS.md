@@ -7109,6 +7109,275 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-236 - Every PCI address is printed in a form nobody can look up
+
+- **Found:** 15 September 2026, by holding the Gateway's boot report beside
+  `lspci` on the same machine, minutes apart, over SSH.
+
+  ```
+  ReconOS : 0:21.0   8086:31a8  serial bus controller [c/3/30]
+  lspci   : 00:15.0  8086:31a8  USB controller [0c03]
+  ```
+
+  Same device. **0x15 is 21.** `core/pci.c` printed bus, slot and function with
+  `%u:%u.%u` -- decimal -- beside the vendor and device IDs in hex on the same
+  line.
+
+- **Cost.** Nothing in the kernel was wrong: the scan, the class triple and the
+  IDs were all correct. What was wrong is that the address could not be
+  compared against any other tool's output, and comparing it is the only reason
+  it is printed. Every PCI address this kernel has ever printed on a machine
+  with a device past slot 9 has been unlookupable, and nobody noticed because
+  nobody had a second opinion to hold it against until today.
+
+- **KF-231's shape, and found the same way.** That was `%02x` of `0x04`
+  printing `4` -- a GUID and a USB vendor ID that could not be looked up. Both
+  are *a number printed in a form that defeats the purpose of printing it*, and
+  both were caught by comparison against an independent tool rather than by
+  looking at the shape of the line. `sgdisk` caught the first; `lspci` caught
+  this one.
+
+- **Fixed** with `%02x:%02x.%x`, which is what every PCI tool in existence
+  prints. Verified against QEMU's own device list: `00:01.1  8086:7010  IDE
+  controller`.
+
+- **Status:** fixed, kernel 0.2.41.
+
+### KF-235 - The check that the tick arrives at the rate the kernel assumes cannot fail
+
+- **Found:** 15 September 2026, by reading `time_self_test` while looking for
+  KF-232's mechanism. Not by a failure: this check has never failed and cannot.
+
+- **What it was.** The check exists to catch a tick arriving at some rate other
+  than `TIME_TICK_HZ`, and its own comment names the incident it was written
+  for -- the 8254 programmed as a square wave, the I/O APIC counting both
+  transitions, the kernel running at 201 Hz against a 100 Hz constant while
+  every tick-counting test passed. It measured:
+
+  ```c
+  u64 t0 = time_ticks();
+  u64 n0 = time_monotonic_ns();
+  ...
+  rate = (time_ticks() - t0) * 1000000000ULL / elapsed;
+  ```
+
+  `time_ticks()` was the interrupt's own count when that was written. **KF-204
+  made it `arch_monotonic_ns() / tick`** -- derived from the very counter the
+  loop times itself against. Substitute and the whole thing collapses:
+
+  ```
+  rate = (dmono / tick) * 1e9 / dmono  ==  1e9 / tick  ==  TIME_TICK_HZ
+  ```
+
+  **Exactly 100, on every machine, whatever the hardware is doing.** A 201 Hz
+  tick passes it. The one fault it exists to report had become the one fault it
+  could not.
+
+- **Cost.** Unknown and not claimable. Nothing has been measured wrong because
+  of it; what is certain is that the measurement was not being taken. Every
+  conversion in the kernel -- every timer, every sleep, every scheduling slice
+  -- divides by `TIME_TICK_HZ`, and if the hardware disagrees all of them are
+  wrong by one factor and nothing counting ticks notices.
+
+- **How it happened, which is the part worth keeping.** Nobody edited this
+  check. KF-204 changed what `time_ticks()` *meant* -- one author for the tick
+  count, the hardware counter, which was right and fixed a real early-firing
+  bug. This check read like it still worked because the line did not change.
+  **A test can be broken by a change in a file it does not name**, and there is
+  nothing at the call site to see.
+
+- **The fix.** `time_tick_interrupts()` is the interrupt's own count and has
+  existed the whole time; `smp.c` and `power.c` already ask it whether the tick
+  is *alive*. Nothing asked it how *fast*. It does now. The tolerance stays
+  wide -- a loaded guest genuinely loses ticks and a factor of two is what this
+  is for.
+
+- **Status:** fixed, kernel 0.2.40.
+
+### KF-234 - A timer is due before the instant it was asked for
+
+- **Found:** 15 September 2026, by reading `timer_start` while looking for
+  KF-232's mechanism -- and it turned out to *be* KF-232's mechanism, or half
+  of it.
+
+- **What it was.** One line:
+
+  ```c
+  t->expires = now + ticks;      /* now = time_ticks() */
+  ```
+
+  `time_ticks()` is the monotonic counter **truncated** to a tick. It names the
+  tick the caller is *in*, not the instant they asked *at*. So the delay was
+  measured from up to a whole tick in the past, and a 50 ms sleep could come
+  due after 40.
+
+- **Reproduced, which fifty-six boots could not do.** The Gateway printed
+  `a 50 ms sleep took 43132 us`. Under QEMU, with the test asking at a chosen
+  phase rather than wherever the boot happened to reach it:
+
+  ```
+  timer: a 50 ms sleep came back 6540 us early, after 43459 us
+  ```
+
+  **43459 against 43132** -- two hundred microseconds apart, on a different
+  machine, from a fault the emulator had been declared unable to show.
+
+- **So the emulator was never the problem.** KF-232 concluded *a negative
+  result from an emulator is a fact about the emulator*, and that sentence is
+  earned -- KF-214, KF-219 and KF-223 are all faults QEMU cannot produce. It
+  was the wrong conclusion here. Nothing about the hardware was required. What
+  was required was a test that chose **when** it asked. The fifty-six boots
+  were not fifty-six samples; they were one sample taken fifty-six times.
+
+- **The test that finally held, and the two that did not.** Timing a sleep
+  measures a race -- the filing, the tick that runs the callback, the scheduler
+  returning to the thread -- and any of the three can absorb a tick and hide
+  the error:
+
+  - Asking at **nine tenths** of a tick, where the error is largest, passed six
+    times out of six. That phase leaves a tenth of a tick before the count
+    rolls over, `timer_start` reads the clock again just after the test does,
+    and the crossing makes the sleep a whole tick *longer* than asked. **It
+    passed for the opposite of the right reason.**
+  - Asking at **seven tenths** caught it one boot in four.
+  - Printing the phase to find out why made it one in six, because the print
+    took long enough to cross the boundary the test needed not to cross.
+    **The instrument changed the thing it measured, toward health.**
+
+  The phase was never the variable -- measured, it was held to within 25 us
+  across six boots. So the end-to-end timing was abandoned for the promise
+  itself, which is arithmetic and can be checked as arithmetic: file a timer,
+  read `expires` back, cancel it before it can fire, and assert
+  `expires * tick_ns >= asked_ns + ns`. No interrupt, no scheduler, no race,
+  swept across all ten phases of a tick.
+
+  ```
+  timer: a 50 ms timer filed at phase 0/10 is due 77 us before it was asked for
+                                                  84 us
+                                                  90 us
+                                                  96 us
+                                                  85 us
+  ```
+
+  Five of five, and **the error is only 77 us** -- the time between reading the
+  clock and entering `timer_start`. A test that catches the fault by 77
+  microseconds every time is worth more than one that catches it by seven
+  milliseconds a quarter of the time.
+
+- **The fix, and the half of it that is not obvious.** The deadline is the
+  ceiling of the *sum*, in nanoseconds:
+
+  ```c
+  t->expires = (asked_ns + ns + tick_ns - 1) / tick_ns;
+  ```
+
+  A timer may fire late -- a tick is the wheel's resolution. It may never be
+  due before the instant asked for, because a caller who then reads a clock is
+  told yes when it is no, and that is a wrong answer rather than a coarse one.
+
+  The second half: `place()` files relative to `wheel_now`, the hand, and since
+  KF-204 the hand and the clock are different numbers. A deadline correct
+  against the clock can still land at or behind the hand -- into a slot just
+  emptied, where it would sit for a **full turn of the wheel**. A 640 ms nap
+  for a 50 ms request. It needs a clock that has not crossed a tick since the
+  hand last moved, so it is rare; rare is the word this project keeps finding
+  on the far side of a real machine. Hence an explicit floor rather than
+  trusting the arithmetic to imply one.
+
+- **KF-206 moved this same line once already**, from the wheel's hand to the
+  clock, to stop timers firing a tick early. It fixed the *source* and left the
+  *truncation*, so the same class of error survived at smaller magnitude and
+  waited for a machine where the phase was random. **A fix aimed at the
+  instance rather than the class comes back wearing different numbers.**
+
+- **Status:** fixed, kernel 0.2.40.
+
+### KF-233 - Recovery is offered on every boot, except the boots that go wrong
+
+- **Found:** 14 September 2026, by reading the loader after Joshua reported that
+  the Gateway's menu "only shows Recon OS. It doesn't even show Recon OS
+  recovery." Whether this is what that machine hit is **not yet known** -- see
+  the last point -- but it is the only path in the loader that produces exactly
+  that screen, and it is wrong on its own account.
+
+- **What it was.** `menu_discover` ends with
+
+  ```c
+  add_recovery();
+  return entry_count;
+  ```
+
+  and its caller in `main.c` does nothing whatever when the count is zero: no
+  menu, no pause, straight into ReconOS. Above that line sat three `return 0`s
+  -- `LocateHandle` not answering `EFI_BUFFER_TOO_SMALL`, `AllocatePool`
+  failing, the second `LocateHandle` failing -- every one of them reached
+  before recovery was ever added.
+
+  So the entry that depends on **nothing the scan finds** was the entry the
+  scan's failure removed. And it is the entry you want precisely when a machine
+  is doing something unexpected. **A recovery environment reachable only when
+  everything else already worked is not a recovery environment.**
+
+- **One line was doing two jobs.** The comment above it explains why recovery is
+  added last -- so that somebody who has learned Windows is 2 does not find it
+  is 3 after an update -- and that reason is good and still holds. But *last*
+  and *only on success* are not the same requirement, and placing the call at
+  the bottom of the scan enforced both. They are two lines now: the scan is
+  `scan_for_systems`, which may give up however it likes, and `menu_discover`
+  calls it and then adds recovery regardless.
+
+- **Cost.** Not measurable from here, and that is the honest answer. Nothing in
+  twenty-eight boot paths has ever taken one of those three exits, so the fault
+  has no observed consequence in QEMU at all. What it has is a shape: the
+  failure mode is *silent*, the thing lost is *the fallback*, and the machines
+  that can trigger it are the machines nobody is holding.
+
+- **The test that passed the whole time.** `boot-menu-test.sh` asserts `offers
+  the recovery environment -- listed, and last`, and it has passed in every
+  matrix run including the ones with this bug in them. It exercises the path
+  where the scan succeeds, which is the path that was never broken. **A check
+  nobody performs is a check nobody fails** -- KF-219's sentence, earned again.
+
+- **So the check is structural**, `scripts/check-menu-recovery.py`: strip the
+  comments from `menu_discover` and assert it leaves by exactly one door with
+  `add_recovery()` before it. Not a proxy for the property; it is the property,
+  asked the only way a machine here can be asked. It reports four doors on the
+  code as it stood and one on the code as it stands, which was checked rather
+  than assumed.
+
+- **What this does not explain.** The Gateway's firmware would have to be
+  failing one of those three calls, and there is no evidence that it is. The
+  loader already prints `menu : waiting 6 s for N entries` and `menu : drawn`
+  before it waits, and both go to the firmware console -- underneath, moments
+  later, the graphical menu the loader paints over them. Nobody has read those
+  two lines on that machine. Until somebody does, the competing explanation is
+  simply that the menu appeared, listed recovery in the dim grey every
+  unselected row is drawn in, and was read past in six seconds. **Both are
+  consistent with what was reported, and the fix above is right either way.**
+
+- **The same fault has a second door**, found while checking the first. The
+  table holds `MENU_MAX` entries and `add_recovery()` returns without doing
+  anything when it is full -- so a machine with eight systems on it loses the
+  one entry that is not a system. Rarer than the three return paths and exactly
+  as silent, and the same sentence describes it: the entry that depends on
+  nothing is the entry a full table drops. The scan is bounded by
+  `MENU_SYSTEMS_MAX` now, which is one fewer, and the slot it leaves is
+  recovery's. **Reserving it is cheaper than noticing it is gone.**
+
+- **And the machine in question runs Kali**, which the loader did not know
+  about: `\EFI\kali\` is not one of the seven names in the table, so it was
+  never going to be offered whatever the menu did. That is a gap rather than
+  this bug, and it is a reminder of the table's limit -- seven names find seven
+  systems and an eighth is invisible however healthy it is. Kali is in the
+  table now, both `shimx64.efi` and `grubx64.efi` for Ubuntu's reason. The
+  firmware's own `BootOrder` would find every one of them and would also offer
+  disks that have since been removed, which is the stale list `main.c`
+  deliberately refuses to keep. Neither is free; the table grows when a real
+  machine shows it something it missed, and this is the first time that has
+  happened.
+
+- **Status:** fixed, loader 0.2.38. The Gateway's menu is still unexplained.
+
 ### KF-232 - Three timers did not fire, once, on one path of twenty-eight
 
 - **Renumbered on the merge**, from KF-227. Both sessions reached
@@ -7210,9 +7479,99 @@ boot log.
   is not counted: a sixty-four-guest experiment was run across its first
   minutes, which is the CPU contention this project already has an entry about
   reading a result through. It was stopped rather than read.)
-- **Status:** open, unreproduced. The next observation is what makes this
-  diagnosable; until then there is nothing to fix and a guess would be worse
-  than the gap.
+- **Reproduced on real hardware, 14 September**, on the Gateway -- the first
+  machine outside QEMU it has ever run on, and the first boot of it there:
+
+  ```
+  timer: 0 of 3 timers fired
+  timer: a timer filed on the second wheel never came down to the first
+  timer: a 50 ms sleep took 43132 us
+  something later    : FAIL
+  ```
+
+  **The third line is new and it is the diagnosis.** No matrix run has ever
+  printed it. A 50 ms sleep that returns after 43 ms is the monotonic clock
+  running ahead of real time -- and the wheel's hand is turned by the tick
+  interrupt, not by that clock. Both symptoms are then one fact rather than
+  two: the wait ends when `time_ticks()` says ten ticks have passed, and the
+  hand has not turned far enough for a timer filed at +2 to be due.
+
+- **So the mechanism ruled out above is the mechanism.** That section says, in
+  as many words, *if the hand can fall three ticks behind the clock ... `0 of 3
+  timers fired` is not a broken wheel, it is a wheel nobody has turned yet* --
+  and then discards it because sixty-seven boots measured a worst gap of one
+  tick.
+
+  Those measurements were right about QEMU and silent about anywhere else.
+  **The instrument was fine; the machine was the wrong machine.** Which is the
+  same sentence as every other entry found on this laptop: KF-214's wait on a
+  chip QEMU always has, KF-219's CRC QEMU does not enforce, KF-223's port QEMU
+  powers for you. A negative result from an emulator is a fact about the
+  emulator.
+
+- **And it is not alone in that boot.** The same report carries
+
+  ```
+  msi: a message was written to the local APIC's window and no interrupt arrived
+  an interrupt with no wire : FAIL
+  ```
+
+  which is interrupt *delivery* failing on the same machine. Whether the two
+  are one fault is not yet known and is the next thing to find out -- a wheel
+  turned by an interrupt that does not arrive would produce exactly the timer
+  symptom, and saying so before it is measured would be the mistake this entry
+  already made once.
+
+### And then it was wrong the other way -- 15 September
+
+**The third line was not this bug.** `a 50 ms sleep took 43132 us` is
+**KF-234**: `timer_start` filed deadlines against `time_ticks()`, the monotonic
+counter *truncated* to a tick, so the delay was measured from up to a whole
+tick in the past. It reproduces under QEMU at **43459 us** against the
+Gateway's **43132 us** -- two hundred microseconds apart, on a different
+machine, with no clock divergence anywhere in it.
+
+So the paragraph above, which read that line as *the monotonic clock running
+ahead of real time* and called it the diagnosis, was wrong. **This entry has
+now reasoned past its evidence in both directions**: first ruling the
+clock/hand mechanism out on sixty-seven boots that could not have shown it,
+then ruling it in on one line that turned out to be arithmetic. The lesson is
+not "be less confident" -- it is that a symptom seen once on one machine is a
+symptom, and the mechanism is whatever survives being reproduced on demand.
+
+**And the emulator was never the obstacle.** This entry's own conclusion -- *a
+negative result from an emulator is a fact about the emulator* -- is earned by
+KF-214, KF-219 and KF-223, all faults QEMU cannot produce. It did not apply
+here. QEMU could show KF-234 the whole time; what could not show it was a test
+that let the boot choose when to ask. **Fifty-six boots were one sample taken
+fifty-six times.**
+
+### What is actually left open
+
+The sleep line is gone. These are not:
+
+```
+timer: 0 of 3 timers fired
+timer: a timer filed on the second wheel never came down to the first
+msi: a message was written to the local APIC's window and no interrupt arrived
+```
+
+A timer that never fires is the *opposite* shape from one that fires early, and
+KF-234 cannot cause it: the wheel's hand catches up to the clock and stops, so
+it can lag but never lead. A hand that lags is a hand nobody turned, and
+`timer_tick` is turned by the tick interrupt -- on a machine whose report says
+in the next breath that an interrupt was sent and did not arrive.
+
+That remains a hypothesis and is deliberately not recorded as more. What makes
+it testable now is that KF-234 is out of the way: a rerun on the Gateway with
+0.2.40 either still shows `0 of 3` -- in which case the timer symptom and the
+MSI symptom are the same fault and worth chasing together -- or it does not,
+and this entry was two bugs wearing one number.
+
+- **Status:** open, **narrowed**. The sleep is fixed and was a different bug.
+  What is left is a timer that did not fire beside an interrupt that did not
+  arrive, on the one machine that has ever shown either, and the next
+  measurement is a boot of that machine rather than another argument.
 
 ### KF-231 - kprintf reads the width on a number and throws it away
 

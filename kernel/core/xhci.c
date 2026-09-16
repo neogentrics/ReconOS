@@ -42,6 +42,7 @@
  */
 #include <recon/kernel/suspend.h>
 #include <recon/kernel/block.h>
+#include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pci.h>
@@ -1268,6 +1269,34 @@ bool xhci_transfer_poll(struct xhci *x, struct usb_device *ud, u32 *transferred,
 	return got;
 }
 
+/* Every port's status word, as read, with nothing interpreted.
+ *
+ * **The decoded line was the whole problem.** `0 connected` is produced by at
+ * least three different faults and distinguishes none of them, and two wrong
+ * diagnoses were written before anybody thought to print the number the
+ * decision is made from. Linux on the same machine prints these registers for
+ * every port, so this turns a question into a comparison.
+ *
+ * `when` says which side of the power-and-settle this snapshot is, because what
+ * matters is what changed across it rather than either value alone.
+ */
+static void print_portsc(struct xhci *x, const char *when)
+{
+	unsigned p;
+
+	kprintf("  xhci portsc %s:\n", when);
+
+	for (p = 1; p <= x->max_ports; p++) {
+		u32 sc = op32(x, XHCI_PORTSC(p));
+
+		kprintf("    port %2u  0x%08x  %s %s %s  speed %u\n", p, sc,
+			(sc & PORTSC_PP)  ? "powered"   : "dark   ",
+			(sc & PORTSC_CCS) ? "connected" : "empty    ",
+			(sc & PORTSC_PED) ? "enabled"   : "disabled",
+			(sc >> 10) & 0x0F);
+	}
+}
+
 unsigned xhci_ports_connected(struct xhci *x)
 {
 	unsigned p, n = 0;
@@ -1932,6 +1961,9 @@ bool xhci_attach(const struct pci_device *d)
 	 * controller needs and an emulated one does not -- a device on a port
 	 * that was dark a moment ago is not detected the instant the rail comes
 	 * up. */
+	if (boot_cmdline_has("noinit"))
+		print_portsc(x, "as the controller came up");
+
 	for (p = 1; p <= x->max_ports; p++) {
 		u32 sc = op32(x, XHCI_PORTSC(p));
 
@@ -1941,6 +1973,9 @@ bool xhci_attach(const struct pci_device *d)
 	}
 
 	busy_ms(100);
+
+	if (boot_cmdline_has("noinit"))
+		print_portsc(x, "after powering and 100 ms");
 
 	for (p = 1; p <= x->max_ports; p++) {
 		if (port_arrived(x, p))

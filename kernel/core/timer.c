@@ -135,8 +135,17 @@ void timer_init(struct timer *t, void (*fn)(void *), void *arg)
 
 bool timer_start(struct timer *t, u64 ns)
 {
+	const u64 tick_ns = 1000000000ull / TIME_TICK_HZ;
 	u64 ticks = (ns * TIME_TICK_HZ + 999999999ull) / 1000000000ull;
 	u64 flags, now;
+
+	/* Read once, here, before anything else this function does.
+	 *
+	 * The caller asked at some instant before this line, so this is at or
+	 * after the moment they meant -- which is the direction that keeps the
+	 * promise below. Read later and the deadline drifts further from what
+	 * they asked for; read before the lock and it cannot drift at all. */
+	u64 asked_ns = time_monotonic_ns();
 
 	if (!t->fn)
 		return false;
@@ -188,7 +197,37 @@ bool timer_start(struct timer *t, u64 ns)
 	if ((i64)(now - wheel_now) < 0)
 		now = wheel_now;
 
-	t->expires = now + ticks;
+	/* **The first tick at or after the instant asked for.** (KF-234)
+	 *
+	 * This was `now + ticks`, and `now` is `time_ticks()`, which is the
+	 * monotonic counter *truncated* to a tick. That names the tick the
+	 * caller is in, not the moment they asked at -- so the delay was
+	 * measured from up to a whole tick in the past, and a fifty millisecond
+	 * sleep could come due after forty.
+	 *
+	 * A timer may fire late. A tick is the wheel's resolution and nothing
+	 * here pretends otherwise. It may never be *due before the instant it
+	 * was asked for*, because a caller who then reads a clock to see
+	 * whether the time has passed is told yes when it has not, and that is
+	 * a wrong answer rather than a coarse one.
+	 *
+	 * Ceiling, on the sum, in nanoseconds: `expires * tick_ns` is then at
+	 * or after `asked_ns + ns` by construction, at every phase, rather than
+	 * at the phases where truncation happened to lose nothing. */
+	t->expires = (asked_ns + ns + tick_ns - 1) / tick_ns;
+
+	/* And never the slot the hand is on.
+	 *
+	 * The rounding above already puts a sub-tick delay on the next tick,
+	 * which is what `ticks == 0 -> 1` says at the top of this function. This
+	 * is the other end of the same rule and it is about the *wheel* rather
+	 * than the request: `place` files relative to `wheel_now`, and a
+	 * deadline at or behind the hand aliases onto a slot that has already
+	 * been emptied -- where it would sit for a full turn of the wheel. It
+	 * takes a clock that has not moved a tick since the hand last did, so
+	 * it is rare and it is not hypothetical. */
+	if ((i64)(t->expires - now) < 1)
+		t->expires = now + 1;
 
 	/* The reach, re-checked against the distance the wheel actually has to
 	 * cover. `ticks < WHEEL_REACH` above was the whole precondition while
@@ -570,16 +609,114 @@ bool timer_self_test(void)
 	 *
 	 * The assertion is on elapsed time rather than on returning at all: a
 	 * timer_sleep_ns that returned immediately would pass any test that
-	 * only checked it came back. */
+	 * only checked it came back.
+	 *
+	 * **Asked for at a chosen point inside a tick, and exact rather than
+	 * within five milliseconds.** Both of those were slop and the slop was
+	 * hiding a fault.
+	 *
+	 * A sleep may return late -- the wheel has a resolution and a tick is
+	 * it. It may never return *early*: "wake me in 50 ms" that comes back
+	 * in 41 is a promise broken, and every caller that then reads a clock
+	 * to see whether it is time yet does the wrong thing quietly.
+	 *
+	 * The old form asked at whatever moment the boot happened to reach it
+	 * and allowed 45 ms. Under QEMU that moment is close to the same on
+	 * every run, which is why fifty-six of them agreed; on a laptop it is
+	 * effectively random, and half of all phases return under 45 ms. **A
+	 * test whose outcome depends on when it is run is not measuring the
+	 * thing it names.** So the phase is now chosen: late in a tick, where
+	 * the error is largest and a failure is certain rather than likely.
+	 */
+	/* --- the deadline itself, which is where the fault actually is ------
+	 *
+	 * Sleeping and timing it measures a race: the filing, the tick that
+	 * fires the callback, and the scheduler getting back to the thread. Any
+	 * of those three can add a tick and hide the error, which is why the
+	 * end-to-end version below caught this one boot in four at a phase held
+	 * to within twenty-five microseconds. **Printing the phase made it one
+	 * in six, because the print itself took long enough to cross the
+	 * boundary the test needed not to cross.** An instrument that changes
+	 * the thing it measures by that much is measuring itself.
+	 *
+	 * The promise is arithmetic and can be checked as arithmetic. A timer
+	 * filed for `ns` from now may fire late -- a tick is the resolution --
+	 * and may never be *due* before the instant it was asked at. Read the
+	 * deadline back and compare it against that instant. No interrupt, no
+	 * scheduler, no race, and it holds at every phase rather than at a
+	 * chosen one.
+	 */
 	{
-		u64 before = time_monotonic_ns();
+		const u64 tick_ns = 1000000000ull / TIME_TICK_HZ;
+		unsigned phase;
+
+		/* Every tenth of a tick, so no single phase can be the lucky
+		 * one. Each pass files a timer, reads its deadline and cancels
+		 * it; nothing is ever allowed to fire. */
+		for (phase = 0; phase < 10; phase++) {
+			struct timer probe;
+			u64 target = tick_ns * phase / 10;
+			u64 asked, due_ns;
+
+			while (time_monotonic_ns() % tick_ns < target)
+				arch_cpu_relax();
+
+			timer_init(&probe, note_firing, (void *)(uintptr_t)9);
+
+			asked = time_monotonic_ns();
+			if (!timer_start(&probe, 50000000ull)) {
+				kputs("  timer: a probe could not be "
+				      "filed\n");
+				ok = false;
+				break;
+			}
+			due_ns = probe.expires * tick_ns;
+			timer_cancel(&probe);
+
+			if (due_ns < asked + 50000000ull) {
+				kprintf("  timer: a 50 ms timer filed at "
+					"phase %u/10 is due %lu us before it "
+					"was asked for\n", phase,
+					(unsigned long)((asked + 50000000ull
+							 - due_ns) / 1000));
+				ok = false;
+				break;
+			}
+		}
+	}
+
+	{
+		const u64 tick_ns = 1000000000ull / TIME_TICK_HZ;
+		u64 before, elapsed;
+
+		/* Seven tenths into a tick, deliberately -- a band, not a
+		 * threshold, and not as late as it will go.
+		 *
+		 * **The obvious choice defeats itself.** Asking at nine tenths
+		 * leaves one tenth of a tick before the count rolls over, and
+		 * `timer_start` reads the clock again a little after this
+		 * does: lock, init, lock. If that crossing happens the base
+		 * tick is one higher, the sleep is a whole tick longer than it
+		 * asked for, and the test passes -- for the opposite of the
+		 * right reason. Six boots did exactly that.
+		 *
+		 * Seven tenths keeps three of them in hand, which is room the
+		 * setup cannot use, and the error is still 7 ms. The Gateway's
+		 * own figure lands here: 43132 us is a phase of 6.868 ms. */
+		while (time_monotonic_ns() % tick_ns < tick_ns * 7 / 10)
+			arch_cpu_relax();
+
+		before = time_monotonic_ns();
 
 		if (!timer_sleep_ns(50000000ull)) {	/* 50 ms */
 			kputs("  timer: a thread could not sleep\n");
 			ok = false;
-		} else if (time_monotonic_ns() - before < 45000000ull) {
-			kprintf("  timer: a 50 ms sleep took %lu us\n",
-				(time_monotonic_ns() - before) / 1000);
+		} else if ((elapsed = time_monotonic_ns() - before)
+			   < 50000000ull) {
+			kprintf("  timer: a 50 ms sleep came back %lu us "
+				"early, after %lu us\n",
+				(unsigned long)((50000000ull - elapsed) / 1000),
+				(unsigned long)(elapsed / 1000));
 			ok = false;
 		}
 	}

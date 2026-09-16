@@ -196,7 +196,31 @@ struct reconboot {
 	uint64_t boot_part_lba;		/* 0 where the loader could not tell */
 	uint8_t  boot_part_guid[16];	/* all zero where there is no GPT */
 	uint32_t boot_disk;		/* BIOS drive number, or NO_BOOT_DISK */
+
+	/* What the boot menu did, so that the boot report can say it.
+	 *
+	 * The loader prints this to the firmware console already -- and then
+	 * paints the graphical menu over the same pixels a moment later. On a
+	 * machine with a serial port that is fine and the rig reads it; on a
+	 * laptop it is gone before anybody can photograph it, which is the one
+	 * machine where somebody asked what the menu had offered.
+	 *
+	 * The kernel's report is written to disk. So the answer travels here
+	 * and is printed there, where it survives the boot.
+	 *
+	 * `menu_entries` is how many were offered and **`SHOWN` is a separate
+	 * bit on purpose**: zero entries with the menu shown cannot happen, and
+	 * zero with it not shown is the loader having given up before offering
+	 * anything -- KF-233's path exactly. One number could not tell those
+	 * apart, and telling them apart is the entire reason for this field. */
+	uint32_t menu_entries;
+	uint32_t menu_flags;		/* RECONBOOT_MENU_* */
 };
+
+#define RECONBOOT_MENU_SHOWN	(1u << 0)	/* the menu ran at all */
+#define RECONBOOT_MENU_DRAWN	(1u << 1)	/* on the framebuffer, not the console */
+#define RECONBOOT_MENU_KEY	(1u << 2)	/* somebody was there */
+#define RECONBOOT_MENU_PICKED	(1u << 3)	/* and chose something */
 
 /* There is no drive number on a machine with no BIOS, and zero is a real drive
  * number on one that has. Named rather than written, because `0xFFFFFFFF` in a

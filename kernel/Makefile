@@ -190,7 +190,12 @@
 # the same 0.2.29, without either being able to see the other. Two of this
 # session's three bugs were fixes, so they are laid after theirs rather than
 # interleaved -- see KF-230 and KF-231, which say so on their own entries.
-VERSION := 0.2.39
+# 0.2.38 and 0.2.39 were allocated in parallel and did not collide, which is
+# the first time that has been true. This session took 0.2.38 for KF-233 on the
+# kernel branch; the other saw it there, stepped over it, and took 0.2.39 for
+# SYS_MAP's anonymous mapping. Both numbers stand and mean what their entries
+# say. The merged tree is the later of the two.
+VERSION := 0.2.41
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

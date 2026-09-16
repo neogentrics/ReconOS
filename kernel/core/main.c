@@ -427,6 +427,8 @@ void kmain(void)
 		reconfs_layout_self_test() ? "pass" : "FAIL");
 	kprintf("  the network stack  : %s\n",
 		net_self_test() ? "pass" : "FAIL");
+	kprintf("  sockets a program can reach : %s\n",
+		socket_syscall_test() ? "pass" : "FAIL");
 
 	/* From here to the kernel-log summary is per-subsystem detail: lock
 	 * contention, cache hit rates, the timer wheel's reach. It still goes
@@ -603,7 +605,69 @@ void kmain(void)
 	 * that works while there is exactly one program; the second one will
 	 * need the kernel able to give the screen away.
 	 */
-	user_start_first_screen();
+	/* Unless the command line says not to.
+	 *
+	 * The first screen is a program painting on the framebuffer the console
+	 * writes to, so it covers the boot report. On a machine that found a
+	 * writable ReconOS medium that costs nothing -- the report is in a file
+	 * on the medium. On one that did not, **the screen is the only copy**,
+	 * and it is covered before anybody reads it.
+	 *
+	 * That has now cost three round trips to a laptop, so there is a word
+	 * for it. The command line is read off the medium (KF-131), which means
+	 * asking for this on the next boot is writing `\reconos\cmdline` --
+	 * a file, not a reflash.
+	 *
+	 * It is not a fix for the entry in KERNEL-WANTS about the console and a
+	 * program both owning the screen. It is a way to see the report while
+	 * that is still true. */
+	if (boot_cmdline_has("noinit")) {
+		/* The few lines worth reading, printed again at the very end.
+		 *
+		 * The Gateway's report is about two hundred lines and its panel
+		 * holds about fifty. Everything that answered the two questions
+		 * it was booted to answer -- what the evaluator made of real
+		 * firmware, and whether the kernel can see the stick it booted
+		 * from -- had scrolled off the top before anybody could
+		 * photograph it, and the only other copy was a file on the
+		 * machine's own internal disk, which is the hardest place to
+		 * reach it.
+		 *
+		 * **Re-called rather than reformatted.** Each of these owns its
+		 * own wording; a second copy of that wording here would be a
+		 * second place to fix when one of them changes, and the two
+		 * would disagree about the same fact the first time somebody
+		 * edited one.
+		 *
+		 * Only under `noinit`, for two reasons rather than taste: on a
+		 * machine whose report fits, a repeat is noise -- and the
+		 * verification rig greps these logs, so a line appearing twice
+		 * where a check counts occurrences is a check that has started
+		 * lying. The matrix never passes this word. */
+		/* Longest first, most wanted last.
+		 *
+		 * `block_print_summary` lists every device on the PCI bus,
+		 * which is a dozen lines on a real machine and is the least
+		 * urgent thing here. Printing it first means that if anything
+		 * still scrolls off, it is that -- and the two lines this whole
+		 * arrangement exists for, the USB port count and the evaluator's
+		 * tally, are the last things on the screen.
+		 *
+		 * The bottom of a screen is the only part guaranteed to survive
+		 * a scroll, so what matters most goes there. */
+		kputs("\nThe short version, last so the scroll cannot eat it\n");
+		block_print_summary();
+		aml_print_summary();
+		boot_print_medium();
+		boot_print_menu();
+		usb_print_summary();
+		aml_eval_print_summary();
+
+		kputs("\nnoinit: the first screen was not started, so this "
+		      "report stays on the screen.\n");
+	} else {
+		user_start_first_screen();
+	}
 
 	/* And from here this thread is not work any more.
 	 *
