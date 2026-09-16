@@ -73,6 +73,18 @@
 #define HTTP_ETRAVERSAL    (-9)	/* the path escapes the root; 400 */
 #define HTTP_EBODY_LONG   (-10)	/* Content-Length over HTTP_BODY_MAX; 413 */
 
+/*
+ * The server could not build its own answer: a value that would not fit the
+ * buffer it was being written into, or text an escaper refused.
+ *
+ * The only code here that is not about the request, and it exists because
+ * `http_status_for` answers 400 for anything it does not recognise. That
+ * default is right for a request-side code nobody has mapped yet and wrong for
+ * this one: a handler that ran out of room would have told the client its
+ * request was bad. The client's request was fine.
+ */
+#define HTTP_EINTERNAL    (-11)	/* the server's own answer failed; 500 */
+
 struct http_header {
 	char name[HTTP_NAME_MAX];	/* lower-cased; field names are
 					 * case-insensitive and storing them

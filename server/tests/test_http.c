@@ -284,6 +284,16 @@ int main(void)
 	ok(http_status_for(HTTP_EBODY_LONG) == 413, "an over-long body answers 413");
 	ok(http_status_for(HTTP_OK) == 0, "a good request has no error status");
 	ok(http_status_for(HTTP_PARTIAL) == 0, "an incomplete request has no status");
+
+	/*
+	 * The one verdict that is not about the request, checked here because
+	 * the default answer is 400 and 400 blames the client. A handler that
+	 * could not fit its own JSON into its own buffer would have told a
+	 * client its request was bad, and a client acting on that would have
+	 * changed a request that was never the problem.
+	 */
+	ok(http_status_for(HTTP_EINTERNAL) == 500,
+	   "the server failing to build its answer is 500, not the client's 400");
 	/*
 	 * Every status in the table has its phrase, walked from the table
 	 * itself rather than listed again here.

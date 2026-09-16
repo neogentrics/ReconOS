@@ -4,10 +4,21 @@ A ReconOS machine whose role is **server**: it answers for a network rather
 than sitting in front of a person.
 
 This is one of five roles in `docs/ROLES.md`. The installer puts down the whole
-operating system every time; the role is chosen on the first boot afterwards,
-so a server is **configuration, not a build**. Nothing in here is conditionally
-compiled, and the same medium produces a workstation, a firewall or a NAS
-depending only on what it is told it is.
+operating system every time and the role is chosen on the first boot
+afterwards, so a server is meant to be **configuration, not a build**: one
+medium producing a workstation, a firewall or a NAS depending only on what it
+is told it is.
+
+**That is the design, and today it is a build.** The first-boot choice does not
+exist yet — there is nowhere to record the answer and nothing to ask the
+question. So `make ROLE=server` selects which init program is linked into the
+kernel, which is conditional compilation, and an earlier draft of this README
+said it was not. The line is kept here rather than quietly corrected because
+the gap is the interesting part: everything below is written against the role
+being a choice a machine makes, and the day it becomes one, nothing below
+changes. See `docs/ROLES.md` for the mechanism, and **VF-008** in
+`docs/VERIFICATION.md` for the two consecutive builds that reported success and
+produced nothing while this stand-in was being wired up.
 
 Branch `server`. This README covers this role; the repository's own `README.md`
 covers the operating system.
@@ -18,11 +29,16 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.13.0 |
+| **Version** | 0.14.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
-| **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 445 across twelve suites |
+| **Verified** | on the machine, 16 September 2026 |
+| **Checks** | 474 across thirteen suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.41 |
+
+The check figure is the first one this project has that was not assembled by
+hand. See **VF-012**: the suites had been run one `gcc` line at a time for
+thirteen versions, and a suite nobody remembers to run is a suite that cannot
+fail.
 
 ---
 
@@ -129,7 +145,7 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 89 | one request, and every way of writing two |
+| `server_http` | 90 | one request, and every way of writing two |
 | `server_http_serve` | 31 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
@@ -138,8 +154,21 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | `server_service` | 37 | services, their states, and the restart that has to stop |
 | `server_http_range` | 45 | asking for part of a file, and the ways that hands over the wrong part |
 | `server_http_escape` | 21 | escaping text for HTML, and the characters people forget |
+| `server_http_json` | 28 | escaping text for JSON, and the byte that ends a string early |
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
 | `server_dial` | 32 | three answers, and the two ways of confusing them |
+
+Run them with one command:
+
+```bash
+./scripts/server-tests.sh
+```
+
+It reads its target list out of `CMakeLists.txt` rather than keeping one of its
+own, for the same reason `http_reason` is generated from an X-macro: two lists
+drift, and the drift is invisible until something is already wrong. A suite
+added to the build is run by it the same day; a suite added only to it does not
+exist.
 
 **Each was watched failing before it was believed.** The naming suite was run
 against the `atoi` shape its header rejects and nine cases failed; the HTTP
@@ -152,6 +181,13 @@ four traversal cases failed; relaxing the over-size check changed **nothing**,
 because the handler guards that twice and the suite was only exercising one
 half. A check that survives the removal of the thing it checks is not evidence
 about that thing.
+
+The JSON suite taught it a third time, about the mutant rather than the suite.
+A scripted edit meant to strip `json.c` back to a quote-and-backslash escaper
+landed on two of its three sites, leaving the short forms in place — 8 failures
+where the real mutant gives 13. Rewritten by hand, and the header now carries
+the number so the claim can be checked rather than taken. **A weaker mutant
+reported as a stronger one is a suite that has been overrated, not tested.**
 
 ---
 
@@ -217,6 +253,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.14.0** | **The coincidence removed from HTML in 0.9.0, found still holding up the JSON.** `/api/status` and the reply from `POST /api/name` wrote the machine's name into a JSON string unescaped — safe only because the name validator happens to forbid a quote, which is exactly the argument 0.9.0 exists to have stopped making. Found by reading back 0.12.0's own refusal to serve the log as JSON, which named the hazard correctly and assumed its scope. `json.c` now escapes **every** string in every endpoint, including the ones that cannot hold a quote today, because a rule with an exception for known-safe values is a rule the next person has to apply silently. Two things fell out of the wiring: a handler could not say a failure was the *server's* (`http_status_for` answered 400 for anything unrecognised, blaming the client for the server running out of buffer) — now `HTTP_EINTERNAL`, 500; and thirteen suites had no way to be run except by hand, which `scripts/server-tests.sh` fixes, finding two that did not build under its own flags in its first minute. |
 | **0.13.0** | **A client that can tell *not yet* from *never*.** The kernel fixed `connect` (KF-244) so it answers established, in-flight or refused, and made it idempotent so polling it is the interface. `dial.c` is that loop, with the deadline owned by the caller because the kernel has none and a sweep and a proxy want different ones. It compares **no numbers** — the announcement's table had all three wrong, and building against names instead is what made that harmless. Not yet run on the machine: the fix is committed locally and not pushed. |
 | **0.12.0** | **An access log that admits what it lost.** Every answered request is recorded by the server, including the ones refused before any handler ran — those are the entries somebody comes looking for. A ring drops the oldest to make room, and a log that drops silently looks complete while missing exactly the burst being investigated, so the dropped count is reported beside the entries. Served as plain text, not JSON: a request target can contain a quote via `%22`, and there is no JSON escaper yet. |
 | **0.11.0** | **`Expect: 100-continue`, which was costing every large POST a second.** A client that asks permission before sending a body was never answered, so it waited out its own timeout and sent the body anyway — nothing failed, nothing was reported, and every such request just took a second longer. `curl` does this on any body over about a kilobyte. An expectation the server cannot meet now gets 417 rather than silence, because silence reads as yes. |

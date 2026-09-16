@@ -48,6 +48,7 @@
 #include "../http/files.h"
 #include "../http/form.h"
 #include "../http/escape.h"
+#include "../http/json.h"
 #include "../include/recon_server.h"
 #include "../service.h"
 #include "../log.h"
@@ -69,6 +70,36 @@ static void say(const char *text)
 }
 
 /* --- what this server answers with --------------------------------------- */
+
+/*
+ * A value on its way into a JSON string.
+ *
+ * **Everything goes through here, including the strings that cannot hold a
+ * quote today.** The machine's name is restricted by `server_name_split` to
+ * letters, digits and the hyphen; a service's name and description are
+ * literals a few hundred lines below. Neither can close a string, and neither
+ * being able to is exactly the argument that was true of the dashboard until
+ * it was not -- the coincidence `escape.c` was written to stop depending on,
+ * found still load-bearing in the JSON path one file away.
+ *
+ * A rule with an exception is a rule a reader cannot check. The exception here
+ * would be "unless the value is known safe", which is a judgement the next
+ * person to add a field has to make correctly and silently.
+ *
+ * Returns NULL when the text will not fit, or holds a byte the escaper refuses
+ * -- a caller answers 500 rather than sending a document with a piece missing.
+ */
+static const char *as_json(const char *text, char *room, size_t size)
+{
+	if (!text)
+		text = "";
+	return json_escape(text, room, size) < 0 ? 0 : room;
+}
+
+/* Room for the worst case: six bytes out for one in, plus a terminator. See
+ * `json.h`. Written as arithmetic on the source bound rather than as a number,
+ * so a longer name cannot outgrow the buffer quietly. */
+#define JSON_ROOM(n) ((n) * 6 + 1)
 
 /*
  * The machine's own facts, gathered once and shown on every page.
@@ -279,9 +310,19 @@ static int handle_status(const struct http_request *r, const char *body,
 {
 	static char json[1024];
 	struct server_facts *f = (struct server_facts *)ctx;
+	char name_room[JSON_ROOM(RECON_NAME_MAX)];
+	char arch_room[JSON_ROOM(sizeof(f->machine.architecture))];
+	const char *name, *arch;
 	int n;
 
 	(void)r; (void)body; (void)body_len;
+
+	name = as_json(f->name, name_room, sizeof(name_room));
+	arch = as_json(f->machine.architecture[0] ? f->machine.architecture
+	                                          : "unnamed",
+	               arch_room, sizeof(arch_room));
+	if (!name || !arch)
+		return HTTP_EINTERNAL;
 
 	n = snprintf(json, sizeof(json),
 	             "{\"role\":\"server\","
@@ -294,17 +335,17 @@ static int handle_status(const struct http_request *r, const char *body,
 	             "\"page_size\":%u,"
 	             "\"requests_served\":%lu,"
 	             "\"bytes_sent\":%lu}\n",
-	             f->name,
-	             f->machine.architecture[0] ? f->machine.architecture
-	                                        : "unnamed",
+	             name, arch,
 	             f->machine.processors_found, f->machine.processors_online,
 	             (unsigned long long)f->machine.memory_bytes,
 	             (unsigned long long)f->machine.memory_free_bytes,
 	             f->machine.page_size,
 	             f->served, f->bytes_out);
 
+	/* 500, not 413. The request was fine; this server could not fit its own
+	 * answer into its own buffer. See `HTTP_EINTERNAL` in `http.h`. */
 	if (n < 0 || (size_t)n >= sizeof(json))
-		return HTTP_EBODY_LONG;
+		return HTTP_EINTERNAL;
 
 	http_response_simple(out, 200, "application/json", json, (size_t)n);
 	return HTTP_OK;
@@ -371,7 +412,8 @@ static int handle_set_name(const struct http_request *r, const char *body,
 	struct server_facts *f = (struct server_facts *)ctx;
 	struct http_form form;
 	struct name_family family;
-	const char *wanted;
+	char name_room[JSON_ROOM(RECON_NAME_MAX)];
+	const char *wanted, *name;
 	int rc, n;
 
 	(void)r;
@@ -402,12 +444,21 @@ static int handle_set_name(const struct http_request *r, const char *body,
 
 	/* What it is now, read back from where it was stored rather than from
 	 * what was sent. A reply that echoes the request proves the request,
-	 * not the change. */
+	 * not the change.
+	 *
+	 * Escaped even though `server_name_split` has just refused everything
+	 * that would need escaping. This is the endpoint where a client's own
+	 * text came closest to reaching a JSON document, and the validator
+	 * standing between them is two calls away in another file. */
+	name = as_json(f->name, name_room, sizeof(name_room));
+	if (!name)
+		return HTTP_EINTERNAL;
+
 	n = snprintf(answer, sizeof(answer),
 	             "{\"role\":\"server\",\"name\":\"%s\",\"numbered\":%s}\n",
-	             f->name, rc == SERVER_OK ? "true" : "false");
+	             name, rc == SERVER_OK ? "true" : "false");
 	if (n < 0 || (size_t)n >= sizeof(answer))
-		return HTTP_EBODY_LONG;
+		return HTTP_EINTERNAL;
 
 	http_response_simple(out, 200, "application/json", answer, (size_t)n);
 	return HTTP_OK;
@@ -445,28 +496,45 @@ static int handle_services(const struct http_request *r, const char *body,
 	             "\"services\":[",
 	             running, failed, refused);
 	if (m < 0 || (size_t)m >= sizeof(json))
-		return HTTP_EBODY_LONG;
+		return HTTP_EINTERNAL;
 	n = m;
 
 	for (i = 0; i < sup->count; i++) {
 		const struct service *s = sup->services[i];
 		const struct service_status *st = &sup->status[i];
+		/*
+		 * `name`, `what` and the state are all `const char *` with no
+		 * bound of their own -- a service is registered with whatever
+		 * the registrant passed. These are the rooms they have to fit
+		 * in escaped; a description longer than this is refused rather
+		 * than cut, because a cut one ends mid-escape.
+		 */
+		char name_room[128];
+		char what_room[512];
+		char state_room[64];
+		const char *name, *what, *state;
+
+		name = as_json(s->name, name_room, sizeof(name_room));
+		what = as_json(s->what, what_room, sizeof(what_room));
+		state = as_json(service_state_name(st->state), state_room,
+		                sizeof(state_room));
+		if (!name || !what || !state)
+			return HTTP_EINTERNAL;
 
 		m = snprintf(json + n, sizeof(json) - (size_t)n,
 		             "%s{\"name\":\"%s\",\"what\":\"%s\","
 		             "\"state\":\"%s\",\"reason\":%d,\"polls\":%lu,"
 		             "\"faults\":%lu,\"restarts\":%lu}",
-		             i ? "," : "", s->name, s->what,
-		             service_state_name(st->state), st->last_reason,
+		             i ? "," : "", name, what, state, st->last_reason,
 		             st->polls, st->faults, st->restarts);
 		if (m < 0 || (size_t)(n + m) >= sizeof(json))
-			return HTTP_EBODY_LONG;
+			return HTTP_EINTERNAL;
 		n += m;
 	}
 
 	m = snprintf(json + n, sizeof(json) - (size_t)n, "]}\n");
 	if (m < 0 || (size_t)(n + m) >= sizeof(json))
-		return HTTP_EBODY_LONG;
+		return HTTP_EINTERNAL;
 	n += m;
 
 	http_response_simple(out, 200, "application/json", json, (size_t)n);

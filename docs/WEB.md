@@ -42,6 +42,7 @@ Nothing is marked built on the strength of having been written.
 | Security headers | **built** | `nosniff`, `DENY`, `no-referrer` and a real CSP on every response |
 | `Expect: 100-continue` | **built** | `curl` sends it on any body over ~1 KB; the server no longer makes it wait |
 | HTML escaping | **built** | `escape.c` — 21 checks; the dashboard no longer depends on the name validator for its safety |
+| JSON escaping | **built** | `json.c` — 28 checks; ASCII-only by refusal, and every string in every endpoint goes through it. See VF-010 |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
@@ -127,6 +128,8 @@ can run, not by what it can send.
 | **FastCGI / a persistent app backend** | **blocked** | same, plus a socket to talk to it over. |
 | **Reverse proxy to another machine** | **blocked** | `connect` exists and does not work: it answers `SYS_OK` for a closed port and returns before the handshake. Measured 16 September; `KERNEL-WANTS.md` has it. This row previously said *buildable today*, which was wrong — see VF-009. |
 | **Template rendering** | partial | `escape.c` exists and the dashboard uses it. A template engine does not, and when one arrives it must escape by default — one that escapes on request is one that is forgotten once. |
+| **A JSON API** | **built** | `/api/status`, `/api/services` and the reply from `POST /api/name`. Escaped through `json.c` since 0.14.0; before that the machine name went in raw and was safe by coincidence — VF-010. |
+| **The access log as JSON** | **unblocked** | 0.12.0 refused it because a request target can carry a quote via `%22` and there was no escaper. There is one now. Still not built, and the reason has changed: it would make one endpoint serve two formats, and two representations of one thing drift exactly like two lists do. It needs a decision about content negotiation first, not a few more lines. |
 
 ### The two that shape the others
 

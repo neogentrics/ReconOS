@@ -631,6 +631,10 @@ int http_status_for(int verdict)
 	case HTTP_EMETHOD:      return 501;
 	case HTTP_EVERSION:     return 505;
 	case HTTP_EBODY_LONG:   return 413;
+	/* Named rather than left to the default, which is 400. See `http.h`:
+	 * this is the one verdict that is not the client's fault, and the
+	 * default would have said it was. */
+	case HTTP_EINTERNAL:    return 500;
 	case HTTP_EMALFORMED:
 	case HTTP_ESMUGGLE:
 	case HTTP_ETRAVERSAL:

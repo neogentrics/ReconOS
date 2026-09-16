@@ -1017,6 +1017,20 @@ add_executable(recon_server_escape_tests
 
 add_test(NAME server_http_escape COMMAND recon_server_escape_tests)
 
+# Escaping text for JSON, and the byte that ends a string early.
+#
+# The same fault as above, found still living in the JSON path one file away:
+# `/api/status` and the reply from `POST /api/name` wrote the machine's name
+# into a string unescaped, safe only because the name validator happens to
+# forbid a quote. Watched failing against an escaper handling only `"` and
+# `\`, which is the version that ships: 13 of 28 checks failed, every one of
+# them a control character or a byte above ASCII.
+add_executable(recon_server_json_tests
+    server/http/json.c
+    server/tests/test_http_json.c)
+
+add_test(NAME server_http_json COMMAND recon_server_json_tests)
+
 # A ring of recent entries, and the count that stops it lying.
 #
 # A log that drops silently looks complete, reads plausibly, and has lost

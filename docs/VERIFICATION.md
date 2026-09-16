@@ -223,3 +223,83 @@ None.
   `server/dial.c` therefore compares no numbers at all. The kernel session's
   own conclusion, unprompted: *"building against the names is correct and I'd
   keep doing it."*
+
+### VF-010 -- the JSON path kept the coincidence that had just been removed from HTML
+
+- **Found in** `server/init/server_init.c`, 16 September 2026. **Found by**
+  reading back a refusal made one version earlier.
+- **What it was** `/api/status` and the reply from `POST /api/name` wrote the
+  machine's name into a JSON string with no escaping. Safe -- because
+  `server_name_split` admits letters, digits and the hyphen and refuses
+  everything else, so a quote cannot reach it.
+- **Why that is the finding and not the defence.** That is exactly the argument
+  that had been true of the dashboard's `value="..."` until it was not, and
+  `server/http/escape.c` exists in 0.9.0 to stop depending on it. The same
+  dependency was still load-bearing in the JSON path, one directory away, for
+  four versions.
+- **How it surfaced.** In 0.12.0 `/api/log` was refused as JSON, and the
+  refusal named the hazard precisely: a log line holds a request target, which
+  is text a client chose. Two endpoints were already emitting client-adjacent
+  text as JSON while that refusal was being written. The reasoning was right
+  and its scope was assumed rather than checked.
+- **Why it belongs here** A fix applied where a fault was found is not a fix
+  applied where the fault lives. Nothing asked the obvious follow-on question --
+  *where else does this pattern appear* -- and the answer was in the same file
+  as the thing being protected.
+- **Fixed** in 0.14.0. `server/http/json.c`, and every string in every JSON
+  endpoint now goes through it, **including the ones that cannot hold a quote
+  today**: a rule with an exception for known-safe values is a rule the next
+  person to add a field has to apply correctly and silently.
+- **Measured on the machine**, not just in the suite. A quote and a newline
+  were put into a service description, the kernel rebuilt and booted, and the
+  bytes on the wire read `\"` and `\n` as two-character escapes, which a strict
+  parser then read back as the original string. Without the wiring the quote
+  would have closed the string. The instrumentation was reverted afterwards.
+
+### VF-011 -- a server-side failure answered 400, which blames the client
+
+- **Found in** `http_status_for`, while wiring VF-010's escaper. **Found by**
+  needing a status for "this server could not build its own answer" and
+  discovering there was not one.
+- **What it was** `http_status_for` ends `default: return 400`. Every JSON
+  handler already returned `HTTP_EBODY_LONG` when its own `snprintf` overran
+  its own buffer -- which is 413, *Content Too Large*, about the request. Any
+  code it did not recognise became 400, *Bad Request*, also about the request.
+  There was no way for a handler to say the fault was the server's.
+- **What that costs** A client told 400 or 413 acts on it: it shortens the
+  request, drops a header, stops retrying. None of that can help, because the
+  request was never the problem. The one signal that would have been useful --
+  *try again, this end is broken* -- was unreachable.
+- **Why the default is not itself wrong.** For a request-side verdict nobody
+  has mapped yet, 400 is the right guess. It only became wrong when a verdict
+  arrived that was not about the request.
+- **Fixed** in 0.14.0. `HTTP_EINTERNAL` answers 500, named explicitly in the
+  switch rather than left to the default, with a check in the suite.
+
+### VF-012 -- thirteen suites and no way to run them
+
+- **Found in** this seat's own habits, 16 September 2026. **Found by** writing
+  the runner that should have existed at three suites.
+- **What it was** Every suite had been compiled and run by hand, one `gcc` line
+  at a time, for thirteen versions. That works exactly as long as the person
+  typing remembers every suite, and the failure when they do not is silent: the
+  suites that ran pass, the report says the suites passed, and the one that was
+  skipped is the one that would have failed. The check-count figures in the
+  README were assembled the same way.
+- **What the runner found in its first minute** Two suites did not build under
+  its flags. `-std=c11` defines `__STRICT_ANSI__`, glibc hides `kill` behind
+  `__USE_POSIX`, and the two socket suites -- which fork a child and signal it
+  -- got an implicit declaration each.
+- **And the suites were right.** `CMakeLists.txt` sets `CMAKE_C_EXTENSIONS ON`,
+  which is `-std=gnu11`. The runner was measuring against a dialect the project
+  does not build with, which is its own version of this register's recurring
+  fault: a check that cannot distinguish the thing from a near neighbour. The
+  script was fixed, not the suites.
+- **Why it belongs here** The first honest total this project has had is 474
+  checks across thirteen suites, produced by one command. The previous figure,
+  445 across twelve, was assembled by hand and was not wrong -- but nothing
+  except memory made it right.
+- **`scripts/server-tests.sh`** reads its target list out of `CMakeLists.txt`
+  rather than keeping one, for the reason the status table is generated from an
+  X-macro: two lists drift, and the drift is invisible until something is
+  already wrong.
