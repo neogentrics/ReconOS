@@ -8449,6 +8449,10 @@ regenerated after that tree is pushed.
 
 ### BG-208 — A comment inside a line continuation silently removed half a check's flags
 
+[#481](https://github.com/neogentrics/ReconOS/issues/481)
+
+[#481](https://github.com/neogentrics/ReconOS/issues/481)
+
 - **Found in** v0.4.48, by running `scripts/check-userland.sh` and reading a
   line of output that had nothing to do with what was being tested:
   `-isystem: command not found`.
