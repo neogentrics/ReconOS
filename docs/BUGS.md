@@ -8413,6 +8413,10 @@ regenerated after that tree is pushed.
 
 ### BG-207 — Panel text left the panel and ran off the edge of the screen
 
+[#480](https://github.com/neogentrics/ReconOS/issues/480)
+
+[#480](https://github.com/neogentrics/ReconOS/issues/480)
+
 - **Found in** v0.4.43, by photographing a real boot to check something else
   — that the workstation role appeared in the title.
 - **Was** `recon_screen_text` drew until the string ended. `put_pixel` clips to
