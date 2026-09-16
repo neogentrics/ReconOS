@@ -96,20 +96,46 @@ static struct server_facts FACTS;
 static struct supervisor SUPERVISOR;
 
 
+/*
+ * The console's styles, served as a file rather than written into the page.
+ *
+ * **This is what makes a real Content-Security-Policy possible**, and that is
+ * the only reason it moved. While the rules lived in a `<style>` block and in
+ * `style=` attributes, any policy this server could send needed
+ * `'unsafe-inline'` -- which permits exactly what CSP exists to stop, while the
+ * header's presence suggests otherwise. `serve.c` carried a comment saying so
+ * and refusing to ship one.
+ *
+ * With the rules in a file, `style-src 'self'` is true, and the policy in
+ * `serve.c` says what it means.
+ *
+ * It is written to the volume at boot beside `index.html`, by the same
+ * function and with the same rule: **an existing file is not overwritten.** An
+ * administrator who has restyled their console keeps their work.
+ */
+static const char CONSOLE_CSS[] =
+	"body{background:#141821;color:#d8dce6;"
+	"font:15px/1.6 system-ui,sans-serif;margin:0;padding:40px}\n"
+	"main{max-width:640px;margin:0 auto}\n"
+	"h1{color:#4fb3a5;font-size:26px;margin:0 0 4px}\n"
+	"p.sub{color:#737c90;margin:0 0 28px}\n"
+	"table{border-collapse:collapse;width:100%}\n"
+	"td{padding:8px 0;border-bottom:1px solid #2a3145}\n"
+	"td:first-child{color:#737c90;width:40%}\n"
+	"code{color:#4fb3a5}\n"
+	"form.rename{margin-top:28px}\n"
+	"form.rename label{color:#737c90}\n"
+	"form.rename input{background:#1c2130;color:#d8dce6;"
+	"border:1px solid #2a3145;padding:6px 8px;font:inherit}\n"
+	"form.rename button{background:#4fb3a5;color:#141821;border:0;"
+	"padding:7px 14px;font:inherit;cursor:pointer}\n"
+	"p.footnote{color:#737c90;margin-top:28px}\n";
+
 static const char PAGE_HEAD[] =
 	"<!doctype html>\n<meta charset=\"utf-8\">\n"
 	"<title>ReconOS Server</title>\n"
-	"<style>"
-	"body{background:#141821;color:#d8dce6;font:15px/1.6 system-ui,sans-serif;"
-	"margin:0;padding:40px}"
-	"main{max-width:640px;margin:0 auto}"
-	"h1{color:#4fb3a5;font-size:26px;margin:0 0 4px}"
-	"p.sub{color:#737c90;margin:0 0 28px}"
-	"table{border-collapse:collapse;width:100%}"
-	"td{padding:8px 0;border-bottom:1px solid #2a3145}"
-	"td:first-child{color:#737c90;width:40%}"
-	"code{color:#4fb3a5}"
-	"</style>\n<main>\n";
+	"<link rel=\"stylesheet\" href=\"/console.css\">\n"
+	"<main>\n";
 
 /*
  * The dashboard. One page, real numbers, nothing invented.
@@ -172,16 +198,13 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             "<tr><td>requests served</td><td><code>%lu</code></td></tr>\n"
 	             "<tr><td>bytes sent</td><td><code>%lu</code></td></tr>\n"
 	             "</table>\n"
-	             "<form method=\"post\" action=\"/api/name\" "
-	             "style=\"margin-top:28px\">\n"
-	             "<label style=\"color:#737c90\">rename this machine "
-	             "<input name=\"name\" value=\"%s\" "
-	             "style=\"background:#1c2130;color:#d8dce6;border:1px solid "
-	             "#2a3145;padding:6px 8px;font:inherit\"></label>\n"
-	             "<button style=\"background:#4fb3a5;color:#141821;border:0;"
-	             "padding:7px 14px;font:inherit;cursor:pointer\">Set</button>\n"
+	             "<form class=\"rename\" method=\"post\" "
+	             "action=\"/api/name\">\n"
+	             "<label>rename this machine "
+	             "<input name=\"name\" value=\"%s\"></label>\n"
+	             "<button>Set</button>\n"
 	             "</form>\n"
-	             "<p class=\"sub\" style=\"margin-top:28px\">"
+	             "<p class=\"footnote\">"
 	             "Served by <code>server/http/</code> over the kernel's five "
 	             "socket calls. This page is the first thing to move bytes "
 	             "over an accepted connection on this system.</p>\n"
@@ -564,6 +587,48 @@ static void measure_the_client_side(void)
 /* --- the volume this role writes to --------------------------------------- */
 
 /*
+ * Write one file, unless it is already there.
+ *
+ * Returns 1 when something was already at that name, 2 when this wrote it, and
+ * a negative number when it could not.
+ *
+ * **An existing file is never overwritten.** A server that rewrote its own
+ * pages on every boot would silently discard whatever an administrator had put
+ * there, which is the kind of helpfulness that loses somebody's work.
+ *
+ * Created with `SYS_CREATE` rather than `open(O_CREAT)`, and that is a
+ * workaround for a fault in the C library rather than a preference.
+ * **`recon_flags_from_posix` in `userland/libc/posix.c` translates only the
+ * access mode**: `O_CREAT`, `O_TRUNC`, `O_EXCL` and `O_APPEND` are dropped, so
+ * `open(path, O_WRONLY | O_CREAT, 0644)` never creates anything -- it opens an
+ * existing file for writing, and for a file that is not there it answers
+ * `ENOENT`, which is exactly the condition `O_CREAT` was passed to fix.
+ * Measured on the machine as `write=-1/e2` for a path whose directory had just
+ * answered `EEXIST`. Reported in `docs/SERVER.md`; the number is the desktop
+ * session's, since `posix.c` is theirs.
+ *
+ * The kernel has always had the call, and `SYS_CREATE` taking the path and the
+ * contents together suits a file written once at boot better than
+ * open-then-write would anyway.
+ */
+static int put_if_absent(const char *path, unsigned long path_len,
+                         const char *data, unsigned long len)
+{
+	long rc;
+	int fd = open(path, O_RDONLY);
+
+	if (fd >= 0) {
+		close(fd);
+		return 1;
+	}
+
+	rc = (long)recon_call6(SYS_CREATE, (u64)(unsigned long)path,
+	                       (u64)path_len, 0644,
+	                       (u64)(unsigned long)data, (u64)len, 0);
+	return rc < 0 ? -1 : 2;
+}
+
+/*
  * Make the web root, and put something in it if it is empty.
  *
  * Runs every boot and is deliberately safe to: a directory that is already
@@ -603,8 +668,6 @@ static int lay_out_the_site(void)
 		"<p><a href=\"/\">The server dashboard</a> is served by a "
 		"handler rather than from a file.</p>\n</main>\n";
 
-	int fd;
-
 	/*
 	 * Make the directories, and **do not read anything into whether they
 	 * were made or already there.**
@@ -631,46 +694,33 @@ static int lay_out_the_site(void)
 	mkdir("/System", 0755);
 	mkdir(WEB_ROOT, 0755);
 
-	errno = 0;
-	fd = open(WEB_ROOT "/index.html", O_RDONLY);
-	SITE_OPEN_READ = fd;
-	E_OPEN_READ = errno;
-	if (fd >= 0) {
-		close(fd);
-		return 1;		/* somebody's page is already there */
-	}
-
 	/*
-	 * Created with `SYS_CREATE` rather than `open(O_CREAT)`, and that is a
-	 * workaround for a fault in the C library rather than a preference.
+	 * Each file decided on its own, which this function did not used to do.
 	 *
-	 * **`recon_flags_from_posix` in `userland/libc/posix.c` translates only
-	 * the access mode.** `O_CREAT`, `O_TRUNC`, `O_EXCL` and `O_APPEND` are
-	 * dropped on the floor, so `open(path, O_WRONLY | O_CREAT, 0644)` never
-	 * creates anything -- it opens an existing file for writing, and for a
-	 * file that is not there it answers `ENOENT`. Which is exactly the
-	 * condition the caller passed `O_CREAT` to fix.
+	 * It returned as soon as `index.html` was found, on the reasoning that
+	 * the site was already laid out. That was fine while there was one
+	 * file. The moment a second arrived, **every machine that already had a
+	 * page would never get the stylesheet** -- and the page would render
+	 * unstyled with nothing to say why. The early return was correct and
+	 * became a bug by addition, which is the kind worth naming.
 	 *
-	 * Measured on the machine: `write=-1/e2` for a path whose directory had
-	 * just answered `EEXIST`. Reported in `docs/SERVER.md`; the number is
-	 * the desktop session's to assign, since `posix.c` is theirs.
-	 *
-	 * The kernel has always had the call -- `SYS_CREATE` takes the path and
-	 * the contents together, which suits a file written once at boot better
-	 * than open-then-write would anyway.
+	 * `put_if_absent` therefore answers per file, and the summary below is
+	 * built from all of them rather than from the first.
 	 */
-	SITE_OPEN_WRITE = (long)recon_call6(SYS_CREATE,
-	                                    (u64)(unsigned long)(WEB_ROOT "/index.html"),
-	                                    sizeof(WEB_ROOT "/index.html") - 1,
-	                                    0644,
-	                                    (u64)(unsigned long)DEFAULT_PAGE,
-	                                    sizeof(DEFAULT_PAGE) - 1, 0);
-	E_OPEN_WRITE = 0;
-	SITE_WROTE = SITE_OPEN_WRITE;
+	{
+		int page = put_if_absent(WEB_ROOT "/index.html",
+		                         sizeof(WEB_ROOT "/index.html") - 1,
+		                         DEFAULT_PAGE,
+		                         sizeof(DEFAULT_PAGE) - 1);
+		int css = put_if_absent(WEB_ROOT "/console.css",
+		                        sizeof(WEB_ROOT "/console.css") - 1,
+		                        CONSOLE_CSS,
+		                        sizeof(CONSOLE_CSS) - 1);
 
-	/* Anything negative is a refusal, and a refusal here means the role has
-	 * nothing to serve. Said rather than drawn over. */
-	return SITE_OPEN_WRITE < 0 ? 0 : 2;
+		if (page < 0 || css < 0)
+			return 0;	/* nothing to serve; say so */
+		return (page == 2 || css == 2) ? 2 : 1;
+	}
 }
 
 /* --- the screen ----------------------------------------------------------- */

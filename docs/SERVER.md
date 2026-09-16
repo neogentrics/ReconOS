@@ -100,7 +100,7 @@ the same two things: a static file handler and a JSON API.
 
 | console | status | note |
 |---|---|---|
-| Server Manager dashboard | **partial** | one page, real numbers, and a form that changes something |
+| Server Manager dashboard | **partial** | one page, real numbers, a form that changes something, and its own stylesheet on the volume |
 | Storage / RAID manager | spec | waits on the kernel's RAID |
 | Network and firewall centre | spec | |
 | Services and daemon inspector | **partial** | `GET /api/services` — state, polls, faults, restarts |

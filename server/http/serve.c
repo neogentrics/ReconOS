@@ -134,23 +134,45 @@ static int send_all(int fd, const char *buf, size_t len,
  * An internal address in a Referer header is a small map of the network handed
  * to whatever the link pointed at.
  *
- * --- Content-Security-Policy is deliberately absent ---
+ * --- The policy, and why it can finally be sent ---
  *
- * It is the one with the most value and it cannot be added honestly yet. The
- * dashboard is built with inline `style=` attributes and a `<style>` block, so
- * any policy this server could ship today would need `'unsafe-inline'` --
- * which permits exactly the thing CSP exists to stop, while the header's
- * presence suggests otherwise. A policy that reads as protection and is not is
- * worse than no policy, because it ends the conversation.
+ * This comment used to say CSP was absent and why: the dashboard was built from
+ * inline `style=` attributes and a `<style>` block, so any policy shippable
+ * then needed `'unsafe-inline'` -- which permits exactly what CSP exists to
+ * stop, while the header's presence suggests otherwise. The styles moved to
+ * `/console.css`, so the policy below is true rather than decorative.
  *
- * The page's styles have to move to a served file first. `docs/WEB.md` carries
- * it, and this comment is here so the next person to reach for CSP finds out
- * why in the place they would add it.
+ * Each directive, and what it is actually refusing:
+ *
+ *   `default-src 'none'`   nothing loads unless a directive below allows it.
+ *                          Starting from nothing and permitting what is needed
+ *                          is the only way round that fails closed; starting
+ *                          from `'self'` and forbidding things means every
+ *                          content type nobody thought about is permitted.
+ *   `style-src 'self'`     the one stylesheet, from this machine. **No
+ *                          `'unsafe-inline'`** -- that is the whole point, and
+ *                          it means a `style=` attribute added to a page later
+ *                          stops working rather than silently reopening this.
+ *   `form-action 'self'`   the rename form may post here and nowhere else. A
+ *                          page that has been tampered with cannot retarget it
+ *                          at somebody else's collector.
+ *   `frame-ancestors 'none'` the same ground as `X-Frame-Options`, in the
+ *                          header that superseded it. Both are sent: the older
+ *                          one for anything that does not read this.
+ *   `base-uri 'none'`      no `<base>` may be injected to re-point every
+ *                          relative URL on the page, which is how an injection
+ *                          that cannot add a script still redirects a form.
+ *
+ * **No `script-src`, because `default-src 'none'` already refuses scripts** and
+ * this console has none. If one is ever added, adding a directive for it is a
+ * deliberate act rather than something that quietly already worked.
  */
 #define SECURITY_HEADERS \
 	"X-Content-Type-Options: nosniff\r\n" \
 	"X-Frame-Options: DENY\r\n" \
-	"Referrer-Policy: no-referrer\r\n"
+	"Referrer-Policy: no-referrer\r\n" \
+	"Content-Security-Policy: default-src 'none'; style-src 'self'; " \
+	"form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n"
 
 /* --- the response ------------------------------------------------------- */
 

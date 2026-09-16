@@ -18,7 +18,7 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.9.0 |
+| **Version** | 0.10.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
 | **Checks** | 380 across ten suites |
@@ -214,6 +214,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.10.0** | **A Content-Security-Policy that is true.** The console's styles moved out of the page and onto the volume as `/console.css`, which is what made `style-src 'self'` an honest claim rather than one needing `'unsafe-inline'`. Also fixed a bug created by adding the second file: the site layout returned as soon as `index.html` existed, so every machine that already had a page would never have got the stylesheet. |
 | **0.9.0** | **Hardening what is served.** `nosniff`, `DENY` and `no-referrer` on every response, written by the server so no handler can forget one — CSP deliberately left out, because the only policy shippable today would need `'unsafe-inline'` and would read as protection it does not give. And the dashboard escapes the machine name, removing a documented dependency whose safety lived in a validator three files away. |
 | **0.8.0** | **Resuming a download.** `Range`, `If-Range`, 206 and 416, with the real length on the 416 so a client can recover. One range only — a list can ask for ten thousand one-byte pieces from a few hundred bytes of header. `If-Range` compares strongly, because two weakly-equal representations may differ byte for byte and that is exactly what a range depends on. Also: every status phrase now comes from one table the suite walks, after the hand-written list failed twice. |
 | **0.7.0** | **The client side, measured — and it does not work.** `connect` answers `SYS_OK` for a port nothing is listening on and returns before the handshake, so a write straight after it fails. Discovery, a reverse proxy and every outbound connection are blocked, and the TCP sweep this role had written down as the way around the missing broadcast was never possible. The measurement stays in as a standing check, so the day the kernel fixes it somebody finds out without looking. |

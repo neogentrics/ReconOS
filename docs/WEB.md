@@ -39,7 +39,7 @@ Nothing is marked built on the strength of having been written.
 | Conditional requests and caching | **built** | `cache.c` — ETag, `If-None-Match`, 304, `Cache-Control` |
 | Service registry | **built** | `service.c` — the web server is one service; `/api/services` reports them |
 | Range requests and `If-Range` | **built** | `range.c` — 206, 416, `Accept-Ranges`, and a stale `If-Range` sends the whole file |
-| Security headers | **built** | `nosniff`, `DENY`, `no-referrer` on every response; CSP deliberately absent |
+| Security headers | **built** | `nosniff`, `DENY`, `no-referrer` and a real CSP on every response |
 | HTML escaping | **built** | `escape.c` — 21 checks; the dashboard no longer depends on the name validator for its safety |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
@@ -331,14 +331,25 @@ than by a handler so a handler cannot forget one:
 - `Referrer-Policy: no-referrer` — an internal path in a `Referer` is a small
   map of the network handed to whatever the link pointed at.
 
-**`Content-Security-Policy` is deliberately absent, and that is the honest
-answer rather than the lazy one.** It is the most valuable of the four and
-cannot be added truthfully yet: the dashboard is built from inline `style=`
-attributes and a `<style>` block, so any policy shippable today needs
+**`Content-Security-Policy` is sent now**, and it says what it means:
+
+```
+default-src 'none'; style-src 'self'; form-action 'self';
+frame-ancestors 'none'; base-uri 'none'
+```
+
+It could not be sent before. The dashboard was built from inline `style=`
+attributes and a `<style>` block, so any policy shippable then needed
 `'unsafe-inline'` — which permits exactly what CSP exists to stop while the
-header's presence suggests otherwise. A policy that reads as protection and is
-not is worse than none, because it ends the conversation. The page's styles must
-move to a served file first.
+header's presence suggests otherwise. The styles moved to `/console.css`, which
+the role writes to the volume at boot, and the policy became true rather than
+decorative.
+
+`default-src 'none'` starts from nothing and permits what is needed, which is
+the only direction that fails closed. There is no `script-src`, because
+`default-src 'none'` already refuses scripts and this console has none — adding
+one later should be a deliberate act rather than something that quietly already
+worked.
 
 `Strict-Transport-Security` waits on TLS, and would be a lie without it.
 CORS for the API is still to decide.
