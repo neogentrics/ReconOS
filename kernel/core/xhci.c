@@ -42,6 +42,7 @@
  */
 #include <recon/kernel/suspend.h>
 #include <recon/kernel/block.h>
+#include <recon/kernel/bluetooth.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
@@ -1733,6 +1734,7 @@ static bool claim_device(struct xhci *x, struct usb_device *ud,
 	 * not its own, which is most of what gets plugged in. */
 	usb_storage_attach(x, ud);
 	usb_hid_attach(x, ud);
+	bt_hci_attach(x, ud);
 
 	/* And if it is a hub, what is below it.
 	 *
@@ -1958,6 +1960,11 @@ void usb_print_summary(void)
 	kprintf("  hot-plug     : %u poll%s, %u arrived, %u left\n",
 		polls, polls == 1 ? "" : "s",
 		arrivals, departures);
+
+	/* Whatever Bluetooth made of what it was offered. Reported here rather
+	 * than with the input summary because that driver posts no input yet --
+	 * what it has to say is about the bus. */
+	bt_hci_print_summary();
 }
 
 unsigned usb_arrivals(void)

@@ -83,6 +83,14 @@ So, descriptor by descriptor:
 | 4 | ep 0x02 bulk OUT | `out_ep = 0x02` |
 | 5 | interface 1 | `if (have_interface) break` |
 
+**And it does not depend on that order.** Reverse the two endpoints and the
+bulk one is taken first, at which point the interrupt branch's `!ud->in_ep`
+guard rejects the interrupt endpoint. Either way `in_ep` ends up the bulk IN
+and the event endpoint is lost — the unguarded branch always wins. An earlier
+version of this entry said the outcome depended on descriptor order; it does
+not, and that also means the Realtek's descriptor bytes are not needed to know
+what will happen to it.
+
 **The event endpoint is gone, and nothing reports that.** `configure_endpoints`
 then succeeds on 0x82 and 0x02, `ud->configured` is set, and the summary line
 prints `in 82 (512 byte) out 02 (512 byte)` — a completely plausible bulk
@@ -139,10 +147,19 @@ Stated as requirements rather than as a patch, since the interface is yours:
    not needed: HCI is always interface 0, and `read_interface` stopping at the
    first interface is correct here for a reason rather than by luck.
 
-Both adapters are the same shape, so this is not a fix for one machine. The
-Realtek `0bda:d723` on the Gateway has three interfaces all reporting class
-224, which is the same layout; its descriptor bytes have not been read yet and
-will be on the first boot.
+Both adapters are the same shape, so this is not a fix for one machine — and
+since the outcome is order-independent, the Realtek `0bda:d723` on the Gateway
+reaches it too without its descriptor needing to be read first. Its three
+interfaces all reporting class 224 is the same layout.
+
+**There is now a driver on this branch that says which of these actually
+happened**, rather than leaving it to this entry's reading of the code.
+`kernel/core/bluetooth.c` claims class 224.1.1, prints the endpoint the
+enumeration handed it, and declines with the diagnosis in words. If the trace
+above is right, the Gateway and the desktop will both print `that is the ACL
+endpoint, not the event one`. If an interrupt endpoint survives on either
+machine, it prints that the reading is wrong and says so in as many words. The
+paragraph above is a claim; that line will be a measurement.
 
 #### Two shape changes to take at merge
 
@@ -166,9 +183,40 @@ Both are the same lesson, and neither is urgent:
   It says *"titled with its bug number"* now. The new section is titled by
   track rather than by ordinal for the same reason.
 
-#### What was tested, and what was broken on purpose
+#### The driver, and the test that could not fail
 
-Nothing here runs on hardware yet, so the testing is all of the tooling:
+`kernel/core/bluetooth.c` builds under `-Werror` on x86_64 and aarch64, passes
+`make check-portable`, and its self-test runs in QEMU as
+`an event, reassembled : pass`. It frames commands, reassembles events across
+transport packets, and reads a command's answer out of an event. It sends
+nothing: the wire path is not written, because there is no endpoint to read the
+answer on and untestable code in a tree stops being right quietly.
+
+**Then the self-test was broken six ways to see whether it could go red.** Five
+went red with the right diagnosis. **One passed, and that is the useful
+result.** Deleting the `have < HCI_EVENT_HEADER` guard — the one stopping the
+declared length being read out of a byte that has not arrived — left the test
+green, because the length comparison underneath the guard returns false for a
+one-byte buffer anyway. The check asserted only that no event was reported,
+which was true either way.
+
+So the guard was covered by nothing, and anyone deleting it later as redundant
+would have seen green. It asserts `r->want` now, with a stale byte planted
+where the length will go, and the same deletion fails with
+`after one byte the expected length is 202, from a byte belonging to the last
+event rather than this one` — 202 being 2 plus the planted 200. Re-run
+afterwards to confirm it passes unmodified and that the source came back
+byte-identical.
+
+The other five, for the record: an unmasked ACL handle (`read as 2eff, expected
+0eff`), reassembly keyed on a short packet rather than the declared length
+(`completed 3 times, not once`), Command Status read with Command Complete's
+offsets (`opcode 0301 status 12`), and a completed event not cleared before the
+next one (`the second of two events did not complete`).
+
+#### What else was tested, and what was broken on purpose
+
+The tooling changes above:
 
 - `check-readme-badges.py` is green at 319 bugs. Broken three ways to confirm
   it can go red: the badge number edited to 318 (red, exit 1, and the new
