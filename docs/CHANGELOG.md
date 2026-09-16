@@ -9,6 +9,84 @@ way for the two to disagree.
 
 ---
 
+## v0.4.49 — a file field was a text box
+
+`<input type="file">` fell through the input dispatch to the default, so the
+viewer drew it **as a text box**. A photograph of a page with two file fields
+on it shows them indistinguishable from the name field beside them.
+
+That is not merely unhelpful, it is an invitation: somebody types a filename
+into it, presses Send, and the server receives a word where it expected a
+document. The same failure as a table whose headings sit over the wrong
+columns — **legible, and wrong**.
+
+And it went further than the drawing. The confirmation before sending counted
+those fields as answers — *"Send 3 answers to localhost?"* for a form with one
+real answer and two files it could not attach — and the body would have gone
+url-encoded to a server that had asked for `multipart/form-data`.
+
+### Drawn as what it is, which the tree already had a shape for
+
+`RECON_HTML_FIELD_FILE`, drawn like `RECON_HTML_FIELD_BUTTON`: visible,
+**disabled**, with a tip saying *"ReconOS's viewer cannot attach a file yet"*.
+The argument was already written next to that kind, for script-only buttons:
+
+> *"A page whose 'Show more' is simply missing looks like a page this failed to
+> read; one whose button is there and visibly does nothing says the true
+> thing."*
+
+Turned up a notch here, because a dead button cannot be typed into and a text
+box can. Tab skips it, and its words are the viewer's — a file input carries no
+`value` a page may set, because a page that could set one could read a path off
+somebody's disk.
+
+### A form that asks for multipart is refused, with a reason
+
+**Url-encoded is not a degraded multipart body, it is an unintelligible one.**
+The server looks for a boundary that is not there and finds nothing, and the
+failure it reports is its own — so somebody watching this viewer would see a
+page saying something went wrong, with no way to learn that what went wrong was
+the shape of the request.
+
+Refused before a body is built, and said where the reason is known: *"This
+form attaches a file, and ReconOS's viewer cannot attach one yet. Nothing was
+sent."*
+
+Only `multipart/form-data` counts. `enctype` also takes `text/plain`, and
+anything unreadable is the page being wrong — reading the mark generously would
+refuse forms that work today, and refusing a form is a real cost.
+
+### And a file field in an ordinary form still sends, which is the precise part
+
+A form that does **not** ask for multipart is not refused. The standard has
+such a form send a file field's *name* rather than its content, and a browser
+with no file chosen sends nothing after the equals sign.
+
+This viewer has no file chosen either, so it sends the same thing. Proven
+against an echo server rather than argued: `stray=&notes=ordinary`.
+
+### 14 checks, three mutations, all caught
+
+| the mutation | what the suite says |
+|---|---|
+| `type=file` falls through to a text box | 2 failures |
+| a multipart form is not marked | 1 failure |
+| **any** enctype counts as multipart | 2 failures |
+
+The third is the over-generous reading the comment warns about, and it is worth
+having a check for: it would not break anything visibly, it would just quietly
+stop ordinary forms working.
+
+### What is still missing
+
+A file picker, and a multipart encoder. `recon_filedlg` exists and is not
+reachable from `recon_web.c` at all, which is the next question rather than an
+oversight — a viewer that can open a file chooser is a viewer that can be asked
+to read anything on the disk, and what it may offer is a decision before it is
+code.
+
+---
+
 ## v0.4.48 — a `#` that ended the command
 
 **The freestanding check had stopped checking, and I broke it.**

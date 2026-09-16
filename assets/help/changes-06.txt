@@ -1,91 +1,74 @@
-### The machine says which of the five it is
+src/recon_ui.c was three thousand one hundred lines, and twenty-eight of
+them mentioned wlroots. Those twenty-eight were enough to keep the other
+three thousand off a compiler with no Linux underneath — and those three
+thousand are the desktop's drawing: every widget, every button, every themed
+fill, every rounded corner, all the text.
 
-The kernel session raised this while there was almost nothing built on the
-assumption, which is the cheap moment: docs/ROLES.md has five roles chosen
-at first boot — server, firewall, workstation, thin client, NAS — out of one
-install, one kernel and one image. recon_init.c was written as *the* first
-program ReconOS runs. It is not. It is the workstation's, and it is the only
-one of the five that exists.
+A panel is a pixel buffer. uint32_t *pixels, ARGB8888, width by height.
+Everything above writes into that array and nothing else. What wlroots was
+doing was the *last inch*: handing the array to a scene graph, and moving,
+raising and hiding the node that holds it.
 
-userland/init/role.h says so, and the screen a person reads now says
-ReconOS workstation rather than ReconOS.
+On ReconOS that inch is a write to the framebuffer device. So it is behind a
+table of function pointers now — struct recon_panel_present — and the split
+is:
 
-What is deliberately not renamed: the installed path. /System/init.elf is
-a contract between two halves and only one of them is here — make-medium.sh
-and install-then-boot-test.sh write it, the kernel's loader reads it and falls
-back to its built-in copy. Renaming the writing side alone produces an installed
-disk that boots the copy inside the kernel while reporting that it did, which is
-not a failure anybody would see and is the worst kind. kernel/Makefile names
-the sources under ../userland/init/ directly, so the directory is theirs to
-move too. Their lead, my same-hour follow.
+| file | what it is | leaves Linux |
+|---|---|---|
+| src/recon_ui.c | 2,947 lines of drawing | yes |
+| src/recon_ui_wlr.c | the last inch, moved unchanged | no |
+| src/recon_ui_internal.h | what a panel is, shared by the two | — |
 
-### BG-207 — the text left the panel and ran off the screen
+The same shape as struct recon_memory_source in the allocator and the
+make-a-line function recon_wrap takes: put the part that is tied to the
+host behind a seam, and the part that can be wrong on the other side of it.
 
-Photographing the boot to check the role appeared found something else in the
-same frame: the heap line leaving the panel, crossing the gap and running off
-the right-hand edge of a 2560-wide screen.
+### The header needed no change at all
 
-put_pixel clips to the *canvas*, so it was never wrong enough to fault. It was
-simply text outside its box — and 306,797 existing checks could not see it,
-because every one of them looks at a canvas and the text never left the
-canvas. It left the panel, which nothing was measuring.
+include/recon_ui.h only ever *forward-declared* struct wlr_scene_tree and
+struct wlr_scene_buffer. An incomplete type in a prototype compiles
+anywhere, so the public interface was already portable and nobody had noticed.
+The whole split is inside one .c file plus a new one.
 
-A status panel whose text escapes its box is worse than one that cuts it: the
-reader cannot tell whether what they can see is all of it. So recon_screen_text
-takes a right-hand bound now, and a line that does not fit ends with a > —
-not an ellipsis, because this font is ASCII and an ellipsis would draw as a
-space, which is the silent version of the same fault.
+### The premultiply went with wlroots, and that is the point
 
-Zero means the whole canvas, which is what every caller meant before there was a
-bound at all.
+The conversion from straight to premultiplied alpha carried a comment arguing
+it belongs *at the boundary*: *"one model inside the program and one at the
+boundary, which is the only arrangement where 'what alpha means' has a single
+answer in each place."*
 
-And the first fix drew the marker over the last character. It put the > at
-cursor - step, where a character had already been drawn, and nothing here
-clears a background — so the line ended in a smudge that read as a corrupt
-glyph. The marker gets a cell of its own now: when this is the last cell that
-fits and there is more text after it, the cell is spent on the marker instead of
-on a character that would have been the last one anyway.
+That sentence turned out to be the argument for which side of the seam it goes
+on. Premultiplied is what wlroots wants, not what a screen wants — a
+framebuffer has nothing to blend against. So it moved, and a future
+presentation writes whatever its screen takes.
 
-Found by photograph, both times. The second one is the reason to look again
-after a fix rather than at the test result.
+### And the font code stopped having an opinion about stderr
 
-Four checks, and they bite: with the bound removed, *nothing is drawn at or
-past the bound* and *the last cell inside it is marked* both fail. The suite is
-306,801 now.
+Five wlr_log calls sat inside the *font* code — the only reason the drawing
+half needed a wayland header besides the presentation. They are
+recon_ui_say now, which formats into a buffer and hands it to a hook.
 
-### Three more files, and a flag that was measuring the wrong thing
+The hook does nothing when nobody sets one, which is right for a drawing
+library and wrong for a compositor that has a log right there — so main.c
+calls recon_ui_log_to_wlroots() immediately after the log exists and before
+anything draws. Without that the messages would not be misdirected, they would
+be *gone*, which is the quiet way a refactor loses something.
 
-scripts/check-userland.sh did not have third_party/ on its include path, so
-eight files failed on stb_image.h and stb_truetype.h. Those headers ship in
-this repository and travel to ReconOS with everything else, exactly like the
-icons — leaving them off was asking "does this build without the code we
-vendored", which is not the question. The question is whether it builds without
-glibc.
+### 45 of 45 became 46 of 46
 
-With the path: recon_ico.c, recon_icons.c and recon_web.c. 45 of 45.
+recon_ui.c is the largest file to cross, and the one that mattered most: it
+is what every window in the system draws through.
 
-recon_stb.c still does not — it wants a hosted <math.h> as well.
+### What proves it did not change the picture
 
-### And pid_t, measured and left out
+49 suites, and a photograph. The suites cover the drawing directly, but the
+thing a refactor of this shape breaks is compositing — and the comment on the
+premultiply says exactly what that looks like when it is wrong: *"every window
+looked square with a notch cut in it."*
 
-include/recon_procinfo.h names pid_t and userland/include/sys/types.h
-deliberately has none. Adding it was tried and gains nothing today: every
-file that includes that header is behind wayland-server-core.h anyway. It
-waits with them rather than going in as a typedef nothing can use.
-
-### The socket syscall numbers, checked rather than taken
-
-The kernel session sent a correction — that the numbers they gave earlier were
-off by one, and are 26 to 30 rather than 27 to 31 — with the note that they had
-*"counted by eye instead of asking the file"*.
-
-Asked the file. The original numbers were right. The compiler says
-SYS_SOCKET is 27, SYS_BIND 28, SYS_LISTEN 29, SYS_ACCEPT 30,
-SYS_CONNECT 31, on this tree and on origin/kernel, whose copy of
-user.h is identical to this one. scripts/check-syscall-numbers.py agrees:
-*32 system calls; both headers and 42 hand-written numbers agree.*
-
-So nothing written down here needed changing — and the correction was the
-recount, not the original, which is the same fault one layer further out.
+So the check is a running desktop: wallpaper, taskbar, two windows, title bars
+with their buttons, rounded corners, the Control Panel's icon grid. Identical.
+A test could have passed with the alpha model on the wrong side of the seam;
+the photograph is what says the corners are still round.
 
 ---

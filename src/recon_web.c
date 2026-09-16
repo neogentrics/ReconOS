@@ -1723,6 +1723,7 @@ static void field_size(const struct web_tab *t,
     case RECON_HTML_FIELD_SUBMIT:
     case RECON_HTML_FIELD_RESET:
     case RECON_HTML_FIELD_BUTTON:
+    case RECON_HTML_FIELD_FILE:
         w = recon_text_width(font, d->label) + 22;
         if (w < 44) {
             w = 44;
@@ -1845,15 +1846,23 @@ static void put_field(struct flow *f, int index, int x, int y, int width,
     switch (d->kind) {
     case RECON_HTML_FIELD_SUBMIT:
     case RECON_HTML_FIELD_RESET:
-    case RECON_HTML_FIELD_BUTTON: {
+    case RECON_HTML_FIELD_BUTTON:
+    case RECON_HTML_FIELD_FILE: {
         /*
          * A button that only script could work is drawn dead, with a tip
          * saying why. A page whose "Show more" is simply missing looks like
          * a page this failed to read; one whose button is there and visibly
          * does nothing says the true thing, which is that there is no script
          * here to run.
+         *
+         * **A file field is drawn the same way**, and the argument is the
+         * same one turned up a notch: it used to be a text box, which is not
+         * merely unhelpful but an invitation -- somebody types a filename
+         * into it, presses Send, and the server receives a word where it
+         * expected a document. A dead button cannot be typed into.
          */
-        bool inert = (d->kind == RECON_HTML_FIELD_BUTTON);
+        bool inert = (d->kind == RECON_HTML_FIELD_BUTTON ||
+            d->kind == RECON_HTML_FIELD_FILE);
         struct recon_widget_button button = {
             .x = screen_x, .y = screen_y, .w = width, .h = height,
             .id = id,
@@ -1863,8 +1872,10 @@ static void put_field(struct flow *f, int index, int x, int y, int width,
             .look = (d->kind == RECON_HTML_FIELD_SUBMIT && !d->disabled)
                 ? RECON_WIDGET_ACCENT : RECON_WIDGET_PLAIN,
             .disabled = d->disabled || inert,
-            .tip = inert ? "This button needs JavaScript, which ReconOS's "
-                "viewer does not run" : NULL,
+            .tip = (d->kind == RECON_HTML_FIELD_FILE)
+                ? "ReconOS's viewer cannot attach a file yet"
+                : (inert ? "This button needs JavaScript, which ReconOS's "
+                    "viewer does not run" : NULL),
         };
         recon_widget_button(f->panel, &button);
         break;
@@ -4425,7 +4436,9 @@ static bool field_is_typable(const struct recon_html_field *d) {
 static bool field_is_reachable(const struct recon_html_field *d) {
     return d != NULL && !d->disabled &&
         d->kind != RECON_HTML_FIELD_HIDDEN &&
-        d->kind != RECON_HTML_FIELD_BUTTON;
+        d->kind != RECON_HTML_FIELD_BUTTON &&
+        /* Nothing to put a caret in, and nothing a keypress could do to it. */
+        d->kind != RECON_HTML_FIELD_FILE;
 }
 
 /*
@@ -4693,6 +4706,33 @@ static void submit_form(struct web_tab *t, int form, int submitter) {
         values[i].text = t->fields[i].text;
         values[i].on = t->fields[i].on;
         values[i].chosen = t->fields[i].chosen;
+    }
+
+    /*
+     * A form that asks for multipart is refused here, before a body exists.
+     *
+     * **Url-encoded is not a degraded multipart body, it is an
+     * unintelligible one.** The server looks for a boundary that is not there
+     * and finds nothing, and the failure it reports is its own -- so somebody
+     * watching this viewer would see a page saying something went wrong, with
+     * no way to learn that what went wrong was the shape of the request.
+     *
+     * Refused rather than attempted, and said here rather than left to the
+     * far end, because this is the only place that knows why.
+     *
+     * A file field in a form that does *not* ask for multipart is a different
+     * case and goes: the standard has such a form send the file's name rather
+     * than its content, and a browser with no file chosen sends an empty
+     * value -- which is exactly what this sends, so the two requests are the
+     * same request.
+     */
+    if (f->wants_files) {
+        free(values);
+        set_status(t, true,
+            "This form attaches a file, and ReconOS's viewer cannot attach "
+            "one yet. Nothing was sent.");
+        recon_appwin_refresh(t->win);
+        return;
     }
 
     int count = 0;

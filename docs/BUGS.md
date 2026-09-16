@@ -8479,6 +8479,38 @@ regenerated after that tree is pushed.
   match the build's warning flags is the change that stopped it passing any.
 
 
+### BG-209 — A file input was drawn as a text box, and its form sent in the wrong shape
+
+- **Found in** v0.4.49, by photographing a page with two file fields on it
+  before changing anything.
+- **Was** `<input type="file">` fell through the input-type dispatch in
+  `src/recon_html.c` to the default, `RECON_HTML_FIELD_TEXT`. So a file field
+  was drawn as an ordinary text box, indistinguishable from the name field
+  beside it.
+- **What it costs** Not merely an unhelpful control — **an invitation**.
+  Somebody types a filename into it, presses Send, and the server receives a
+  word where it expected a document. The confirmation made it worse by
+  counting those fields as answers: *"Send 3 answers"* for a form with one
+  real answer and two files that could not be attached.
+- **And the request was the wrong shape.** The page asked for
+  `enctype="multipart/form-data"` and nothing read `enctype` at all, so the
+  body would have gone url-encoded. That is not a degraded multipart body, it
+  is an unintelligible one: the server looks for a boundary that is not there,
+  and the failure it reports is its own — leaving somebody with a page saying
+  something went wrong and no way to learn that the viewer sent the wrong
+  shape.
+- **Fixed in** v0.4.49. `RECON_HTML_FIELD_FILE` is its own kind, drawn
+  disabled with a tip, skipped by Tab, and sending nothing. A form whose
+  `enctype` is `multipart/form-data` is refused before a body is built, with
+  the reason. A file field in a form that does *not* ask for multipart still
+  sends its name and an empty value, which is exactly what a browser with no
+  file chosen sends.
+- **What holds it** Three tests in `tests/test_form.c`, and three mutations
+  all caught — including the over-generous one where any `enctype` counts as
+  multipart, which would break nothing visibly and quietly stop ordinary forms
+  working.
+
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

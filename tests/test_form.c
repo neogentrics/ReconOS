@@ -439,6 +439,147 @@ static void test_two_forms_do_not_mix(void) {
  * The address a GET makes, including the case the standard is explicit about
  * and almost nothing implements: the action's own query is replaced.
  */
+static void test_a_file_field_is_not_a_text_box(void) {
+    printf("a file field is its own kind\n");
+
+    /*
+     * **It used to be a text box**, because `type=file` fell through the
+     * dispatch to the default -- and a text box is exactly the wrong answer,
+     * because it is one somebody can type into. A page with a file field
+     * drawn as a text box invites a person to type a filename, press Send,
+     * and have the server receive a word where it expected a document.
+     *
+     * A photograph of a real page is what showed it: two file fields
+     * indistinguishable from the name field beside them.
+     */
+    const char *html =
+        "<form method=post action=/sent enctype=\"multipart/form-data\">"
+        "<input type=text name=who value=Joshua>"
+        "<input type=file name=picture>"
+        "<input type=submit value=Send>"
+        "</form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(recon_html_field_count(d) == 3, "three controls");
+
+    const struct recon_html_field *text = recon_html_field_at(d, 0);
+    const struct recon_html_field *file = recon_html_field_at(d, 1);
+    check(text != NULL && text->kind == RECON_HTML_FIELD_TEXT,
+        "the first is a text box");
+    check(file != NULL && file->kind == RECON_HTML_FIELD_FILE,
+        "and the second is a file field, not another text box");
+
+    /* And it says what it is, because a file input carries no words of its
+     * own -- the standard forbids a page setting its value. */
+    if (file != NULL) {
+        check(file->label[0] != '\0',
+            "and it has words, which the page did not give it");
+    }
+
+    recon_html_free(d);
+}
+
+static void test_which_forms_ask_for_multipart(void) {
+    printf("enctype, and only the one value that means it\n");
+
+    /*
+     * Only `multipart/form-data` counts. `enctype` also takes `text/plain`,
+     * which almost nothing uses and which a url-encoded body is not, and
+     * anything unreadable is the page being wrong.
+     *
+     * Neither is treated as multipart, and the reason is a cost: a form
+     * marked this way **is refused rather than sent**, so reading the mark
+     * too generously would stop forms working that work today.
+     */
+    const char *html =
+        "<form id=a method=post enctype=\"multipart/form-data\">"
+        "<input type=submit></form>"
+        "<form id=b method=post enctype=\"text/plain\">"
+        "<input type=submit></form>"
+        "<form id=c method=post enctype=\"banana\">"
+        "<input type=submit></form>"
+        "<form id=d method=post><input type=submit></form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(recon_html_form_count(d) == 4, "four forms");
+    if (recon_html_form_count(d) == 4) {
+        check(recon_html_form_at(d, 0)->wants_files,
+            "multipart/form-data asks for files");
+        check(!recon_html_form_at(d, 1)->wants_files,
+            "text/plain does not");
+        check(!recon_html_form_at(d, 2)->wants_files,
+            "nor does a value that is not an enctype at all");
+        check(!recon_html_form_at(d, 3)->wants_files,
+            "nor does a form with no enctype");
+    }
+
+    recon_html_free(d);
+}
+
+static void test_a_file_field_in_an_ordinary_form(void) {
+    printf("what a file field sends when the form is not multipart\n");
+
+    /*
+     * **The name, with an empty value** -- and that is not a stand-in, it is
+     * the right answer.
+     *
+     * The standard has a form that does not ask for multipart send a file
+     * field's *name* rather than its content, and a browser with no file
+     * chosen sends nothing after the equals sign. This viewer has no file
+     * chosen either, so the request it makes and the one a browser makes are
+     * the same bytes.
+     *
+     * A form that *does* ask for multipart never reaches this code: the
+     * viewer refuses it, because a url-encoded body is not a degraded
+     * multipart one, it is an unintelligible one.
+     */
+    const char *html =
+        "<form method=post action=/sent>"
+        "<input type=file name=stray>"
+        "<input type=text name=notes value=ordinary>"
+        "<input type=submit value=Send>"
+        "</form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+    struct recon_form_value *values = defaults_of(d);
+    if (values == NULL) {
+        check(false, "it has controls");
+        recon_html_free(d);
+        return;
+    }
+
+    int count = recon_html_field_count(d);
+    int sent = 0;
+    char *body = recon_form_body(d, 0, count - 1, values, count, 4096, &sent,
+        NULL);
+    check(body != NULL, "it builds a body");
+
+    if (body != NULL) {
+        /* The exact bytes a browser sends for this form with nothing
+         * attached, which is what the echo server confirmed. */
+        check_text(body, "stray=&notes=ordinary",
+            "the file field sends its name and nothing after it");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
 static void test_the_address_a_get_makes(void) {
     printf("a GET's answers replace the action's query\n");
 
@@ -522,6 +663,9 @@ int main(void) {
     test_a_menu_sends_its_value_not_its_words();
     test_a_password_is_flagged();
     test_two_forms_do_not_mix();
+    test_a_file_field_is_not_a_text_box();
+    test_which_forms_ask_for_multipart();
+    test_a_file_field_in_an_ordinary_form();
     test_the_address_a_get_makes();
     test_a_body_too_long_is_refused();
 

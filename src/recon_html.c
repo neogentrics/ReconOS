@@ -1896,6 +1896,24 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                         }
 
                         /*
+                         * Whether it has to go as multipart.
+                         *
+                         * Only the one value means it: `enctype` also takes
+                         * `text/plain`, which almost nothing uses and which a
+                         * url-encoded body is not, and anything unreadable is
+                         * the page being wrong. Neither is treated as
+                         * multipart, because refusing to send a form is a
+                         * real cost and it should only be paid where the
+                         * page actually asked for something this cannot make.
+                         */
+                        char enctype[64] = "";
+                        if (attribute(attrs, attrs_length, "enctype", enctype,
+                                sizeof(enctype))) {
+                            f->wants_files = strcasecmp(enctype,
+                                "multipart/form-data") == 0;
+                        }
+
+                        /*
                          * The name, or the id when there is no name. Both,
                          * because `form=` on a control names either one and a
                          * page that used the id would otherwise have its
@@ -1944,6 +1962,8 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     kind = RECON_HTML_FIELD_RESET;
                 } else if (strcasecmp(type, "button") == 0) {
                     kind = RECON_HTML_FIELD_BUTTON;
+                } else if (strcasecmp(type, "file") == 0) {
+                    kind = RECON_HTML_FIELD_FILE;
                 } else if (strcasecmp(type, "password") == 0) {
                     secret = true;
                 }
@@ -1998,6 +2018,21 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                             f->value[0] != '\0' ? f->value
                             : (kind == RECON_HTML_FIELD_RESET ? "Reset"
                                : "Submit"));
+                    }
+
+                    /*
+                     * And a file field, which has no words of its own at all.
+                     *
+                     * `<input type=file>` carries no `value` a page may set --
+                     * the standard forbids it, because a page that could set
+                     * one could read a path off somebody's disk. So the words
+                     * are this viewer's, and they say what the control *is*
+                     * rather than what it would do: there is nothing behind it
+                     * to do anything.
+                     */
+                    if (kind == RECON_HTML_FIELD_FILE) {
+                        snprintf(f->label, sizeof(f->label), "%s",
+                            "No file -- cannot attach");
                     }
 
                     flush_space(&b);

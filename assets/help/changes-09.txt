@@ -1,139 +1,118 @@
-colspan is the part of table layout real pages use constantly and this viewer
-did not read at all. A header spanning two columns was drawn as one cell in the
-first of them, and every row under it lined up against the wrong heading —
-which is worse than not drawing the table, because it is legible and wrong.
+recon_tls.c had fifteen functions no suite ran, and they were all of one
+half of the file: the half that decides whether to believe somebody else.
+test_tls.c covers the identity this machine *presents* — made once, survives
+a restart, key unreadable by anyone else. Nothing covered the roots it checks
+other people against, or what it says when a check fails.
 
-The span rides on the run that starts the cell, beside starts_cell, because
-that is already where a cell boundary lives — *"a cell is not a paragraph: it
-is a piece of a line"*. One short field, and a table with more than
-thirty-two thousand columns is a document doing something other than being a
-table.
+Verification itself is mbedTLS's, which is right; writing certificate path
+validation again is how a project acquires a vulnerability it cannot find. What
+is ours is the two things either side of it, and both are the kind of claim
+that is wrong quietly.
 
-Two places had to learn it, and the second is the one that goes wrong quietly:
+### The messages are the feature
 
-Measuring. A cell covering three columns must not make the first of them
-three columns wide. Its width is spread across the columns it covers, and only
-where they are narrower than their share — so a spanning header cannot shrink a
-column some ordinary cell elsewhere already needs wider. Getting that backwards
-shows up as one enormous column and three thin ones, which is what a viewer
-that ignores the attribute does by accident.
+The header's argument for them:
 
-Drawing. The pen starts in the first column of the span and its right edge
-is the end of the last, so the text runs across the span instead of wrapping
-inside one column's width. The column index advances *by the span*, or every
-cell after a spanning one is off by however many columns it covered.
+> *"'Certificate error' leaves somebody with three very different possibilities
+> and no way to tell them apart: their clock is wrong, their bundle is short a
+> root, or somebody is sitting in the middle of the connection. The last of
+> those is the reason this code exists and it deserves its own sentence."*
 
-The widest-word floor is the exception: it goes to the first column only.
-Spreading an unbreakable word across a span would let every column it covers
-stay too narrow for it, which is the floor failing to be a floor.
+Four sentences, each chosen from a flag mbedTLS sets — and which flag it sets
+for a given kind of bad certificate is a fact about mbedTLS rather than
+something to reason out. So the suite mints a certificate authority and five
+certificates with a different fault built into each, stands up a server to
+present them, and runs a real handshake per scenario over a socket pair:
 
-### Anything that is not a number above zero is one
-
-colspan="0" means *"to the end of the column group"* in the standard. There
-are no column groups here, so it is read as one rather than guessed at — and
-colspan="banana" is a page being wrong, not a cell covering nothing. Zero
-is the dangerous answer: a cell that takes no column shifts the whole rest of
-the row left, which is the same fault as the one below.
-
-### BG-206 — an empty cell took no column
-
-Finding this is what the work was actually worth.
-
-A cell boundary is carried by a run, and a cell with nothing in it produces no
-run to carry it. The boundary stayed pending and the *next* cell's text
-consumed it, so one column simply vanished and everything after it on that row
-shifted left.
-
-The most ordinary shape that hits is the blank top-left corner of a table whose
-header has two rows — <th></th><th>area</th> put "area" in the first column.
-Every heading under the wrong one, on a table shape that appears on a great many
-real pages.
-
-It is not colspan's doing and it was not new. It was invisible for as long as
-the whole row was merely off by one and nothing sat above it to disagree with;
-the spanning-header fixture made it obvious in a single photograph.
-
-The fix is the shape the file already uses for a control — *"its run is empty
-and sits at the end of the text"* — so an empty run is a supported thing here
-rather than a new idea. Written directly rather than through emit, which
-merges a run into the one before it when they look alike, and an empty run looks
-like everything. The first attempt used emit and the run disappeared into its
-neighbour, which is the same bug wearing a different hat.
-
-### What proves it
-
-13 checks in test_html.c, taking the suite from 183 to 196, and both
-mutations bite:
-
-| the code as it was an hour ago | what the suite says |
+| what the server presents | what somebody reads |
 |---|---|
-| the parser ignores colspan | 2 failures |
-| an empty cell produces no run | 2 failures |
+| a valid certificate for somebody else's name | *for a different name — either the wrong address, or something is answering in its place* |
+| one that ran out | *expired, or this machine's clock is wrong* |
+| one that has not started | *not valid yet, which usually means this machine's clock is behind* |
+| one nothing vouches for | *nothing this machine trusts has vouched for that certificate* |
 
-They check the *parser's* answer rather than the drawing, because that is where
-being wrong is quiet: the layout can only be as right as the number it is
-handed. Seven cells in two rows cover the ordinary case and all four refusals —
-0, a word, a negative, and an ordinary cell after them.
+The first is the sharpest: that certificate is real, in date, and signed by a
+root this machine trusts. Everything about it is right except *whose* it is.
 
-And three photographs through scripts/look.sh, against a /span fixture, on
-the real compositor. A photograph proves this build on this fixture on the day
-somebody looked, which is why it is not the only instrument here — but it is
-the one that found BG-206, and no unit test was ever going to.
+Elliptic-curve keys rather than RSA purely so it runs in a moment — six keys at
+2048 bits is several seconds of nothing.
 
-### The badge said 1,971 checks. A run says 4,474,929.
+### A bundle with a bad entry in it loads anyway
 
-Adding thirteen checks meant touching the figure on the README badge, and the
-figure turned out to be off by three orders of magnitude.
+The other half is root loading, and the rule worth holding is the one that
+looks wrong: a bundle containing entries the library cannot parse is loaded
+without them rather than refused. Refusing it fails *closed*, which reads as
+the safe choice and is not — a machine that trusts nothing cannot fetch mail,
+so somebody goes looking for the switch that makes it work. Real bundles off
+real machines routinely carry one or two roots mbedTLS will not take.
 
-check-readme-badges.py was written on 15 September for exactly this — *"a
-figure on a board is a claim, and a claim needs an instrument"* — and it
-deliberately left this one field alone, for a reason that was right as far as
-it went:
+So the fixture bundle is two real roots and one block that is shaped like a
+certificate and is not: two loaded, one counted as rejected, and the count
+is readable through recon_tls_roots because this file has no logging in it
+and should gain none.
 
-> *"1971 checks cannot be derived from the repository — it is a figure from a
-> run, and a run is a thing that happened rather than a thing a file contains.
-> Reading it from a log lying around would be worse than leaving it."*
+### There is no way to turn verification off, and that is testable
 
-True, and it skips the third option: do the run. A figure unavailable to
-something that only reads files is perfectly available to something willing to
-execute the suites and read what they say. --run does that and writes the
-number it just watched happen — no log, no cache, no trusting a build directory
-to be from this commit rather than checking.
+The header says so and the code says MBEDTLS_SSL_VERIFY_REQUIRED rather than
+OPTIONAL. The property is not "the flag is set" — with OPTIONAL the handshake
+*finishes* and leaves the result in a flag for somebody to remember to check.
+So what the test holds is that a connection to an untrusted server does not
+exist at all: no object, nothing to read or write through, nothing for a
+forgetful caller to use.
 
-The cost of leaving it was not hypothetical. The field had drifted from 1,971
-to 4,474,929 while sitting beside a note explaining why nobody was checking it:
-the same fault the script exists to fix, one field to the right. A count
-nobody can check should be visibly uncheckable; a count somebody could have
-checked by running it was just unchecked.
+### And the bytes, which nothing had ever sent
 
-### Two ways it was still wrong, both found by running it
+recon_tls_read, recon_tls_write and recon_tls_fd were at zero — every byte
+the browser and the mail client send. One test opens a connection and uses it,
+and holds the two answers the read path exists to give: RECON_TLS_AGAIN
+when nothing has arrived, distinct from a fault, because on a non-blocking
+socket that is the ordinary case and its own comment says this used to be a
+loop with the desktop inside it; and zero for a peer that said goodbye, so
+"they hung up" is distinguishable from "something broke".
 
-It was short by a whole suite. 46 of 47 suites end N checks, M failures;
-malformed-input ends 10788 cases, 0 failures, because what it runs are
-inputs rather than assertions. Matching one noun dropped an entire suite from
-the total without a word. Both nouns count now, and the number of suites that
-reported is held against the number that exist — so a suite that stops
-reporting makes the figure complain instead of quietly shrinking.
+### What moved, and what did not
 
-And the first fix broke the thing it fixed. It wrote 4%2C464%2C141, a
-URL-encoded comma, so the badge would render 4,464,141 — and its own pattern
-then could not read it back. The next run reported every badge as matching the
-tree without ever having looked at that one. A number its own checker cannot
-parse is a number nobody is checking, which is precisely the fault the script
-was written against, reintroduced by the fix for it. Plain digits.
+33 checks, and five mutations, all caught:
 
-scripts/check.sh passes --run, because by the time it reaches that pass the
-suites are already built — it is the one place that can measure the figure
-rather than note that nobody has, and the run costs about eight seconds.
+| the mutation | what the suite says |
+|---|---|
+| the wrong-name sentence removed | 3 failures |
+| expired and not-yet-valid swapped | 4 failures |
+| verification made OPTIONAL | 16 failures |
+| rejected roots not counted | 1 failure |
+| one bad root refuses the whole bundle | 15 failures |
 
-The README carried the figure twice, too — the badge and a row in the table of
-what the system is. Two copies of one measurement is how the disagreement
-started, so the row says *"47 suites, counted by running them"* and the number
-lives in one place.
+Fifteen functions at zero, now three — fail, and recon_tls_accept and
+recon_tls_connect, which both run the handshake to completion before
+returning. That is correct for the blocking sockets they are for, and it is
+also why neither can be driven from the same loop as its peer: one of the two
+has to be somewhere else while the other blocks. Covering them means a thread
+or a second process, and everything they do besides the loop is the
+begin-and-step path, which is tested. Written down in the suite rather than
+left to be noticed.
 
-### Still missing from tables
+The percentage did not move at all: 29.27%, before and after. That is not a
+disappointment, it is the measurement's documented shape — coverage.sh
+reports *the most any single suite runs of that file*, because gcov will not
+merge counters. The two suites cover different halves and both land on 29.27%
+of 369 lines, so the maximum is unchanged while twelve functions came off zero.
+The number that answers the question moved; the number on the row did not,
+which is worth knowing about that row before reading it again.
 
-rowspan, nested tables, and borders. The checkpoint row says so rather than
-being ticked, because the row is a claim.
+### And the mutation harness reported a fault against correct code
+
+Worth recording because it is the third time this shape has appeared. The
+harness restored the source, verified it byte for byte, and then ran a
+binary built from the mutation — the restored file arrives from the Windows side
+with an mtime make sometimes reads as not newer, and says so: *"Clock skew
+detected. Your build may be incomplete."* It printed one failure against code
+that was right.
+
+BG-198's lesson was *restore in a finally, force the rebuild, and check that
+the restore restored*. Checking the source restored is not checking the
+rebuild happened. The harness now deletes the object and the executable and
+refuses to report at all unless the binary is newer than the source — and with
+that, one of the five rows changed from 1 failure to 15, so the earlier number
+had been wrong too.
 
 ---

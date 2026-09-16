@@ -214,6 +214,22 @@ enum recon_html_field_kind {
      * server has never seen the like of.
      */
     RECON_HTML_FIELD_HIDDEN,
+
+    /*
+     * `<input type="file">`: a file to attach, which this viewer cannot.
+     *
+     * Its own kind rather than a text box, which is what it was until
+     * v0.4.49 -- and a text box is exactly the wrong answer, because it is
+     * one somebody can type into. A page with a file field drawn as a text
+     * box invites a person to type a filename, press Send, and have the
+     * server receive a word where it expected a document.
+     *
+     * Drawn and disabled, the same as RECON_HTML_FIELD_BUTTON above and for
+     * the same reason: a control that is visibly there and visibly dead says
+     * what is true. There is no file picker reachable from this window yet,
+     * and `recon_filedlg` is not something `recon_web.c` can call.
+     */
+    RECON_HTML_FIELD_FILE,
 };
 
 /* GET asks. POST tells. See the note at the top of this file. */
@@ -241,6 +257,23 @@ struct recon_html_form {
      * than "a form", when the page has bothered to say.
      */
     char name[64];
+
+    /*
+     * Whether this form has to be sent as `multipart/form-data`.
+     *
+     * From `enctype`, and it decides whether the form can be sent at all.
+     * **A form that asks for multipart and is sent url-encoded is not a
+     * degraded request, it is an unintelligible one** -- the server reads the
+     * first boundary it does not find and has nothing. So a form that wants
+     * it is refused with a reason rather than sent in the wrong shape.
+     *
+     * A file field in a form that does *not* ask for multipart is a different
+     * case and is not refused: the standard says such a form sends the file's
+     * name and not its content, and a browser with no file chosen sends an
+     * empty value. This viewer has no file chosen either, so an empty value
+     * is exactly what a browser would send, and sending it is right.
+     */
+    bool wants_files;
 };
 
 /* One choice inside a `<select>`. */

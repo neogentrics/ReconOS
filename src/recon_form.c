@@ -116,6 +116,21 @@ const char *recon_form_field_sends(const struct recon_html_document *page,
     case RECON_HTML_FIELD_BUTTON:
         return NULL;
 
+    case RECON_HTML_FIELD_FILE:
+        /*
+         * An empty value, and it is not a stand-in.
+         *
+         * A browser with no file chosen sends exactly this for a form that
+         * does not ask for multipart -- the name, and nothing after the
+         * equals sign. This viewer has no file chosen either, so the two
+         * requests are the same request.
+         *
+         * A form that *does* ask for multipart never gets here: `recon_web.c`
+         * refuses it before a body is built, because a url-encoded body is
+         * not a degraded multipart one, it is an unintelligible one.
+         */
+        return "";
+
     case RECON_HTML_FIELD_CHOICE: {
         /*
          * A menu with nothing chosen sends nothing at all rather than an
