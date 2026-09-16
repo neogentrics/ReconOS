@@ -123,6 +123,7 @@ int http_status_for(int verdict);
  * the function is built from.
  */
 #define HTTP_STATUSES(X)                                       \
+	X(100, "Continue")                                     \
 	X(200, "OK")                                           \
 	X(204, "No Content")                                   \
 	X(206, "Partial Content")                              \
@@ -135,6 +136,7 @@ int http_status_for(int verdict);
 	X(413, "Content Too Large")                            \
 	X(414, "URI Too Long")                                 \
 	X(416, "Range Not Satisfiable")                        \
+	X(417, "Expectation Failed")                           \
 	X(431, "Request Header Fields Too Large")              \
 	X(500, "Internal Server Error")                        \
 	X(501, "Not Implemented")                              \

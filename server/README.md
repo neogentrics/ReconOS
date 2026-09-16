@@ -18,10 +18,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.10.0 |
+| **Version** | 0.11.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 380 across ten suites |
+| **Checks** | 389 across ten suites |
 | **Kernel** | 0.2.41 |
 
 ---
@@ -128,8 +128,8 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 87 | one request, and every way of writing two |
-| `server_http_serve` | 24 | the server over a real socket, `serve.c` unmodified |
+| `server_http` | 89 | one request, and every way of writing two |
+| `server_http_serve` | 31 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
@@ -214,6 +214,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.11.0** | **`Expect: 100-continue`, which was costing every large POST a second.** A client that asks permission before sending a body was never answered, so it waited out its own timeout and sent the body anyway — nothing failed, nothing was reported, and every such request just took a second longer. `curl` does this on any body over about a kilobyte. An expectation the server cannot meet now gets 417 rather than silence, because silence reads as yes. |
 | **0.10.0** | **A Content-Security-Policy that is true.** The console's styles moved out of the page and onto the volume as `/console.css`, which is what made `style-src 'self'` an honest claim rather than one needing `'unsafe-inline'`. Also fixed a bug created by adding the second file: the site layout returned as soon as `index.html` existed, so every machine that already had a page would never have got the stylesheet. |
 | **0.9.0** | **Hardening what is served.** `nosniff`, `DENY` and `no-referrer` on every response, written by the server so no handler can forget one — CSP deliberately left out, because the only policy shippable today would need `'unsafe-inline'` and would read as protection it does not give. And the dashboard escapes the machine name, removing a documented dependency whose safety lived in a validator three files away. |
 | **0.8.0** | **Resuming a download.** `Range`, `If-Range`, 206 and 416, with the real length on the 416 so a client can recover. One range only — a list can ask for ten thousand one-byte pieces from a few hundred bytes of header. `If-Range` compares strongly, because two weakly-equal representations may differ byte for byte and that is exactly what a range depends on. Also: every status phrase now comes from one table the suite walks, after the hand-written list failed twice. |

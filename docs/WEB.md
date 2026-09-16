@@ -40,6 +40,7 @@ Nothing is marked built on the strength of having been written.
 | Service registry | **built** | `service.c` — the web server is one service; `/api/services` reports them |
 | Range requests and `If-Range` | **built** | `range.c` — 206, 416, `Accept-Ranges`, and a stale `If-Range` sends the whole file |
 | Security headers | **built** | `nosniff`, `DENY`, `no-referrer` and a real CSP on every response |
+| `Expect: 100-continue` | **built** | `curl` sends it on any body over ~1 KB; the server no longer makes it wait |
 | HTML escaping | **built** | `escape.c` — 21 checks; the dashboard no longer depends on the name validator for its safety |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
@@ -75,7 +76,7 @@ fixed.
 | Chunked transfer (`Transfer-Encoding`) | **refused** | see below — this is deliberate |
 | Range requests (`206`) | **built** | `range.c` — 45 checks. One range only; a list is ignored and the whole file served |
 | Conditional requests (`ETag`, `If-None-Match`, `304`) | **built** | `cache.c` — 31 checks; a strong validator, because there is no `stat` for `Last-Modified` |
-| `Expect: 100-continue` | specified | a client that waits for it currently stalls until timeout |
+| `Expect: 100-continue` | **built** | answered before the body is read; an expectation this server cannot meet gets 417 |
 | HTTP/2 | specified | needs TLS and ALPN first |
 | HTTP/3, QUIC | not planned yet | needs UDP, which the kernel has no call for |
 | TLS | **blocked** | no certificate store, no TLS implementation |

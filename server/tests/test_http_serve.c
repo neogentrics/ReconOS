@@ -236,7 +236,7 @@ int main(void)
 		 * leave. A child that ran forever would hang the suite on any
 		 * failure, and a suite that can hang is a suite that gets
 		 * disabled. */
-		while (served < 20) {
+		while (served < 28) {
 			int rc = http_serve_once(listener, &SITE);
 
 			if (rc < 0)
@@ -296,6 +296,72 @@ int main(void)
 	         reply, sizeof(reply));
 	ok(starts_with(reply, "HTTP/1.1 405 Method Not Allowed\r\n"),
 	   "a real path with the wrong method answers 405, not 404");
+
+	/* --- Expect: 100-continue -----------------------------------------------
+	 *
+	 * A client sending a large body may ask permission first: head, wait,
+	 * then body. **A server that never answers leaves it waiting until its
+	 * own timeout expires** -- and then it sends the body anyway, so nothing
+	 * fails and nothing is reported. The request merely takes a second
+	 * longer than it should, every time. `curl` does this on any body over
+	 * about a kilobyte, so it is the most ordinary large POST there is.
+	 *
+	 * The suite sends head and body together, which a client that gave up
+	 * waiting would also do; the interim reply must still come first. */
+	{
+		size_t n = exchange(port,
+		                    "POST /api/echo HTTP/1.1\r\nHost: m\r\n"
+		                    "Content-Length: 5\r\n"
+		                    "Expect: 100-continue\r\n"
+		                    "Connection: close\r\n\r\nhello",
+		                    reply, sizeof(reply));
+
+		ok(n > 0 && starts_with(reply, "HTTP/1.1 100 Continue\r\n\r\n"),
+		   "an expectation is answered before the body is read");
+		ok(strstr(reply, "HTTP/1.1 200 OK\r\n") != 0,
+		   "and the real response follows it");
+		ok(strstr(reply, "\r\n\r\nhello") != 0,
+		   "carrying the body the handler was given");
+
+		/* The interim reply carries no headers of its own. One that did
+		 * would have the client read them as the real reply's. */
+		{
+			const char *real = strstr(reply, "HTTP/1.1 200");
+			size_t interim = real ? (size_t)(real - reply) : 0;
+
+			ok(interim == sizeof("HTTP/1.1 100 Continue\r\n\r\n") - 1,
+			   "the interim reply is a status line and nothing else");
+		}
+
+		/* Matched without regard to case, which is a spelling clients
+		 * really send. */
+		exchange(port, "POST /api/echo HTTP/1.1\r\nHost: m\r\n"
+		               "Content-Length: 5\r\n"
+		               "Expect: 100-Continue\r\n"
+		               "Connection: close\r\n\r\nhello",
+		         reply, sizeof(reply));
+		ok(starts_with(reply, "HTTP/1.1 100 Continue\r\n"),
+		   "Expect is matched without regard to case");
+
+		/* An expectation this server does not implement. 417 rather
+		 * than silence: the client asked whether something would be
+		 * honoured, and saying nothing would be read as yes. */
+		exchange(port, "POST /api/echo HTTP/1.1\r\nHost: m\r\n"
+		               "Content-Length: 5\r\n"
+		               "Expect: something-else\r\n\r\nhello",
+		         reply, sizeof(reply));
+		ok(starts_with(reply, "HTTP/1.1 417 Expectation Failed\r\n"),
+		   "an expectation this server cannot meet is refused, not ignored");
+
+		/* HTTP/1.0 has no such mechanism, and a 1.0 client handed an
+		 * interim reply reads it as *the* reply. */
+		exchange(port, "POST /api/echo HTTP/1.0\r\n"
+		               "Content-Length: 5\r\n"
+		               "Expect: 100-continue\r\n\r\nhello",
+		         reply, sizeof(reply));
+		ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+		   "a 1.0 client is never sent an interim reply");
+	}
 
 	/* --- the security headers, on every kind of response --------------------
 	 *

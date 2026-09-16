@@ -37,6 +37,25 @@
 
 /* --- small helpers ------------------------------------------------------ */
 
+/* Case-insensitive against a lower-case literal. Header values are compared
+ * without regard to case, and `Expect: 100-Continue` is a spelling clients
+ * really send. */
+static int seq_fold(const char *a, const char *lower_b)
+{
+	size_t i = 0;
+
+	while (a[i] && lower_b[i]) {
+		char c = (a[i] >= 'A' && a[i] <= 'Z')
+			? (char)(a[i] - 'A' + 'a') : a[i];
+
+		if (c != lower_b[i])
+			return 0;
+		i++;
+	}
+	/* Both ended together, or one is a prefix of the other. */
+	return a[i] == 0 && lower_b[i] == 0;
+}
+
 static int prefix_matches(const char *path, const char *prefix, int exact)
 {
 	size_t i = 0;
@@ -518,6 +537,54 @@ static void serve_connection(int fd, const struct http_site *site)
 		if (need > sizeof(buf)) {
 			send_status(fd, 413, site->server_name, site->bytes_sent);
 			return;
+		}
+
+		/*
+		 * `Expect: 100-continue`, answered before the body is read.
+		 *
+		 * A client sending a large body may ask permission first: it
+		 * sends the head, waits, and only sends the body once the
+		 * server says carry on. **A server that never answers leaves it
+		 * waiting until its own timeout expires** -- typically a
+		 * second, sometimes much more -- and then it sends the body
+		 * anyway. Nothing fails, so nothing is reported; the request
+		 * merely takes a second longer than it should, every time.
+		 *
+		 * `curl` sends this on any body over about a kilobyte, so it is
+		 * not a rare shape. It is the most ordinary large POST there is.
+		 *
+		 * The interim reply is written straight to the socket rather
+		 * than through `send_response`, because it is not a response: it
+		 * carries no body, no length and none of the security headers,
+		 * and a real response follows it on the same connection. Putting
+		 * headers on it would have the client read them as the real
+		 * reply's.
+		 *
+		 * Only for HTTP/1.1. The mechanism did not exist in 1.0, and a
+		 * 1.0 client handed an interim reply reads it as *the* reply.
+		 */
+		if (req.minor >= 1 && req.content_length > 0) {
+			const char *expect = http_header_get(&req, "expect");
+
+			if (expect && seq_fold(expect, "100-continue")) {
+				static const char CARRY_ON[] =
+					"HTTP/1.1 100 Continue\r\n\r\n";
+
+				if (send_all(fd, CARRY_ON,
+				             sizeof(CARRY_ON) - 1,
+				             site->bytes_sent) != 0)
+					return;
+			} else if (expect) {
+				/*
+				 * An expectation this server does not
+				 * implement. 417 rather than ignoring it: the
+				 * client asked whether something would be
+				 * honoured, and silence would be read as yes.
+				 */
+				send_status(fd, 417, site->server_name,
+				            site->bytes_sent);
+				return;
+			}
 		}
 		while (have < need) {
 			long n = recv(fd, buf + have, sizeof(buf) - have, 0);
