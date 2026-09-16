@@ -29,10 +29,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.14.0 |
+| **Version** | 0.15.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 16 September 2026 |
-| **Checks** | 474 across thirteen suites, by `scripts/server-tests.sh` |
+| **Checks** | 548 across fourteen suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.41 |
 
 The check figure is the first one this project has that was not assembled by
@@ -57,7 +57,7 @@ Connection: keep-alive
 Content-Type: text/html; charset=utf-8
 ```
 
-Three routes, which are the beginning of the administrative console the
+The routes, which are the beginning of the administrative console the
 architecture document asks for:
 
 | route | what it answers |
@@ -68,6 +68,7 @@ architecture document asks for:
 | `GET /api/services` | every registered service: state, polls, faults, restarts |
 | `GET /api/log` | the last 64 requests answered, and how many were dropped |
 | `POST /api/name` | renames the machine, validated by the same code that numbers a parallel |
+| `POST /api/upload` | takes a `multipart/form-data` file and keeps it in `/System/Uploads`, which **nothing serves** |
 | anything else | a file from `/System/Web` on the volume, or 404 |
 
 Every number on that page is read from the kernel through `SYS_MACHINE` or
@@ -136,16 +137,17 @@ net: eth0 is 10.0.2.15, via 10.0.2.2
 They run on the host and need no machine:
 
 ```bash
-gcc -std=c11   -Wall -Wextra -Werror -o t1 server/identity.c server/tests/test_identity.c
-gcc -std=c11   -Wall -Wextra -Werror -o t2 server/http/request.c server/tests/test_http.c
-gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/serve.c \
-                                           server/tests/test_http_serve.c
+./scripts/server-tests.sh
 ```
+
+This used to be three hand-typed `gcc` commands, which is the practice
+**VF-012** is about: two of them said `-std=c11`, which is not what this
+project builds with, and following them left two suites unbuildable.
 
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 90 | one request, and every way of writing two |
+| `server_http` | 93 | one request, and every way of writing two |
 | `server_http_serve` | 31 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
@@ -155,14 +157,9 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | `server_http_range` | 45 | asking for part of a file, and the ways that hands over the wrong part |
 | `server_http_escape` | 21 | escaping text for HTML, and the characters people forget |
 | `server_http_json` | 28 | escaping text for JSON, and the byte that ends a string early |
+| `server_http_multipart` | 71 | reading a multipart body, and the two bytes that ruin a file |
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
 | `server_dial` | 32 | three answers, and the two ways of confusing them |
-
-Run them with one command:
-
-```bash
-./scripts/server-tests.sh
-```
 
 It reads its target list out of `CMakeLists.txt` rather than keeping one of its
 own, for the same reason `http_reason` is generated from an X-macro: two lists
@@ -253,6 +250,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.15.0** | **A file upload, and the reason no request over 4 KiB had ever worked.** `multipart.c` reads `multipart/form-data` — 71 checks, watched failing at 12 against the obvious parser, which returns every value two bytes too long because the CRLF before a delimiter belongs to the delimiter. A filename that climbs is refused rather than repaired, and uploads land in `/System/Uploads`, which nothing serves. Wiring it up found the bigger fault: `serve.c` read `recv` returning 0 as end-of-stream, when on this kernel it means *nothing yet*. Every request whose bytes did not all arrive in one read was dropped without an answer — which had never happened before, because a page request fits in one read and an upload does not. The same file already documented the identical behaviour on the **send** side and had never looked at the receive side. Fixed with a real clock rather than a spin count, and a request cut off at the deadline now gets 408 and a log entry instead of silence. **The kernel half is filed, with measurements from both ends**: a burst stalls at 2880 bytes and trickles in at a kilobyte a second, while the same bytes paced by the sender arrive at full speed and twenty times the size. |
 | **0.14.0** | **The coincidence removed from HTML in 0.9.0, found still holding up the JSON.** `/api/status` and the reply from `POST /api/name` wrote the machine's name into a JSON string unescaped — safe only because the name validator happens to forbid a quote, which is exactly the argument 0.9.0 exists to have stopped making. Found by reading back 0.12.0's own refusal to serve the log as JSON, which named the hazard correctly and assumed its scope. `json.c` now escapes **every** string in every endpoint, including the ones that cannot hold a quote today, because a rule with an exception for known-safe values is a rule the next person has to apply silently. Two things fell out of the wiring: a handler could not say a failure was the *server's* (`http_status_for` answered 400 for anything unrecognised, blaming the client for the server running out of buffer) — now `HTTP_EINTERNAL`, 500; and thirteen suites had no way to be run except by hand, which `scripts/server-tests.sh` fixes, finding two that did not build under its own flags in its first minute. |
 | **0.13.0** | **A client that can tell *not yet* from *never*.** The kernel fixed `connect` (KF-244) so it answers established, in-flight or refused, and made it idempotent so polling it is the interface. `dial.c` is that loop, with the deadline owned by the caller because the kernel has none and a sweep and a proxy want different ones. It compares **no numbers** — the announcement's table had all three wrong, and building against names instead is what made that harmless. Not yet run on the machine: the fix is committed locally and not pushed. |
 | **0.12.0** | **An access log that admits what it lost.** Every answered request is recorded by the server, including the ones refused before any handler ran — those are the entries somebody comes looking for. A ring drops the oldest to make room, and a log that drops silently looks complete while missing exactly the burst being investigated, so the dropped count is reported beside the entries. Served as plain text, not JSON: a request target can contain a quote via `%22`, and there is no JSON escaper yet. |

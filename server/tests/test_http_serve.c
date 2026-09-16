@@ -106,7 +106,10 @@ static const struct http_route ROUTES[] = {
 static unsigned long *BYTES;
 
 static struct http_site SITE = {
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1", 0, 0, 0
+	/* The two trailing zeroes are `idle` and `now_ms`. On a host `recv`
+	 * blocks properly, so there is nothing to yield to and no stalled
+	 * read to put a deadline on. See `serve.h`. */
+	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1", 0, 0, 0, 0, 0
 };
 
 /* --- the client ---------------------------------------------------------- */

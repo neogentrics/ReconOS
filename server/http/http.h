@@ -48,7 +48,22 @@
 #define HTTP_NAME_MAX          64
 #define HTTP_VALUE_MAX        512
 #define HTTP_REQUEST_MAX     8192	/* the whole head, request line included */
-#define HTTP_BODY_MAX        65536	/* 64 KiB; a console form, not an upload */
+/*
+ * 64 KiB. A console form, not an upload -- and **larger than this server can
+ * actually receive today.**
+ *
+ * The limit that bites first is time, not size. A body sent as one burst
+ * arrives at roughly a kilobyte a second on this kernel (measured: 60000 bytes
+ * in 64.5 seconds), so `RECV_DEADLINE_MS` in `serve.c` cuts a request off long
+ * before this bound is reached. A body paced by its sender arrives at full
+ * speed and the bound is real again.
+ *
+ * Both numbers are kept rather than reconciled, because they measure different
+ * things: this is what the buffer holds, and the deadline is what the kernel
+ * can deliver in time. They will agree again when `docs/KERNEL-WANTS.md` gets
+ * its answer.
+ */
+#define HTTP_BODY_MAX        65536
 
 /* What one connection holds: the head, plus the largest body that head may
  * frame. Stated as the sum so that the two cannot drift -- a declared body
@@ -137,6 +152,7 @@ int http_status_for(int verdict);
 #define HTTP_STATUSES(X)                                       \
 	X(100, "Continue")                                     \
 	X(200, "OK")                                           \
+	X(201, "Created")                                      \
 	X(204, "No Content")                                   \
 	X(206, "Partial Content")                              \
 	X(304, "Not Modified")                                 \
@@ -145,8 +161,10 @@ int http_status_for(int verdict);
 	X(404, "Not Found")                                    \
 	X(405, "Method Not Allowed")                           \
 	X(408, "Request Timeout")                              \
+	X(409, "Conflict")                                     \
 	X(413, "Content Too Large")                            \
 	X(414, "URI Too Long")                                 \
+	X(415, "Unsupported Media Type")                       \
 	X(416, "Range Not Satisfiable")                        \
 	X(417, "Expectation Failed")                           \
 	X(431, "Request Header Fields Too Large")              \

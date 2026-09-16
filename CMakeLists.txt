@@ -1031,6 +1031,19 @@ add_executable(recon_server_json_tests
 
 add_test(NAME server_http_json COMMAND recon_server_json_tests)
 
+# Reading a multipart body, and the two bytes that ruin a file.
+#
+# The CRLF before a delimiter belongs to the delimiter. A parser that searches
+# for `--<boundary>` instead returns every value two bytes too long, with no
+# error anywhere -- invisible on a text field, a corrupt archive on an upload.
+# Watched failing against exactly that parser: 12 of 71 checks, seven of them
+# lengths that came back wrong while the parse reported success.
+add_executable(recon_server_multipart_tests
+    server/http/multipart.c
+    server/tests/test_http_multipart.c)
+
+add_test(NAME server_http_multipart COMMAND recon_server_multipart_tests)
+
 # A ring of recent entries, and the count that stops it lying.
 #
 # A log that drops silently looks complete, reads plausibly, and has lost

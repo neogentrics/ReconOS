@@ -280,6 +280,53 @@ struct http_site {
 	 * and a figure taken from `body_len` would be what the server meant to
 	 * send rather than what it did. */
 	unsigned long           *bytes_sent;
+
+	/*
+	 * Called while waiting for bytes that have not arrived. May be NULL.
+	 *
+	 * --- The fault this exists for ---
+	 *
+	 * On ReconOS a `recv` with nothing buffered answers 0 with `errno` 0 --
+	 * not an error and not a close. The obvious response is to ask again,
+	 * and asking again in a tight loop is what broke: **a burst larger than
+	 * about 2880 bytes stalled and never recovered**, while the same bytes
+	 * paced by the sender arrived in full at twenty times the size.
+	 *
+	 * The size was never the limit. The spin was: a single-process server
+	 * asking for bytes as fast as it can leaves nothing for the work that
+	 * delivers them. Measured both ways -- see VF-013.
+	 *
+	 * So the site supplies whatever *this* system does to let other work
+	 * run. ReconOS passes `recon_yield`. A host passes NULL, because there
+	 * `recv` blocks properly and there is nothing to yield to.
+	 *
+	 * It lives here rather than in `serve.c` because `serve.c` is built for
+	 * the host as well, and the call is the one thing in the loop that
+	 * cannot be. See the note in `CMakeLists.txt` about why the suites do
+	 * not get ReconOS's headers.
+	 */
+	void (*idle)(void);
+
+	/*
+	 * Milliseconds since some fixed point, or NULL.
+	 *
+	 * Only ever used for differences, so where it counts from does not
+	 * matter -- it must only go forwards. ReconOS passes a wrapper over
+	 * `SYS_TIME`.
+	 *
+	 * **Why a clock is needed at all.** Waiting for a slow request has to
+	 * be bounded or one client wedges a single-process server for ever.
+	 * Without a clock the only available bound is a number of attempts,
+	 * which is not a duration: the same count is a moment on one machine
+	 * and a minute on another, and it changes meaning again the first time
+	 * the loop around it is edited.
+	 *
+	 * With this, the bound is `RECV_DEADLINE_MS` and means what it says.
+	 * Without it, the server falls back to the attempt count, which is
+	 * honest for the host suites -- there `recv` blocks and the fallback
+	 * is never reached.
+	 */
+	unsigned long (*now_ms)(void);
 };
 
 /* Open a listening socket on `port`, bound to every address.

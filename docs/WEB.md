@@ -43,6 +43,8 @@ Nothing is marked built on the strength of having been written.
 | `Expect: 100-continue` | **built** | `curl` sends it on any body over ~1 KB; the server no longer makes it wait |
 | HTML escaping | **built** | `escape.c` — 21 checks; the dashboard no longer depends on the name validator for its safety |
 | JSON escaping | **built** | `json.c` — 28 checks; ASCII-only by refusal, and every string in every endpoint goes through it. See VF-010 |
+| `multipart/form-data` | **built** | `multipart.c` — 71 checks; the CRLF before a delimiter belongs to the delimiter, and a filename that climbs is refused rather than repaired |
+| 201 / 408 / 409 / 415 | **built** | the upload endpoint and the receive deadline needed all four |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
@@ -118,8 +120,9 @@ can run, not by what it can send.
 | **In-process handlers** | **built** | `struct http_route` + `http_handler`. A C function is handed a parsed request and fills a response. This is how the admin console and the REST API are served. |
 | **Static files** | **built** | `server/http/files.c` — one handler among others, as designed. MIME by extension, an index for directories, **never a listing**. Verified reading off ReconFS on the machine. |
 | **JSON / REST APIs** | **built** | demonstrated in the serving suite: a handler returning `application/json` with the raw query string. Needs a JSON writer and parser next. |
-| **Form submission** | **built** | `server/http/form.c` — `urlencoded` decoded, 39 checks. A field given twice has **no** value: see below. `multipart/form-data` is still specified, not written. |
-| **File upload** | specified | needs `multipart/form-data` and streaming to disk; the 64 KiB body cap exists because nothing streams yet. |
+| **Form submission** | **built** | `server/http/form.c` — `urlencoded` decoded, 39 checks. A field given twice has **no** value: see below. `multipart/form-data` is built too — `multipart.c`, 71 checks. |
+| **File upload** | **built, small** | `POST /api/upload` — `multipart.c` parses it and it is written to `/System/Uploads`, which **nothing serves**. Bounded by time rather than by the 64 KiB cap: see VF-013, about fifteen kilobytes today. |
+| **Streaming a request body to disk** | **blocked** | a body is read whole into one buffer before a handler runs, so an upload cannot exceed it. Needs the request side to stream, which is the mirror of the response sink built in 0.8.0. |
 | **File download** | **built** | streams from the volume in 8 KiB blocks, and resumes: `Range`, `If-Range`, 206 and 416. |
 | **Server-sent events** | **unblocked** | the sink it needed now exists; the event framing is not written. |
 | **WebSocket** | specified | needs the `Upgrade` handshake, SHA-1 for the accept key, and a framing layer. The connection stops being HTTP after the handshake, so it needs its own loop. |

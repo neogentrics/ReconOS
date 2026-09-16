@@ -16,6 +16,89 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## A burst of more than about 2880 bytes stalls, and then trickles in at a kilobyte a second
+
+**Where:** building file upload for the server role, 16 September 2026. Found
+because every upload over about 4 KiB returned an empty reply; measured from
+both ends before anything was concluded.
+
+*Filed from the server role.*
+
+### The measurement
+
+A `recv` on a connection with bytes still outstanding answers **0 with `errno`
+0** -- not an error, not a close. Instrumented in `serve.c`:
+
+```
+BODYREAD have=2880 need=5414 n=0 errno=0
+```
+
+2880 bytes had arrived, 2534 were still owed, and the connection was open. The
+first fix was to ask again rather than treat the zero as end-of-stream. Asked
+**200000 times**, yielding between attempts, `have` never moved off 2880:
+
+```
+GAVEUP have=2880 room=73729 n=0 errno=0 inprog=1 stalls=200000
+```
+
+Raising the bound showed the bytes do eventually arrive, and how slowly. All
+three are one burst from `curl`, on an otherwise idle machine:
+
+| body | time | effective rate |
+|---|---|---|
+| 3700 bytes | 5.25 s | ~700 B/s |
+| 20000 bytes | 20.1 s | ~1 KB/s |
+| 60000 bytes | 64.5 s | ~0.9 KB/s |
+
+### It is not a size limit, and that is the useful half
+
+The **same bytes, paced by the sender**, arrive at full speed. 400 bytes every
+20 ms:
+
+| body | pacing | result |
+|---|---|---|
+| 5000 | 400 B / 50 ms | complete, ~0.6 s |
+| 5000 | 400 B / no pause | **stalls** |
+| 5000 | 2000 B / 50 ms | complete |
+| 20000 | 400 B / 20 ms | complete, ~1 s |
+
+So the receive path handles 20 KB happily when it arrives in small pieces and
+stalls on 3.7 KB when it arrives at once. The break is at roughly two segments'
+worth -- 2880 is 2 x 1440.
+
+### What this looks like from here
+
+A receive buffer of about two segments that, once full, stops accepting and
+does not recover until the far end retransmits. Each stall then costs a
+retransmission timeout, which is what produces the flat ~1 KB/s: not a
+bandwidth figure at all, but one RTO per couple of kilobytes.
+
+**That is a reading of the evidence, not a diagnosis** -- the kernel is not
+this role's to read. What is measured is above.
+
+### What would fix it
+
+A receive buffer larger than a couple of segments, and -- more importantly -- a
+window that reopens when the application drains it, so a sender is never made
+to time out for bytes the server has already made room for.
+
+**A blocking `recv` would be worth as much.** Today a read that has nothing
+returns 0 immediately, so the only way to wait is to ask again in a loop; with
+`SYS_YIELD` between attempts that is survivable, but it is a spin either way.
+A `recv` that slept until data arrived or a deadline passed would remove both
+this loop and the guesswork in `RECV_DEADLINE_MS`.
+
+### What this role did meanwhile
+
+`serve.c` treats a zero as *not yet* while a request is in progress and as
+*nothing more* between requests, yields via a hook the site supplies, and
+bounds the wait with a real clock rather than an attempt count -- 15 seconds,
+which on these numbers is about 15 KB. A request cut off at that deadline now
+gets **408** and a log entry, rather than a closed connection and silence.
+
+None of that makes uploads fast. It makes them bounded, and it makes the
+failure visible.
+
 ## ~~`connect` says yes to a closed port~~ -- fixed as KF-244, **not yet pushed**
 
 > **Answered in kernel 0.2.48 by the kernel session, 16 September 2026.**

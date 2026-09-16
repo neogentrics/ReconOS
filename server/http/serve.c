@@ -128,6 +128,128 @@ static int send_all(int fd, const char *buf, size_t len,
 	return 0;
 }
 
+/*
+ * How long a request that has stopped arriving is waited for.
+ *
+ * --- Why there is a bound at all ---
+ *
+ * This server is one process serving one connection at a time. A client that
+ * sends half a request and stops would otherwise hold the whole machine, and
+ * it does not have to be malicious to do it -- a laptop closing its lid does
+ * the same thing.
+ *
+ * --- Why fifteen seconds, and what it actually buys on this kernel ---
+ *
+ * Not much, and the number is honest about that. **Measured**: a request sent
+ * as one burst stalls after about 2880 bytes and then arrives at roughly a
+ * kilobyte a second, because the bytes beyond that are dropped and have to be
+ * retransmitted. 3700 bytes took 5.25s; 20000 took 20.1s; 60000 took 64.5s.
+ *
+ * So fifteen seconds admits an upload of something like fifteen kilobytes,
+ * against an `HTTP_BODY_MAX` of 64 KiB. **That gap is a kernel fault and not a
+ * design**, it is filed in `docs/KERNEL-WANTS.md`, and it is written here
+ * rather than rounded off because the alternative is a limit nobody can
+ * explain.
+ *
+ * The same request paced by its sender -- 400 bytes every 20 milliseconds --
+ * arrives at full size and full speed. The size was never the limit.
+ */
+#define RECV_DEADLINE_MS 15000
+
+/*
+ * The fallback bound, for a site with no clock.
+ *
+ * An attempt count is not a duration and this file says so rather than
+ * pretending otherwise. It exists for the host suites, where `recv` blocks
+ * properly and a stalled read never happens -- so this is the bound that is
+ * never reached, kept only so that a site without a clock cannot spin for
+ * ever.
+ */
+#define RECV_STALLS_MAX 2000000
+
+/*
+ * Read more of a request, knowing what a zero means on this kernel.
+ *
+ * --- The fault this exists for ---
+ *
+ * **`recv` answers 0 with `errno` 0 when nothing has arrived yet.** Not on a
+ * closed connection -- on a connection that is open, with more bytes on the
+ * way. Measured: a 5000-byte upload gave `have=2880 need=5414 n=0 errno=0`,
+ * and the loop that called it read that zero as end-of-stream and dropped the
+ * connection without answering.
+ *
+ * Every request over about 4 KiB failed that way. `curl` reported an empty
+ * reply, the server logged nothing because nothing was answered, and the
+ * documented 64 KiB body limit had never been reachable.
+ *
+ * **The same file already knew this.** `send_all`, five hundred lines up,
+ * carries a stall counter and a comment explaining that a zero from `send`
+ * means the buffer is full rather than that anything is wrong. The receive
+ * side is the mirror image and never got the same treatment -- the fault was
+ * understood in one direction and not looked for in the other.
+ *
+ * --- Why a zero is not always retried ---
+ *
+ * On an idle keep-alive connection a zero means exactly what it appears to:
+ * no further request is coming. Retrying there would spin `RECV_STALLS_MAX`
+ * times on every connection a browser leaves open, which is most of them.
+ *
+ * So the caller says whether a request is in progress. Mid-request, a zero is
+ * *not yet*; between requests, it is *nothing more*. The same byte, and the
+ * difference is context the reader has and the kernel does not.
+ *
+ * Returns 1 to continue, 0 when the connection is finished, and -1 when the
+ * deadline passed with a request half-arrived.
+ *
+ * Those last two are deliberately not the same answer. A client that closed has
+ * nothing to be told; a client that went quiet mid-request is still there, is
+ * owed a 408, and is an entry the log should carry. Collapsing them is how a
+ * request that was cut off leaves no trace anywhere -- which it did, until a
+ * 60000-byte upload was abandoned at the deadline and nothing in the log said
+ * so.
+ */
+static int read_more(int fd, char *buf, size_t *have, size_t room,
+                     int in_progress, unsigned long *stalls,
+                     unsigned long since, const struct http_site *site)
+{
+	long n;
+
+	errno = 0;
+	n = recv(fd, buf + *have, room - *have, 0);
+
+	if (n > 0) {
+		*have += (size_t)n;
+		*stalls = 0;
+		return 1;
+	}
+	if (n < 0 && (errno == EINTR || errno == EAGAIN))
+		return 1;
+	if (n != 0 || !in_progress)
+		return 0;
+
+	/* Nothing taken, and there is known to be more. See above. */
+	if (site->now_ms) {
+		if (site->now_ms() - since >= RECV_DEADLINE_MS)
+			return -1;
+	} else if (*stalls >= RECV_STALLS_MAX) {
+		return -1;
+	}
+	(*stalls)++;
+
+	/*
+	 * Give the rest of the system a turn before asking again.
+	 *
+	 * On its own this does not rescue a stalled burst -- that waits on a
+	 * retransmission and no amount of yielding hurries it. What it does is
+	 * stop a server that is waiting from consuming a whole processor to do
+	 * it, which matters when the thing it is waiting for is the network
+	 * stack on the same machine.
+	 */
+	if (site->idle)
+		site->idle();
+	return 1;
+}
+
 /* --- what every response carries ------------------------------------------ */
 
 /*
@@ -513,6 +635,12 @@ static void serve_connection(int fd, const struct http_site *site)
 	 * itself recorded as a limitation in `docs/WEB.md`. */
 	static char buf[HTTP_CONN_BUF];
 	size_t have = 0;
+	unsigned long stalls = 0;
+	int got;
+	/* When the current wait started. Reset for the head and again for the
+	 * body, so a long request that keeps arriving is never cut off for
+	 * being long -- the deadline is on silence, not on size. */
+	unsigned long since = 0;
 	int requests = 0;
 
 	/* A bound on requests per connection. Not a performance decision: a
@@ -529,10 +657,16 @@ static void serve_connection(int fd, const struct http_site *site)
 		unsigned long sent_before =
 			site->bytes_sent ? *site->bytes_sent : 0;
 
-		/* Read until the head is complete. */
+		/* Read until the head is complete.
+		 *
+		 * `have > 0` is what tells a partly-read request from an idle
+		 * keep-alive connection: some of a head has arrived, so the
+		 * rest is coming. With nothing read yet, a zero means the
+		 * client is finished and the connection should close rather
+		 * than be spun on. See `read_more`. */
+		stalls = 0;
+		since = site->now_ms ? site->now_ms() : 0;
 		for (;;) {
-			long n;
-
 			verdict = http_request_parse(buf, have, &req);
 			if (verdict != HTTP_PARTIAL)
 				break;
@@ -540,14 +674,20 @@ static void serve_connection(int fd, const struct http_site *site)
 				send_status(fd, 431, site->server_name, site->bytes_sent);
 				return;
 			}
-			n = recv(fd, buf + have, sizeof(buf) - have, 0);
-			if (n > 0) {
-				have += (size_t)n;
-				continue;
+			got = read_more(fd, buf, &have, sizeof(buf),
+			                have > 0, &stalls, since, site);
+			if (got < 0) {
+				/* Half a request line, and then silence. The
+				 * client is owed an answer and the log is owed
+				 * an entry; `note` takes a NULL request because
+				 * there is none that could be described. */
+				send_status(fd, 408, site->server_name,
+				            site->bytes_sent);
+				note(site, 0, 408, sent_before);
+				return;
 			}
-			if (n < 0 && errno == EINTR)
-				continue;
-			return;		/* closed, or failed; nothing to say */
+			if (!got)
+				return;	/* closed, or failed; nothing to say */
 		}
 
 		if (verdict != HTTP_OK) {
@@ -616,16 +756,26 @@ static void serve_connection(int fd, const struct http_site *site)
 				return;
 			}
 		}
+		/* The body. Always in progress by definition: the head has
+		 * been read and declared a length, so the bytes are promised.
+		 * A zero here is *not yet* every time. */
+		stalls = 0;
+		since = site->now_ms ? site->now_ms() : 0;
 		while (have < need) {
-			long n = recv(fd, buf + have, sizeof(buf) - have, 0);
-
-			if (n > 0) {
-				have += (size_t)n;
-				continue;
+			got = read_more(fd, buf, &have, sizeof(buf), 1, &stalls,
+			                since, site);
+			if (got < 0) {
+				/* The head arrived and declared a length the
+				 * body never reached. Unlike above there *is* a
+				 * request to describe, so the entry names the
+				 * target somebody will be looking for. */
+				send_status(fd, 408, site->server_name,
+				            site->bytes_sent);
+				note(site, &req, 408, sent_before);
+				return;
 			}
-			if (n < 0 && errno == EINTR)
-				continue;
-			return;
+			if (!got)
+				return;
 		}
 
 		head_only = (strcmp(req.method, "HEAD") == 0);

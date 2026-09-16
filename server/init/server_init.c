@@ -49,6 +49,7 @@
 #include "../http/form.h"
 #include "../http/escape.h"
 #include "../http/json.h"
+#include "../http/multipart.h"
 #include "../include/recon_server.h"
 #include "../service.h"
 #include "../log.h"
@@ -63,6 +64,18 @@
 #define SCREEN_MAKES_NO_SENSE 64
 #define MACHINE_UNREADABLE   65
 #define NO_LISTENER          70
+
+/*
+ * Milliseconds since boot, for the server's receive deadline.
+ *
+ * `SYS_TIME` is nanoseconds and monotonic, which is exactly what a deadline
+ * wants: `serve.c` only ever subtracts two of these, so where the count starts
+ * does not matter and a clock that could go backwards would.
+ */
+static unsigned long clock_ms(void)
+{
+	return (unsigned long)(recon_time() / 1000000ULL);
+}
 
 static void say(const char *text)
 {
@@ -373,6 +386,40 @@ static int handle_health(const struct http_request *r, const char *body,
 static const struct http_files SITE_FILES = { WEB_ROOT, "index.html" };
 
 /*
+ * Where an upload lands, and **why it is deliberately not under `WEB_ROOT`.**
+ *
+ * An upload directory that is also a document root is the oldest way to turn a
+ * file upload into code execution: whatever serves the root will happily hand
+ * back the `.html` somebody just posted, script and all, from this server's own
+ * origin -- which is the origin the console's session lives on.
+ *
+ * `http_files_handler` is rooted at `WEB_ROOT` and refuses anything that climbs
+ * out of it, so nothing written here is reachable over HTTP by any path. That
+ * is the property, and it is structural rather than a rule somebody follows:
+ * there is no route to this directory to forget to secure.
+ *
+ * The cost is that an upload cannot be fetched back, which is the right trade
+ * at this size. A server that needs to serve what it was given needs a decision
+ * about content types and an origin to serve them from, and neither exists yet.
+ */
+#define UPLOAD_ROOT "/System/Uploads"
+
+/*
+ * Write a file, unless it is already there.
+ *
+ * Defined further down with the boot-time layout code, which is where it was
+ * written and where its story belongs -- the `EEXIST`-read-as-failure fault is
+ * recorded beside it. Declared here because the upload endpoint needs it and
+ * runs long before that part of the file.
+ *
+ * Returns 1 if the path already existed, 2 if it was written, -1 if it could
+ * not be. **Never overwrites**, which is the property both callers want for
+ * different reasons.
+ */
+static int put_if_absent(const char *path, unsigned long path_len,
+                         const char *data, unsigned long len);
+
+/*
  * The routes, and the order is load-bearing.
  *
  * The first match wins, so the three exact routes are checked before the file
@@ -592,6 +639,130 @@ static int handle_log(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/*
+ * Take a file.
+ *
+ * The first endpoint on this machine that accepts something a client composed
+ * and keeps it. Everything before it either reported facts or set a name the
+ * validator had already restricted to letters, digits and a hyphen.
+ *
+ * --- What is relied on, and what is not ---
+ *
+ * `multipart.c` has already refused a filename holding a separator, a `..` or
+ * a NUL by the time this runs. **This does not rely on that** for the property
+ * that matters: an accepted name is joined to `UPLOAD_ROOT`, which nothing
+ * serves, so even a name that got through could not be fetched back. Two
+ * independent reasons, because the interesting failures in this project have
+ * all been a single reason that quietly stopped holding.
+ *
+ * --- Why it refuses to overwrite ---
+ *
+ * `put_if_absent`, the same call the site layout uses, and for a sharper
+ * version of the same reason. A second upload of a name that already exists is
+ * either a mistake or somebody replacing a file they should not be able to
+ * reach, and both deserve 409 rather than a silent replacement. There is no
+ * authentication on this server; "whoever asks last wins" is not a rule to
+ * build a file store on.
+ *
+ * --- The size limit is the request buffer, and it is honest ---
+ *
+ * `HTTP_BODY_MAX` is 64 KiB and a larger body is refused with 413 by `serve.c`
+ * before this runs. This is not an upload endpoint for real files yet, because
+ * the request side does not stream -- `docs/WEB.md` carries the entry. What it
+ * is: the parsing, the naming and the writing, working and measured, so that
+ * the day streaming arrives is not also the day this format is learnt.
+ */
+static int handle_upload(const struct http_request *r, const char *body,
+                         size_t body_len, struct http_response *out, void *ctx)
+{
+	static char answer[512];
+	static char path[256];
+	struct http_multipart form;
+	char boundary[HTTP_BOUNDARY_MAX + 1];
+	char name_room[JSON_ROOM(HTTP_PART_FILENAME_MAX)];
+	const struct http_part *file;
+	const char *ct, *escaped;
+	int rc, n, wrote;
+	size_t at, i;
+
+	(void)ctx;
+
+	ct = http_header_get(r, "content-type");
+	if (!ct) {
+		http_response_simple(out, 415, "text/plain",
+		                     "415 Unsupported Media Type:"
+		                     " multipart/form-data\n", 52);
+		return HTTP_OK;
+	}
+
+	rc = http_multipart_boundary(ct, boundary, sizeof(boundary));
+	if (rc != HTTP_OK) {
+		/* 415 rather than 400: the request is well formed, it is the
+		 * media type this endpoint cannot take. A client told 400
+		 * looks for a syntax error it will not find. */
+		http_response_simple(out, 415, "text/plain",
+		                     "415 Unsupported Media Type:"
+		                     " multipart/form-data\n", 52);
+		return HTTP_OK;
+	}
+
+	rc = http_multipart_parse(body, body_len, boundary, &form);
+	if (rc != HTTP_OK)
+		return rc;
+
+	/* One part, called `file`, carrying a filename. `http_multipart_get`
+	 * answers NULL for absent and for sent-twice alike -- see `form.h` --
+	 * and neither is a request this can act on. */
+	file = http_multipart_get(&form, "file");
+	if (!file || !file->has_filename || file->filename[0] == '\0') {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: one file part\n", 31);
+		return HTTP_OK;
+	}
+
+	/*
+	 * Join the name to the root by hand rather than with `snprintf`, so
+	 * the bound is checked before anything is written rather than after a
+	 * truncation has already happened. A truncated path is a path to a
+	 * different file, and this is the moment that would matter.
+	 */
+	at = sizeof(UPLOAD_ROOT) - 1;
+	for (i = 0; i < at; i++)
+		path[i] = UPLOAD_ROOT[i];
+	path[at++] = '/';
+	for (i = 0; file->filename[i]; i++) {
+		if (at + 1 >= sizeof(path))
+			return HTTP_EINTERNAL;
+		path[at++] = file->filename[i];
+	}
+	path[at] = '\0';
+
+	wrote = put_if_absent(path, at, file->data, file->data_len);
+	if (wrote == 1) {
+		http_response_simple(out, 409, "text/plain",
+		                     "409 Conflict: that name is taken\n", 33);
+		return HTTP_OK;
+	}
+	if (wrote < 0)
+		return HTTP_EINTERNAL;
+
+	escaped = as_json(file->filename, name_room, sizeof(name_room));
+	if (!escaped)
+		return HTTP_EINTERNAL;
+
+	n = snprintf(answer, sizeof(answer),
+	             "{\"stored\":\"%s\",\"bytes\":%lu,\"served\":false}\n",
+	             escaped, (unsigned long)file->data_len);
+	if (n < 0 || (size_t)n >= sizeof(answer))
+		return HTTP_EINTERNAL;
+
+	/* `served: false` is in the reply on purpose. A client that has just
+	 * uploaded a file will look for its URL, and the honest answer is that
+	 * there is not one. See `UPLOAD_ROOT`. */
+	http_response_simple(out, 201, "application/json", answer, (size_t)n);
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
 	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS },
 	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS },
@@ -599,6 +770,7 @@ static const struct http_route ROUTES[] = {
 	{ "GET",  "/api/services", 1, handle_services,  0, &SUPERVISOR },
 	{ "GET",  "/api/log",     1, handle_log,       0, &LOGBOOK },
 	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS },
+	{ "POST", "/api/upload",  1, handle_upload,    0, 0 },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
 	 * the volume can serve something larger than this program's memory. */
@@ -853,6 +1025,11 @@ static int lay_out_the_site(void)
 	mkdir("/System", 0755);
 	mkdir(WEB_ROOT, 0755);
 
+	/* Same rule, and the same discarded answer. An upload has nowhere to
+	 * land until this exists, and it existing already is the ordinary
+	 * case. */
+	mkdir(UPLOAD_ROOT, 0755);
+
 	/*
 	 * Each file decided on its own, which this function did not used to do.
 	 *
@@ -1000,6 +1177,17 @@ int main(void)
 	site.bytes_sent = &FACTS.bytes_out;
 	site.log = note_request;
 	site.log_ctx = &LOGBOOK;
+
+	/*
+	 * What this system does while waiting for bytes that have not arrived.
+	 *
+	 * Without it, every request over about 2880 bytes stalled and was never
+	 * answered -- not because of a size limit, but because a single process
+	 * asking for bytes in a tight loop leaves nothing running that could
+	 * deliver them. See `serve.h` and VF-013.
+	 */
+	site.idle = recon_yield;
+	site.now_ms = clock_ms;
 
 	/* --- the services ------------------------------------------------------ */
 

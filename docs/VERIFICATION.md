@@ -303,3 +303,47 @@ None.
   rather than keeping one, for the reason the status table is generated from an
   X-macro: two lists drift, and the drift is invisible until something is
   already wrong.
+
+### VF-013 -- the 64 KiB body limit had never once been reachable
+
+- **Found in** the upload endpoint, 16 September 2026. **Found by** posting a
+  4 KiB file and getting an empty reply.
+- **What it was** `serve.c` read a zero from `recv` as end-of-stream. On this
+  kernel a zero means *nothing has arrived yet* -- `errno` is 0 and the
+  connection is open. So every request whose bytes did not all arrive in the
+  first read was dropped without an answer.
+- **The threshold was about 4 KiB of total request**, which is why nothing had
+  noticed. Every request this server had ever been sent -- a page, a status
+  poll, a rename with a twelve-character name -- fits in one read. The first
+  thing that did not was the first upload.
+- **The same file already knew.** `send_all`, in the same source, carries a
+  stall counter and a comment saying in as many words that a zero from `send`
+  means the buffer is full rather than that anything is wrong. The receive side
+  is the mirror image and had never been looked at. **A fault understood in one
+  direction is not a fault found in the other**, and this is the third entry in
+  this register with that shape -- VF-010 was the same, one file over.
+- **The first fix was wrong in an instructive way.** Retrying the zero, bounded
+  at 200000 attempts, still failed: `have` stayed at 2880 through every one of
+  them. It would have been easy to conclude the connection was dead. Sending
+  the same bytes slowly proved it was not -- 20 KB arrived complete in 400-byte
+  pieces while 3.7 KB in one burst did not. **The size was never the limit;
+  the pacing was.**
+- **What it cost to find** was one measurement from each end. The instrumented
+  `recv` said the server was awake and getting nothing; the paced client said
+  the kernel was capable of more. Neither alone distinguishes a dead connection
+  from a stalled one.
+- **Filed** as its own entry at the top of `docs/KERNEL-WANTS.md`, with both
+  tables. No number claimed; it is the kernel's.
+- **Fixed here** in 0.15.0: a zero is *not yet* mid-request and *nothing more*
+  between requests, the site supplies whatever its system does to let other
+  work run, and the wait is bounded by a **clock** rather than an attempt
+  count. Fifteen seconds, which on the measured rate is about fifteen
+  kilobytes.
+- **And the deadline found one more thing.** A request cut off at it was
+  closed silently and left no log entry -- which contradicts what `log.h` says
+  the log is for, in the exact case somebody would go looking. It now answers
+  **408** and records it.
+- **What is still wrong, and is written down rather than rounded off:**
+  `HTTP_BODY_MAX` says 64 KiB and the deadline admits about fifteen. The two
+  numbers measure different things and both are true; they will agree again
+  when the kernel entry is answered.
