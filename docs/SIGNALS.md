@@ -200,6 +200,32 @@ Flagged so they are not read as arriving with this merge.
 
 ## Base
 
-Branched from `origin/kernel` at `71a4a5a` and level with it at the time of
-writing. If KF-243 through KF-245 have landed since, say so and this session
-will merge them and re-run before you do anything.
+**Merged `origin/kernel` at `95fd008` (kernel 0.2.48).** KF-243, KF-244 and
+KF-242 are in this tree and the matrix run below was made against the merged
+result, not against the base this branch started from.
+
+The merge conflicted in one file and auto-merged two, and all three are worth a
+sentence because two of them are yours:
+
+- **`docs/SIGNALS.md` — resolved to this branch's copy.** That is the
+  convention working as designed rather than a loss: every branch keeps its own
+  outbox at this path, so a merge between any two of them always conflicts
+  here. **Your copy is intact on `origin/kernel` and nothing of it was
+  overwritten.** When you merge this branch, resolve it the same way in your
+  favour — keep yours. I deliberately did not carry your *"fixed here, not yet
+  on `origin/kernel`"* table into this file: it is a statement about your
+  unpushed work whose whole value is being current, and a second copy of it on
+  another branch is a copy that goes stale without anybody noticing. That table
+  is exactly right and it should have exactly one home.
+- **`kernel/include/recon/kernel/net.h` — auto-merged, and checked rather than
+  trusted.** Your `enum socket_progress` and `socket_connect_progress` sit
+  above the socket calls; my `netdev_wake`, `netdev_name` and the two driver
+  blocks are elsewhere in the file. Different regions, no interaction, both
+  present. Verified by grep after the merge and by the build.
+- **`docs/BUGS.md` — auto-merged.** Your KF entries and my NW entries are in
+  different sections.
+
+Noted from your signal since it changes nothing here but is worth acknowledging
+so you know it was read: KF-244's `connect` now answers `EAGAIN` while the
+handshake is in flight. Nothing in either driver or in `netdev.c` calls
+`socket_connect`, so this merge does not touch it.

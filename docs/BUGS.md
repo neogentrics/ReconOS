@@ -7362,6 +7362,90 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-244 - Connect reports success while the handshake is still in flight
+
+- **Asked for** by the server session, 16 September 2026, and they were right
+  to call it the highest-value fix available: it is the whole client half of
+  the socket API. Discovery, a reverse proxy and every outbound connection
+  stand on it.
+
+- **What it was.** `socket_connect` calls `tcp_open`, which sends a SYN, and
+  then sets `connected = true` and returns success. The connection is in
+  **SYN_SENT**. A program told it had a connection wrote into one that did not
+  exist -- and the peer may never answer, so the claim could stay wrong for
+  ever.
+
+- **`accept` already had the honest shape** and this is the same one: `EAGAIN`
+  while it is in flight, and the caller polls. Blocking needs a wait queue on
+  the socket and a way to interrupt it, and neither exists yet -- so the choice
+  is between saying *not yet* and saying something untrue.
+
+- **Three answers below, not two.** `socket_connect_progress` reports WAITING,
+  DONE or FAILED, because *not yet* and *never* need different words at the
+  call site: a caller that polls on the first and gives up on the second is the
+  same caller, and merging them makes it spin on a connection the peer refused.
+  `EAGAIN` and `EIO` at the system call, from those three.
+
+- **And `socket_connect` is idempotent now**, which the polling shape requires
+  and which is the part easy to miss. Calling it again is how a caller asks
+  whether the handshake finished -- so a second call on a socket already trying
+  must not send a second SYN. Without that, every poll opens another connection
+  and the table fills with attempts nobody is waiting on.
+
+- `tcp_state_of` has been able to answer this since TCP was written. Nothing
+  was asking.
+
+- **Status:** fixed, kernel 0.2.48.
+
+### KF-243 - The scratchpad pointer array is also scratchpad buffer zero
+
+- **Found:** 16 September 2026, on the Gateway, by the diagnostic added one
+  boot earlier:
+
+  ```
+  port 7 could not be given a slot -- no answer in a second;
+     usbsts 0x0000001d halted host-error event-pending, command ring running
+  ```
+
+  **`HSE` is the word.** Host system error means the controller attempted a
+  memory access that failed on the bus -- not a malformed command, a bad
+  address. It read a pointer this driver gave it and the read did not come
+  back.
+
+- **What it was.** The Gateway's controller asks for **576 scratchpad pages**.
+  The array of pointers to them was placed in page 4 of the backing
+  allocation, and then
+
+  ```c
+  array[i] = x->backing + (4 + i) * PAGE_SIZE;   /* i == 0 is page 4 */
+  ```
+
+  handed the controller **that same page** as buffer zero. The controller was
+  given its own pointer table as scratch memory. The first time it wrote there
+  it destroyed the addresses of the other 575 buffers; the next read was
+  garbage, the bus faulted, and it halted.
+
+- **Why two devices enumerated first.** Scratchpads are the controller's own
+  working memory and it does not reach all of them at once. Ports 4 and 6 fit
+  inside what it had already. The third made it touch buffer zero -- so
+  **port 7 killed the controller and port 8 was talking to a corpse.** Two
+  symptoms, one fault.
+
+- **The comment above it already said the shape.** *A controller that asks for
+  them and is not given them does not report an error; it misbehaves later* --
+  written about not allocating them at all. Allocating them on top of each
+  other is the same sentence.
+
+- **QEMU asks for zero scratchpad pages**, so `if (scratch)` has never executed
+  in 1578 self-tests across twenty-eight boot paths. Not a weak test: an
+  emulator that needs no scratch memory cannot exercise the code that gives it
+  any.
+
+- **Fixed** by giving the array a page of its own -- `5 + scratch` rather than
+  `4 + scratch` -- and starting the buffers at page 5.
+
+- **Status:** fixed, kernel 0.2.48.
+
 ### KF-242 - A failed command cannot say whether it was refused or ignored
 
 - **Found:** 15 September 2026, by reading for the cause of
