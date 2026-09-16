@@ -198,6 +198,21 @@ int main(void)
 		ok(1, "closing nothing is safe, twice");
 	}
 
+	/* --- the verdict as a word -------------------------------------------
+	 *
+	 * Read off a serial console by a person, so it has to say something.
+	 * Checked here because a printed verdict that is wrong is wrong in the
+	 * one place nobody goes back to re-read. */
+	ok(strcmp(dial_says(DIAL_READY), "ready") == 0, "ready reads as ready");
+	ok(strcmp(dial_says(DIAL_PENDING), "in flight") == 0,
+	   "and pending says in flight, which is what it means");
+	ok(strcmp(dial_says(DIAL_REFUSED), "refused") == 0, "refused");
+	ok(strcmp(dial_says(DIAL_TIMEDOUT), "timed out") == 0, "timed out");
+	ok(strcmp(dial_says(DIAL_BROKEN), "broken") == 0, "broken");
+	ok(dial_says(42) != 0,
+	   "and something that is not a verdict still answers, rather than"
+	   " handing a caller a null to print");
+
 	printf("  %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

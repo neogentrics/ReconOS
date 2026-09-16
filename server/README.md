@@ -29,11 +29,11 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.18.0 |
+| **Version** | 0.19.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 16 September 2026 |
-| **Checks** | 678 across seventeen suites, by `scripts/server-tests.sh` |
-| **Kernel** | 0.2.41 |
+| **Checks** | 684 across seventeen suites, by `scripts/server-tests.sh` |
+| **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
 hand. See **VF-012**: the suites had been run one `gcc` line at a time for
@@ -163,7 +163,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_auth` | 33 | a guard, and every way of getting past one that is not the token |
 | `server_dns` | 72 | asking for an address, and the answers that must not be believed |
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
-| `server_dial` | 32 | three answers, and the two ways of confusing them |
+| `server_dial` | 38 | three answers, and the two ways of confusing them |
 
 It reads its target list out of `CMakeLists.txt` rather than keeping one of its
 own, for the same reason `http_reason` is generated from an X-macro: two lists
@@ -254,6 +254,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.19.0** | **Merged kernel 0.2.48, and found what it broke.** KF-244 landed as announced: `connect` no longer answers success for a port nothing is listening on, so the standing measurement reads an honest *in flight* instead of a lie — and it is now made with `dial.c`, which was written three versions ago for this exact day and had never been able to run. But the same change made `connect` answer `SYS_EIO` for every **datagram** socket, because `sys_connect` asks a progress function that reads *not a stream* as *did not make it*. Those are different facts. That is the only shape of UDP a program can use, so DNS stopped resolving on the first boot after the merge. Diagnosed against three controls — inbound TCP still served, the kernel's own DHCP still completed, the network came up identically — then fixed, rebuilt, and proved by the same request answering with real addresses again. **All 684 checks passed before and after**, because every one is a host suite and the fault was in the kernel: a merge verified by suites alone would have been called clean. Reported in `docs/SIGNALS.md`, no KF claimed. VF-019. |
 | **0.18.0** | **This machine resolves names.** The audit called DNS blocked on “an unconnected datagram socket”, and that was true of DHCP and of a DNS *server* — but a resolver is a **connected** datagram, which this kernel has supported since the socket layer landed. `kernel/core/socket_file.c` said so in as many words. Measured on the machine before a line was written, then built: `server/dns.c`, 72 checks. **The danger is not in asking, it is in believing.** A compression pointer must point strictly backwards — against a parser that follows them freely the suite does not fail, it **hangs**, which is a denial of service costing one datagram. And a response is only an answer if the identifier, the question, its type and its class all match; against a parser that skips those, four checks come back `DNS_OK` where a refusal belonged, which is off-path cache poisoning working. `GET /api/resolve` is guarded, because an open resolver endpoint is an open resolver. Two faults found after it worked: a trailing-dot name that encoded instead of being refused, and a failure path that reported an `rcode` from the previous request's stack. VF-017, VF-018. |
 | **0.17.0** | **The writes stop being open to everybody.** `POST /api/name` renamed the machine and `POST /api/upload` wrote to its volume for anyone who could reach port 80 — a hole the upload endpoint had widened one version earlier. The obvious defence was unavailable and not for want of effort: `SYS_ACCEPT` takes only a descriptor, so the kernel cannot report who connected and an address check cannot be written. Filed. Instead, a random token from `SYS_RANDOM`, made at boot and printed on the console — a capability saying *whoever can read this machine's console*, not a password. The check is in the **server**, not the handlers, for the reason the security headers are: a guarded route on a site with no policy answers **500**, never 200, because falling back to open is how a guard turns out never to have guarded. Reads stay open. Honest about its limit: the token is in clear on the wire, so it stops a passer-by and not somebody on the path — `docs/WEB.md` §5's hard rule is amended there rather than bent. Also: the connection pool could have guarded one site with another's secret, found by writing the test for the 500; and the fourth patch-script-broken string literal became `scripts/check-c-literals.py`, which the runner now runs before it compiles anything. VF-015, VF-016. |
 | **0.16.0** | **Several connections at once, and the capability that turned out to already exist.** `docs/WEB.md` called single-connection serving the most serious limitation in it — a denial of service costing one socket — and said the fix needed the kernel to report readiness on more than a listener. It already did: `recv` answers 0 with `errno` 0 when nothing has arrived, which is exactly the behaviour that had been silently dropping every request over 4 KiB one version earlier. The missing feature and the bug were one fact seen from two sides. `serve.c` now holds four connections and gives each a turn; **reading** is concurrent, which is where the seconds are, and dispatch stays synchronous on purpose. Measured on the machine: one client stuck mid-body, three others answered in 0.2s each. The new suite fails 4 of 12 against the old server — and the eight that pass are the point, because a suite that follows one client would have called it perfectly good. That is VF-014: fifteen suites, none of which could see the limitation everyone had written down. |

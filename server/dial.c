@@ -176,3 +176,15 @@ void dial_close(struct dial *d)
 	close(d->fd);
 	d->fd = -1;
 }
+
+const char *dial_says(int verdict)
+{
+	switch (verdict) {
+	case DIAL_READY:    return "ready";
+	case DIAL_PENDING:  return "in flight";
+	case DIAL_REFUSED:  return "refused";
+	case DIAL_TIMEDOUT: return "timed out";
+	case DIAL_BROKEN:   return "broken";
+	default:            return "not a verdict";
+	}
+}

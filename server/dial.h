@@ -69,6 +69,18 @@ struct dial {
 int dial_verdict(int rc, int err, unsigned long now, unsigned long deadline);
 
 /*
+ * The verdict as a word.
+ *
+ * For anything a person reads. A verdict printed as a number is a number
+ * somebody has to look up, and the standing measurement on the serial console
+ * is read by whoever is booting the machine rather than by a program.
+ *
+ * Never NULL, including for a value that is not a verdict at all -- a caller
+ * printing this must not have to check.
+ */
+const char *dial_says(int verdict);
+
+/*
  * Open a socket and send the first SYN.
  *
  * Returns a verdict: `DIAL_READY` if it completed at once -- which happens on

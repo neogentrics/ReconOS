@@ -494,3 +494,43 @@ None.
   exceptional one. That is where this register keeps finding things: 0.10.0's
   early return that skipped a stylesheet, VF-011's handler failures wearing the
   client's status. **An exceptional path is the one nobody exercises twice.**
+
+### VF-019 -- a merge that fixed one fault and broke another, caught in one boot
+
+- **Found in** kernel 0.2.48, merged from `origin/kernel` at 95fd008 on 16
+  September 2026. **Found by** re-running this role's own endpoints after the
+  merge rather than only its suites.
+- **What the merge fixed** KF-244, exactly as announced: `connect` no longer
+  answers `SYS_OK` for a port nothing is listening on. The standing
+  measurement changed from `connect(closed port)=0 write=-1` to an honest *in
+  flight*, which closes the reporting half of VF-009.
+- **What it broke** `connect` on a **datagram** socket began answering
+  `SYS_EIO` every time. That is the only shape of UDP a program can use, and
+  it is what this role's resolver -- written hours earlier, as VF-017 -- is
+  built on. DNS went from real addresses to `resolved:false` on the first boot
+  after the merge.
+- **Where** `sys_connect` asks `socket_connect_progress` about every socket,
+  and that function opened `if (!s || s->type != SOCK_STREAM || s->conn < 0)
+  return SOCKET_PROGRESS_FAILED;`. For a datagram, `socket_connect` had just
+  succeeded and set `connected` -- and the progress check then reported a
+  failure, because it read *not a stream* as *did not make it*. **Those are
+  different facts**, and collapsing them is the same shape as VF-011, where a
+  server-side failure wore the client's status.
+- **Diagnosed by measurement, not by reading.** Three controls separated it:
+  the machine still served inbound TCP (200), the kernel's own DHCP exchange
+  still completed, and the network came up identically on both boots. So the
+  card and the stack were fine and it was a program's UDP specifically.
+- **The fix was then proved rather than asserted** -- applied, rebuilt, booted,
+  and the same request answered with real addresses again. Reported in
+  `docs/SIGNALS.md` with the diagnosis and the patch. **No KF number claimed;
+  it is the kernel session's to number**, which is the standing rule here since
+  the collision on 6 September.
+- **Why nothing else caught it** Nothing else in the tree connects a datagram
+  socket. The kernel's own socket probe covers streams, and its DHCP client is
+  inside the kernel and never goes through `sys_connect`. The resolver that
+  found this was two hours old. **A capability with exactly one user is a
+  capability whose regressions depend on that user still running.**
+- **Why it belongs here** The suites all passed. 684 checks, seventeen suites,
+  green before and after the merge -- because every one of them is a host
+  suite and the fault is in the kernel. A merge verified by running the suites
+  alone would have been called clean.

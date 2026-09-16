@@ -290,7 +290,28 @@ bool socket_connect(struct socket *s, ipv4_addr addr, u16 port)
  */
 enum socket_progress socket_connect_progress(struct socket *s)
 {
-	if (!s || s->type != SOCK_STREAM || s->conn < 0)
+	if (!s)
+		return SOCKET_PROGRESS_FAILED;
+
+	/*
+	 * **A datagram has no handshake, so a connected one is finished.**
+	 *
+	 * This used to read `s->type != SOCK_STREAM` as a failure, which
+	 * conflated *this socket cannot be asked* with *this socket did not
+	 * make it*. `sys_connect` asks every socket, so `connect` on a UDP
+	 * socket answered `SYS_EIO` immediately after `socket_connect` had
+	 * succeeded and set `connected`.
+	 *
+	 * That broke every connected datagram -- which is the only shape of UDP
+	 * a program can use, as `socket_file.c` says. Found by the server
+	 * role's resolver, which had been answering with real addresses the
+	 * day before and stopped on the first boot after the merge.
+	 */
+	if (s->type != SOCK_STREAM)
+		return s->connected ? SOCKET_PROGRESS_DONE
+		                    : SOCKET_PROGRESS_FAILED;
+
+	if (s->conn < 0)
 		return SOCKET_PROGRESS_FAILED;
 
 	switch (tcp_state_of(s->conn)) {

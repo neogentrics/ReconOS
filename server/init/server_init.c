@@ -52,6 +52,7 @@
 #include "../http/multipart.h"
 #include "../auth.h"
 #include "../dns.h"
+#include "../dial.h"
 #include "../include/recon_server.h"
 #include "../service.h"
 #include "../log.h"
@@ -182,11 +183,26 @@ static struct supervisor SUPERVISOR;
 /*
  * What this machine has answered lately.
  *
- * In memory and not on the volume, because appending to a file needs
- * `O_APPEND` and the C library drops it -- the same fault that stopped
- * `O_CREAT` working. So this does not survive a reboot, which is a limitation
- * rather than a design and is written down in `server/log.h` where a reader
- * looking for yesterday's requests will find it.
+ * In memory and not on the volume, and **the reason written here for three
+ * versions was wrong.** It said appending needs `O_APPEND`, which the C library
+ * drops. The library does drop it -- but appending needs the ability to
+ * append, and `O_APPEND` is only one way to get it: `SYS_SEEK` exists, and
+ * seek-to-end then write is the other.
+ *
+ * Measured on the machine against a file that exists, trying every open flag
+ * the kernel has rather than the two the C library publishes:
+ *
+ *     append probe: create=1 W=-12 W|CREATE=5 W|REPLACE=-12
+ *
+ * Plain write is refused. `OPEN_CREATE`, documented *it must not already
+ * exist*, **succeeded** on a file that does. `OPEN_REPLACE`, documented *it
+ * must exist*, was refused on one. Both behave opposite to their own comments,
+ * so the only route that opens is the one that contradicts its documentation,
+ * and building a log on that would be building on a fault.
+ *
+ * So this still does not survive a reboot, for a better-understood reason that
+ * is now in `docs/SIGNALS.md` for the kernel session rather than resting on a
+ * C-library gap that was never the whole story.
  */
 static struct logbook LOGBOOK;
 
@@ -1051,39 +1067,86 @@ static const struct service WEB_SERVICE = {
 static void measure_the_client_side(void)
 {
 	char line[220];
-	i64 fd, rc_closed = 0, rc_open = 0, wrote = 0, red = 0;
 	char buf[64];
 
-	/* 10.0.2.2 is the gateway QEMU's user networking provides; port 9 is
-	 * discard and nothing here serves it. A connect that reports success
-	 * to a closed port is a connect that cannot be used to find anything. */
-	fd = recon_socket(1);
-	if (fd >= 0) {
-		rc_closed = recon_connect((int)fd, 0x0A000202u, 9);
-		recon_close((int)fd);
-	} else {
-		rc_closed = -999;
-	}
+	/*
+	 * --- What changed, and why this is now a poll rather than one call ---
+	 *
+	 * Under kernel 0.2.41 this called `connect` once and printed what came
+	 * back, because one call was all the answer there was: `connect`
+	 * reported `SYS_OK` for a port nothing was listening on, and the line
+	 * read
+	 *
+	 *     connect(closed port)=0 connect(own :80)=0 write=-1 read=0
+	 *
+	 * which is VF-009 -- a call that says yes to everything cannot find
+	 * anything.
+	 *
+	 * KF-244 fixed it in 0.2.48 and the same single call then answered -4,
+	 * `SYS_EAGAIN`, for **both** ports. That is correct and is not an
+	 * answer: in flight is not a verdict, it is a question asked again.
+	 * Telling a refusal from a connection now requires polling until one or
+	 * the other, which is exactly what `server/dial.c` was written for
+	 * three versions ago and has never until now been able to exercise.
+	 *
+	 * So the measurement is the thing that was built for it. `dial.c`
+	 * compares no numbers at all -- it reads `errno` by name -- which is
+	 * why the announcement's three wrong constants cost nothing.
+	 */
+	{
+		struct dial closed, open;
+		int v_closed, v_open;
+		unsigned long now = clock_ms();
+		long wrote = 0, red = 0;
 
-	/* This machine's own listener, which is certainly there. */
-	fd = recon_socket(1);
-	if (fd >= 0) {
-		rc_open = recon_connect((int)fd, 0x0A00020Fu, 80);
-		if (rc_open == 0) {
-			wrote = recon_write((int)fd,
-			                    "GET /health HTTP/1.0\r\n\r\n", 24);
-			red = recon_read((int)fd, buf, sizeof(buf));
+		/* 10.0.2.2 is the gateway QEMU's user networking provides;
+		 * port 9 is discard and nothing here serves it. */
+		v_closed = dial_begin(&closed, 0x0A000202u, 9, now, now + 2000);
+		while (v_closed == DIAL_PENDING) {
+			recon_yield();
+			v_closed = dial_poll(&closed, clock_ms());
 		}
-		recon_close((int)fd);
-	} else {
-		rc_open = -999;
-	}
+		dial_close(&closed);
 
-	snprintf(line, sizeof(line),
-	         "  the client side: connect(closed port)=%ld"
-	         " connect(own :80)=%ld write=%ld read=%ld\n",
-	         (long)rc_closed, (long)rc_open, (long)wrote, (long)red);
-	say(line);
+		/* This machine's own listener, which is certainly there. */
+		now = clock_ms();
+		v_open = dial_begin(&open, 0x0A00020Fu, 80, now, now + 2000);
+		while (v_open == DIAL_PENDING) {
+			recon_yield();
+			v_open = dial_poll(&open, clock_ms());
+		}
+
+		if (v_open == DIAL_READY) {
+			int fd = dial_take(&open);
+
+			if (fd >= 0) {
+				wrote = recon_write(fd,
+				                    "GET /health HTTP/1.0\r\n\r\n",
+				                    24);
+				/* Nothing blocks here: ask again until the
+				 * answer arrives or the tries run out. */
+				{
+					int t;
+
+					for (t = 0; t < 200000 && red <= 0; t++) {
+						red = recon_read(fd, buf,
+						                 sizeof(buf));
+						if (red <= 0)
+							recon_yield();
+					}
+				}
+				recon_close(fd);
+			}
+		}
+		dial_close(&open);
+
+		snprintf(line, sizeof(line),
+		         "  the client side: closed port=%s own :80=%s"
+		         " write=%ld read=%ld\n",
+		         dial_says(v_closed), dial_says(v_open),
+		         (long)wrote, (long)red);
+		say(line);
+	}
 }
 
 /* --- the volume this role writes to --------------------------------------- */
