@@ -7,7 +7,7 @@ somebody else's.**
 [![release](https://img.shields.io/badge/latest_release-v0.4.37-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.37)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-45_suites,_1971_checks-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-327-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-329-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -389,7 +389,7 @@ without Linux, and without touching what was already on the disk.
 | **Time** | A five-level timer wheel — a callback at a time, or a thread that sleeps without a processor spinning for it — and a worker thread, so an interrupt handler can hand off work it must not do inline |
 | **Processes** | A process table, identity, an exit status somebody collects, and an address space each. Programs are **loaded from ELF files** built by the cross linker, not compiled into the kernel |
 | **Storage** | virtio, NVMe, AHCI and USB mass storage, over PCI and memory-mapped |
-| **Display** | Modes it sets itself, behind one interface with **three backends**: the Bochs/VBE adapter, virtio-gpu over both the PCI and memory-mapped transports, and Intel Gen9 — which is identified and keeps the mode firmware set, with no modesetting of its own yet and the reason written down. A framebuffer console, and `/dev/fb0` for a program to map. Each backend was written to disagree with the last; [docs/SIGNALS.md](docs/SIGNALS.md) has what each disagreement found |
+| **Display** | Modes it sets itself, behind one interface with **four backends**: the Bochs/VBE adapter, virtio-gpu over both the PCI and memory-mapped transports, and — identified, keeping the mode firmware set, with no modesetting of their own yet and the reason written down — **Intel Gen9** and **AMD RDNA2**, the latter written against the two adapters in this project's own desktop. A framebuffer console, and `/dev/fb0` for a program to map. Each backend was written to disagree with the last; [docs/SIGNALS.md](docs/SIGNALS.md) has what each disagreement found |
 | **Filesystems** | ReconFS, ours — copy-on-write, one atomic commit, 64 ZiB. FAT32 read *and written*, because the EFI System Partition has to be |
 | **Files** | A virtual filesystem: descriptors, a mount table, and one interface with the volume, the console, pipes, `/dev`, `/tmp`, `/proc` and a foreign ext2 volume behind it. A program is loaded **from a volume**, and a mapping can be filled from a file |
 | **Foreign filesystems** | ext2 read, checked against `e2fsck`, and a repair that rewrites free counts from the bitmaps — because the bitmap is the evidence and the count is the claim. It never happens on mount and must be asked for by the literal word `repair`. EXTENTS, RECOVER and 64BIT are refused **by name** rather than guessed at, which is also why this is not ext4 |

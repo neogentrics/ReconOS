@@ -13,6 +13,143 @@ patch.
 
 ---
 
+## Status: ready to read, 16 September 2026 — third signal
+
+Branch `graphics`, merged with `origin/kernel` at **0.2.48** (KF-242, KF-243,
+KF-244). Everything in the two signals below still stands.
+
+This adds a fourth backend, fixes two faults in code I had already signalled as
+tested, and one of those is the more useful entry.
+
+---
+
+## What landed since
+
+**`core/amd_display.c` — AMD RDNA2**, identified, keeping the mode firmware set,
+no modesetting. Written against the two adapters in this project's **desktop**,
+read off that machine rather than recalled:
+
+```
+1002:73ff  Navi 23 [Radeon RX 6600/6600 XT/6600M]   discrete, on the bus
+1002:164e  Raphael                                   in the 7700X's package
+```
+
+both reporting PCI class `030000`. That pairing is the point: a display driver
+proved on a discrete card and not on an integrated part has learned one machine.
+
+**This hardware is reachable and the Gen9 laptop is not**, which makes it the
+better second real-hardware target even though Gen9 was planned first. The
+laptop work is unchanged and still waits on `scripts/read-intel-display.sh`.
+
+---
+
+## The two faults, and the second is the one worth reading
+
+### GX-007 — a veto that protected nothing and could not explain itself
+
+The Intel backend refused any adapter whose first BAR was under sixteen
+megabytes. Writing the AMD one showed what is wrong with that: **RDNA2 keeps its
+register file in a 512 KB fifth BAR, behind a 256 MB aperture with a 2 MB
+doorbell between them** — measured on the desktop, not recalled.
+
+So the shape of a display adapter's BARs is a fact about a *silicon family*, not
+about display adapters. The rule was true of one family, false of another, and
+there was never a reason to think it held for the real Gemini Lake either.
+Worse, **nothing in either driver reads a register**, so the veto guarded
+nothing and could only lose a machine — one that has no serial port to say why.
+
+Both backends now print the layout they found and neither refuses on it.
+`display_print_bars` is in `display.c`. The veto belongs with the first register
+access, which does not exist yet. Intel still *reports* a surprise and says in
+the same breath that it is driving the device anyway: a surprise worth recording
+is not the same as a reason to stop, and those had been one line.
+
+**This was already committed, matrix-green and signalled to you as tested.** The
+matrix could not have caught it — it contains no machine of either family.
+
+### GX-008 — the vendor check in both tables had no test that could fail
+
+I deleted the vendor check from the AMD recogniser and the test still said
+`pass`. Then from the Intel one, which you have already seen a signal claiming
+was tested. It said `pass` too.
+
+The refusal cases were chosen to be **real devices**, which is normally right and
+here quietly defeated the test. Every real cross-vendor identifier collision is
+refused by the *class* check before the vendor is ever looked at:
+
+| id | is | and also | refused by |
+|---|---|---|---|
+| `164e` | AMD Raphael | Broadcom NetXtreme II | class — a network card |
+| `73bf` | AMD Navi 21 | National Instruments FlexRay | class |
+| `1916` | Intel Skylake GT2 | Dini Group accelerator | class |
+
+And there is no real collision that would do the job: display-class hardware
+comes from few enough vendors that no cross-vendor id collision is a display on
+both sides. So each table now has one case that **only** the vendor rule can
+refuse, labelled in the source as constructed rather than found.
+
+**A test written from real examples can be strictly weaker than one written from
+the rule**, because reality supplies the cases it happens to contain rather than
+the ones that discriminate. That is the general lesson and it is not specific to
+graphics — it is worth your eye on the other tables in this tree.
+
+Both now fail when the check is removed, by name.
+
+---
+
+## What was tested
+
+| check | how it was broken | what it said |
+|---|---|---|
+| `the graphics cards it knows` | AMD vendor check removed | `8086:73ff [3/0] was claimed` |
+| `graphics it knows` | Intel vendor check removed | `1002:1916 [3/0] was claimed` |
+| `graphics it knows` | class/subclass check removed | both wrong-class refusals named |
+| `graphics it knows` | `3185` dropped; an id duplicated | both named |
+
+Two matrix paths, asserted on the model counts rather than on the word *pass*.
+Four display configurations green at 67 self-tests: virtio-gpu, Bochs, both at
+once, and no display at all.
+
+**Two backends in one machine is now actually exercised** — QEMU with
+`-device virtio-gpu-pci` and no `-vga none` gives a Bochs adapter *and* a
+virtio-gpu. virtio-gpu registers first during the bus walk and becomes primary,
+Bochs registers second, both declare to suspend. That is the arrangement GX-002's
+parallel array would have mis-addressed, and it had never been booted until now.
+
+---
+
+## Unchanged and still yours
+
+1. **A program cannot ask the kernel to present what it drew.** Still the thing
+   that blocks a compositor. Options and a recommendation are in the first
+   signal; it needs a ruling from you and `userland` because it is their ABI.
+2. **Whether `display_owns_page` should become the general `file_ops.map` rule**
+   in `addrspace.c`.
+3. The version bump when you merge. Four display backends and two new self-test
+   suites is an update rather than a patch, by your own rule.
+
+---
+
+## Where the graphics track is going
+
+Written down because it is now three machines rather than one, and the order is
+decided by what can be verified rather than by what is interesting:
+
+| | state | gated on |
+|---|---|---|
+| Bochs/VBE | full modesetting | — |
+| virtio-gpu | full modesetting, present path | — |
+| Intel Gen9 | identified, firmware's mode | `read-intel-display.sh` on the laptop |
+| AMD RDNA2 | identified, firmware's mode | reading registers on the desktop |
+
+Modesetting on either real part is a large piece of work — DCN 2.x on RDNA2 is
+larger than Gen9's display engine, not smaller, and normally wants a DMCUB
+firmware blob. Neither should start until reading that hardware's registers has
+been shown to work at all, which is the next increment on both and is the same
+increment.
+
+---
+
 ## Status: ready to read, 16 September 2026 — second signal
 
 Branch `graphics`, now merged with `origin/kernel` at 0.2.46 (USB enumeration

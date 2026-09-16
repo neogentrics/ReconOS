@@ -27,6 +27,7 @@
  */
 #include <recon/kernel/suspend.h>
 #include <recon/kernel/addrspace.h>
+#include <recon/kernel/amd_display.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/console.h>
@@ -507,6 +508,37 @@ bool display_owns_page(paddr_t pa)
 	return true;
 }
 
+/* Print a device's base address registers, as they were actually found.
+ *
+ * **Because the shape of them is a fact about a family, not about displays.**
+ * The Intel backend refused any adapter whose first BAR was smaller than
+ * sixteen megabytes, which is Gen9's register window. AMD's register window is
+ * 512 KB and is not the first BAR at all -- the first is a 256 MB aperture onto
+ * video memory, with a 2 MB doorbell between them, read off this project's own
+ * desktop. Both rules are correct about one family and wrong about the other
+ * (GX-007).
+ *
+ * So a driver that reads no registers should not be refusing hardware on the
+ * layout of registers it does not touch. It prints what it found instead, and
+ * the first boot on a real machine becomes a measurement rather than a dead
+ * end -- which is the only way an assumption made from a specification ever
+ * gets corrected.
+ */
+void display_print_bars(const struct pci_device *d)
+{
+	unsigned i;
+
+	for (i = 0; i < 6; i++) {
+		if (!d->bar_size[i])
+			continue;
+
+		kprintf("               bar%u  %-6s %10llu bytes at %p\n",
+			i, d->bar_is_io[i] ? "i/o" : "memory",
+			(unsigned long long)d->bar_size[i],
+			(void *)(uintptr_t)d->bar[i]);
+	}
+}
+
 bool display_needs_flush(void)
 {
 	return primary && primary->ops && primary->ops->flush;
@@ -564,7 +596,10 @@ void display_init(void)
 		if (display_attach(pd))
 			continue;
 
-		intel_display_attach(pd);
+		if (intel_display_attach(pd))
+			continue;
+
+		amd_display_attach(pd);
 	}
 
 	if (!primary)

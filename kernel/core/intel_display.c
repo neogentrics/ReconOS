@@ -101,7 +101,7 @@ static unsigned adapter_count;
  * not know your chip" are different facts about a machine with a blank screen,
  * and they want different things done about them. */
 static unsigned declined_unknown;
-static unsigned declined_shape;
+static unsigned unexpected_shape;
 
 /* --- recognition ----------------------------------------------------------- */
 
@@ -190,17 +190,34 @@ bool intel_display_attach(const struct pci_device *d)
 	if (adapter_count >= INTEL_DISPLAY_MAX)
 		return false;
 
-	/* The register file has to be where and what it should be. A device
-	 * answering to a known identifier with the wrong shape is not the
-	 * device this table describes. */
-	if (!d->bar[GEN9_MMIO_BAR] || d->bar_is_io[GEN9_MMIO_BAR] ||
-	    d->bar_size[GEN9_MMIO_BAR] < GEN9_MMIO_SIZE) {
-		kprintf("intel-display: %s has a %u MB register window where "
-			"Gen9 has 16, so this is not the device this driver "
-			"knows\n", m->name,
-			(unsigned)(d->bar_size[GEN9_MMIO_BAR] >> 20));
-		declined_shape++;
-		return false;
+	/* **Noted, and no longer a veto.** (GX-007)
+	 *
+	 * This refused any adapter whose first base address register was
+	 * smaller than sixteen megabytes, which is Gen9's register window --
+	 * a rule written from a specification, never seen on the hardware, and
+	 * guarding nothing, because nothing in this file reads a register.
+	 *
+	 * Writing the AMD backend is what showed it up. RDNA2 keeps its register
+	 * file in a **512 KB fifth BAR behind a 256 MB aperture**, read off this
+	 * project's own desktop -- so a rule phrased about "the first BAR,
+	 * sixteen megabytes" is true of one family and false of another, and
+	 * there was never a reason to believe it would hold for the real Gemini
+	 * Lake either.
+	 *
+	 * The cost of being wrong was the laptop reporting "not the device this
+	 * driver knows" while saying nothing about what it actually had: a dead
+	 * end that could not be corrected from the evidence it produced. The
+	 * layout is printed instead, and the veto belongs with the first
+	 * register access -- which is where being wrong about it would finally
+	 * matter. */
+	if (d->bar_size[GEN9_MMIO_BAR] < GEN9_MMIO_SIZE) {
+		kprintf("intel-display: %s has a first register window of "
+			"%llu bytes where Gen9 is expected to have 16 MB -- "
+			"driven anyway, because nothing here reads a register "
+			"and the expectation has never been checked against "
+			"this machine\n", m->name,
+			(unsigned long long)d->bar_size[GEN9_MMIO_BAR]);
+		unexpected_shape++;
 	}
 
 	a = &adapters[adapter_count];
@@ -253,6 +270,10 @@ bool intel_display_attach(const struct pci_device *d)
 	kprintf("intel-display: %s, Gen%u%s, registers at %p\n",
 		m->name, m->gen, m->low_power ? " LP" : "",
 		(void *)(uintptr_t)a->mmio);
+
+	/* The layout as found, so that the first boot on real hardware is a
+	 * measurement rather than a dead end (GX-007). */
+	display_print_bars(d);
 
 	if (disp->mode.width)
 		kprintf("intel-display: firmware left a %ux%u screen and this "
@@ -362,6 +383,23 @@ bool intel_display_self_test(void)
 			  "the laptop's own id at the class of a bridge" },
 			{ 0x8086, 0x3185, 0x03, 0x80,
 			  "the laptop's own id at a non-VGA display subclass" },
+
+			/* **The only case the vendor check alone can catch, and it had
+			 * to be constructed.** (GX-008)
+			 *
+			 * Every other refusal here is caught by the class, the subclass
+			 * or simply by not being in the table, so with the vendor check
+			 * deleted this test still passed -- the rule had no failing
+			 * case. 1916 really is two devices, Intel's Skylake GT2 and a
+			 * Dini Group accelerator board, but that board is not a display
+			 * and the class check refuses it first.
+			 *
+			 * So this one is built rather than found, and says so. The rule
+			 * it states is real: an identifier means nothing without its
+			 * vendor. */
+			{ 0x1002, 0x1916, 0x03, 0x00,
+			  "AMD's vendor id carrying Intel's Skylake number at "
+			  "display class -- constructed, see the comment" },
 		};
 
 		for (i = 0; i < sizeof(REFUSE) / sizeof(REFUSE[0]); i++) {
@@ -406,7 +444,7 @@ bool intel_display_self_test(void)
 
 void intel_display_print_summary(void)
 {
-	if (!adapter_count && !declined_unknown && !declined_shape)
+	if (!adapter_count && !declined_unknown && !unexpected_shape)
 		return;
 
 	if (adapter_count)
@@ -414,8 +452,8 @@ void intel_display_print_summary(void)
 			adapters[0].model->name, adapters[0].model->gen,
 			adapters[0].model->low_power ? " LP" : "");
 
-	if (declined_unknown || declined_shape)
+	if (declined_unknown || unexpected_shape)
 		kprintf("               : %u Intel display(s) with no entry, "
-			"%u with the wrong register window\n",
-			declined_unknown, declined_shape);
+			"%u with an unexpected register window\n",
+			declined_unknown, unexpected_shape);
 }

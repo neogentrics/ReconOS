@@ -189,6 +189,16 @@ bool display_needs_flush(void);
  * PCI aperture, wrong the moment one is main memory (GX-001). */
 bool display_owns_page(paddr_t pa);
 
+/* Print a device's base address registers as they were found.
+ *
+ * For a display driver that identifies hardware and reads none of its
+ * registers. The layout is a fact about a silicon family -- Gen9 keeps its
+ * register file in a 16 MB first BAR, RDNA2 keeps its in a 512 KB fifth one
+ * behind a 256 MB aperture -- so a driver that vetoes on one family's shape
+ * refuses another family's hardware for a reason true of neither (GX-007).
+ * Reporting turns the first boot on real hardware into a measurement. */
+void display_print_bars(const struct pci_device *d);
+
 void display_print_summary(void);
 bool display_self_test(void);
 

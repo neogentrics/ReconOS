@@ -50,6 +50,7 @@
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/display.h>
+#include <recon/kernel/amd_display.h>
 #include <recon/kernel/intel_display.h>
 #include <recon/kernel/virtio_gpu.h>
 #include <recon/kernel/fbcon.h>
@@ -234,6 +235,7 @@ void kmain(void)
 	block_print_summary();
 	display_print_summary();
 	intel_display_print_summary();
+	amd_display_print_summary();
 	virtio_gpu_print_summary();
 	suspend_print_summary();
 
@@ -352,6 +354,13 @@ void kmain(void)
 	 * Intel display engines of generations this kernel has no code for. */
 	kprintf("  graphics it knows  : %s\n",
 		intel_display_self_test() ? "pass" : "FAIL");
+
+	/* And the other real-hardware table. Its refusals include two identifier
+	 * collisions that exist in pci.ids today -- 164e is AMD's Raphael and
+	 * Broadcom's NetXtreme II, and 164e is the graphics in this project's own
+	 * desktop -- plus the USB controllers AMD puts on its graphics cards. */
+	kprintf("  the graphics cards it knows : %s\n",
+		amd_display_self_test() ? "pass" : "FAIL");
 
 	/* After the sweep above, which sets seven modes in turn and moves the
 	 * framebuffer each time. A program's mapping is of one physical address;

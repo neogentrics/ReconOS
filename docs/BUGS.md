@@ -176,6 +176,157 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ## Fixed
 
+### GX-008 — The vendor check in both hardware tables had no test that could fail
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by sabotaging a check that
+  had just been written and watching the test pass anyway.
+
+  The AMD backend's recognition rule is three parts: the vendor, the class, and
+  the identifier. Deleting the first of them:
+
+  ```c
+  /* SABOTAGE: vendor check removed */
+  ```
+
+  and the boot said:
+
+  ```
+  amd-display: 13 model(s) known, recognition and refusal both checked
+    the graphics cards it knows : pass
+  ```
+
+  The same sabotage on `core/intel_display.c` also passed. **Both drivers'
+  vendor checks were untestable, and one of them had already been committed and
+  run through the full matrix.**
+
+- **Was** the refusal cases were chosen to be *real devices*, which is normally
+  the right instinct and here quietly defeated the test. Every real cross-vendor
+  identifier collision that exists is refused by the **class** check before the
+  vendor is ever looked at:
+
+  | identifier | is | and also | refused by |
+  |---|---|---|---|
+  | `164e` | AMD Raphael | Broadcom NetXtreme II (14e4) | class — it is a network card |
+  | `73bf` | AMD Navi 21 | National Instruments FlexRay (1093) | class |
+  | `1916` | Intel Skylake GT2 | Dini Group accelerator (17df) | class |
+
+  So the table exercised the class rule three times over and the vendor rule
+  not once. Every case in it was answered before the vendor mattered.
+
+  **There is no real collision that would do the job**, and that is why the hole
+  was easy to make: display-class hardware comes from few enough vendors that no
+  cross-vendor identifier collision is *also* a display on both sides.
+
+- **Cost** nothing yet — but the Intel half had been committed, matrix-verified
+  and signalled as tested. The claim in `docs/SIGNALS.md` that recognition *and
+  refusal* were both checked was true of the class rule and false of the vendor
+  rule, and nothing in the output distinguished them.
+
+  Worth the entry for the shape rather than the damage: **a test written from
+  real examples can be strictly weaker than one written from the rule**, because
+  reality supplies the cases it happens to contain rather than the ones that
+  discriminate. GX-003 was a check that could not fail because it measured the
+  wrong side of a device; this is a check that could not fail because every
+  input to it was decided earlier.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Each table gained one case that only
+  the vendor rule can refuse — another vendor's id, carrying this driver's
+  device number, at display class — and each is **labelled in the source as
+  constructed rather than found**, with the reason, so that nobody later reads
+  it as a device somebody met.
+
+- **Shown to fail before being believed.** With the vendor check removed again,
+  both now say so by name:
+
+  ```
+  intel-display: 1002:1916 [3/0] was claimed -- AMD's vendor id carrying
+                 Intel's Skylake number at display class
+  amd-display:   8086:73ff [3/0] was claimed -- Intel's vendor id carrying
+                 the desktop card's number at display class
+    graphics it knows  : FAIL
+    the graphics cards it knows : FAIL
+  ```
+
+- **One factual error was fixed on the way.** The FlexRay controller sharing
+  `73bf` was recorded as vendor `10b5`; it is `1093`, National Instruments.
+  Corrected against `pci.ids` rather than left, because a comment citing
+  evidence is only worth what the citation is worth.
+
+---
+
+### GX-007 — A shape check that vetoed real hardware, protected nothing, and reported one number when it refused
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by writing the second
+  real-hardware backend and reading the two side by side.
+
+- **Was** `intel_display_attach` refused any adapter whose first base address
+  register was smaller than sixteen megabytes:
+
+  ```c
+  if (!d->bar[GEN9_MMIO_BAR] || d->bar_is_io[GEN9_MMIO_BAR] ||
+      d->bar_size[GEN9_MMIO_BAR] < GEN9_MMIO_SIZE) {
+          kprintf("intel-display: %s has a %u MB register window where "
+                  "Gen9 has 16, so this is not the device this driver knows\n", ...);
+          return false;
+  }
+  ```
+
+  Three things wrong with it, and the first is the one that would have cost a
+  day:
+
+  1. **It vetoes on an assumption that has never been checked against the
+     hardware it is about.** The 16 MB figure came from a specification. The one
+     Gen9 machine this project owns has no serial port, so a wrong veto there
+     reports "not the device this driver knows" onto a panel and stops.
+
+  2. **The shape of a display adapter's BARs is a fact about a silicon family,
+     not about display adapters.** Read off this project's own desktop, RDNA2
+     puts its register file in a **512 KB fifth BAR**, behind a 256 MB aperture
+     onto video memory with a 2 MB doorbell between them:
+
+     ```
+     1002:73ff  Radeon RX 6600      0xFC00000000  256 MB      aperture
+                                    0x00F6B00000    2 MB      doorbell
+     1002:164e  Raphael             0xFC20000000  256 MB      aperture
+                                    0xFC30000000    2 MB      doorbell
+                                    0x00F6A00000  512 KB      registers
+     ```
+
+     A rule phrased "the first BAR, sixteen megabytes" is true of one family and
+     false of the other. There was never a reason to believe it held for the
+     real Gemini Lake either.
+
+  3. **Nothing in either driver reads a register**, so the veto guarded
+     nothing. It could only ever lose a machine.
+
+  And when it refused, it printed the one number it had judged — so the evidence
+  produced by the failure was insufficient to correct the assumption that caused
+  it. A dead end that cannot be diagnosed from its own output.
+
+- **Cost** nothing observed, and it could not have been: the hardware it would
+  have refused has not been booted yet. Recorded because it was **shipped** —
+  committed, matrix-green, and signalled — and because the fault is the kind a
+  verification matrix cannot catch, since the matrix contains no machine of
+  either family.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. `display_print_bars` prints a
+  device's base address registers as they were found, both backends call it on
+  attach, and neither refuses on the layout. The veto belongs with the first
+  register access — which is where being wrong about it would finally matter,
+  and which does not exist yet in either driver.
+
+  The observation is kept: Intel still says when the first window is not the
+  16 MB it expected, and says in the same breath that it is driving the device
+  anyway and that the expectation is unverified. **A surprise worth recording
+  is not the same as a reason to stop**, and the two had been the same line.
+
+- **What it turns the first real boot into.** A measurement. Booting either
+  machine now prints the layout the driver actually found, which is the only way
+  an assumption written from a specification ever gets corrected — and it is the
+  same reason `scripts/read-intel-display.sh` exists.
+
+---
+
 ### GX-006 — A display that can be read and not set failed its own self-test, three ways
 
 - **Found in** kernel 0.2.46, on 16 September 2026, **before the driver that

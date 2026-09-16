@@ -890,6 +890,18 @@ check_for "18 model(s) known, recognition and refusal both checked" \
 	"  PVH, the graphics it can recognise" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
 
+# And the AMD table, which is the one written against hardware in the room.
+#
+# 1002:73ff and 1002:164e are the two adapters in this project's desktop -- a
+# Radeon RX 6600 on the bus and Raphael graphics in the processor package --
+# read off that machine rather than recalled. The refusals include the USB
+# controllers AMD puts on its own graphics cards, and a case that only the
+# vendor rule can catch, which had to be constructed because every real
+# identifier collision is refused by the class check first (GX-008).
+check_for "13 model(s) known, recognition and refusal both checked" \
+	"  PVH, the graphics cards it can recognise" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had
