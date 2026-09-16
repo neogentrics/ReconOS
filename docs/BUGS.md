@@ -7109,6 +7109,49 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-237 - A power cut inside a rename left no valid superblock, once
+
+- **Found:** 15 September 2026, matrix 57, one round of six:
+
+  ```
+  round 5 (cut at 1115ms): unreadable no valid superblock
+  6 cuts inside a rename on x86_64: 1 inconsistent.
+  ```
+
+- **Why this is not "a flaky test".** ReconFS keeps **two** superblocks, at byte
+  0 and at `BLOCK_MAX`, and `reconfs-check.py` takes whichever has the higher
+  epoch and a correct CRC. `no valid superblock` means **both were bad at the
+  same instant** -- which is the one condition a two-superblock design exists
+  to make impossible. A cut is meant to land between two good copies, never
+  across both.
+
+- **What is established, and what is not.** Established: it happened once, and
+  the eight matrix runs before it (50 through 56) were `0 inconsistent`.
+  Not established: anything about the mechanism. Four subsequent runs are
+  clean -- two standalone reruns, matrix 59 and matrix 60 -- so it is
+  **intermittent and unreproduced**.
+
+- **It is not the timer fix, which was the first suspicion.** KF-234 landed in
+  the same commit and makes every timer fire up to a tick *later*, so the
+  ordering of writes inside the replacing phase genuinely moved. That was worth
+  suspecting and does not survive the evidence: four clean runs on the same
+  code, including two matrices.
+
+- **And it is not a cut landing too early**, which was the second. The round's
+  clock starts when the guest prints `reconfs-crash: replacing`, not at launch
+  -- `rename-crash-test.sh` was changed to do that after checkpoint 20's extra
+  second of self-tests moved the early rounds, and the comment saying so is
+  still above the line. The filesystem exists by then.
+
+- **Status:** open, **unreproduced**, and deliberately not closed. The last
+  entry that sat in this state was KF-232, which went fifty-six boots without
+  reproducing and turned out to be real -- and the lesson recorded there is
+  that *a symptom seen once on one machine is a symptom*, not a mechanism and
+  not a fluke. What would make this diagnosable is the checker distinguishing
+  **"no superblock has been written yet"** from **"both were written and both
+  are torn"**; it reports one status for both today, and those are different
+  faults.
+
 ### KF-236 - Every PCI address is printed in a form nobody can look up
 
 - **Found:** 15 September 2026, by holding the Gateway's boot report beside
