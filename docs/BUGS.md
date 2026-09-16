@@ -139,7 +139,7 @@ other's file first.
 
 ## Open
 
-8, and each entry says why. They are listed because a register that only
+9, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -151,7 +151,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-150** — About one boot in sixty, a user program does not finish, and nothing says why
 - **KF-154** — The page allocator scans, and a terabyte is a billion pages
 - **KF-192** — The kernel boots from a disk over BIOS and then cannot see it
-- **KF-187** — Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
+- **KF-232** — Three timers did not fire, once, on one path of twenty-eight
+- **KF-237** — A power cut inside a rename left no valid superblock, once
 
 ---
 
@@ -6965,6 +6966,8 @@ and `slice mmc0 2 20480 53247`.
 
 ### KF-221 - The AML parser stopped at the first conditional, thirty-seven bytes into a real machine's namespace
 
+[#483](https://github.com/neogentrics/ReconOS/issues/483)
+
 - **Found:** 14 September 2026, on the Gateway:
   `aml : 0 names, 0 devices, 0 methods stepped over` and
   `aml : stopped at byte 37 on opcode a0 -- the namespace is partial`.
@@ -7003,6 +7006,8 @@ reason from a full stop into a number.
 reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
 
 ### KF-222 - The boot log went to the machine's internal disk while the stick it booted from sat beside it
+
+[#484](https://github.com/neogentrics/ReconOS/issues/484)
 
 - **Found:** 14 September 2026, on the Gateway:
   `boot log : 14586 bytes to MMC0P1:\RECONOS-BOOT.TXT`. MMC0P1 is the laptop's
@@ -7063,6 +7068,8 @@ written down here rather than done quietly.
 
 ### KF-223 - Root ports were asked what was plugged into them before they had power
 
+[#485](https://github.com/neogentrics/ReconOS/issues/485)
+
 - **Found:** 14 September 2026, on the Gateway:
   `xhci : 16 slots, 16 ports, 576 scratchpad pages, 0 connected, 0 addressed`.
   Sixteen ports, nothing on any of them, on a machine that had just booted from
@@ -7109,7 +7116,59 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-247 — Twenty-one bugs were fixed and none of them reached the track record
+
+[#486](https://github.com/neogentrics/ReconOS/issues/486)
+
+- **Found:** 16 September 2026, filing KF-245 and KF-246. The script printed
+  `302 entries, 353 issues already there`. The register has **323**.
+
+- **What it was.** `make-issues.py` splits the register on a heading whose
+  separator is an em dash, an en dash or `--`. Every entry from **KF-221**
+  onward was typed with a single `-`, so the filer did not see any of them:
+  not skipped with a warning, not counted as unparsed, not mentioned. Twenty-one
+  entries, covering the whole USB enumeration chain (KF-238 to KF-243), the
+  timer work, the AML parser and both of today's fixes.
+
+  So the GitHub issue list -- which exists because Joshua asked for a visible
+  track record, *"not just random commits"* -- has been missing the most
+  active three weeks of kernel work, and every run said it was up to date.
+
+- **This is the same fault as before KF-200**, when fourteen `--` entries were
+  invisible to a parser that demanded an em dash. That was fixed by widening
+  the pattern, and widening the pattern is what let it happen again: the next
+  spelling nobody anticipated vanishes exactly as quietly.
+
+- **Why nothing caught it, which is the part worth keeping.** The filer
+  reported the number **its own parser had produced**. `302 entries` was a true
+  statement about the parser and a false one about the file, and no green run
+  could have contradicted it -- the count and the thing being counted came from
+  the same place. Identical in shape to KF-187, where a boot that skipped five
+  self-tests and a boot that passed them printed the same total.
+
+  And the evidence was inside the one file the whole time: `check_open` splits
+  on `^### (BG|KF)-` with **no separator at all**, so it has always seen 323.
+  Two functions in the same script have disagreed about what an entry is for as
+  long as both have existed, and neither could see the other.
+
+- **Fixed** in two parts, and the second is the one that matters. The pattern
+  now accepts a bare `-` -- and both halves of the script take it from one
+  named constant, so they cannot drift apart again. Then `parse` counts the
+  headings a **second way**, with a deliberately looser pattern, and **refuses
+  the run** when the two counts differ, naming every entry it could not read.
+
+  Refuses rather than warns: a warning inside a run that prints three hundred
+  lines is a warning nobody reads.
+
+- **Verified by breaking it.** With the bare `-` removed from the pattern
+  again, the script stops and names all twenty-one. A check that has never been
+  seen to fail looks exactly like one that passes.
+
+- **Status:** fixed, and the twenty-one entries are filed and closed.
+
 ### KF-246 - Six ways a disk request can fail, one word for all of them
+
+[#487](https://github.com/neogentrics/ReconOS/issues/487)
 
 - **Found:** 16 September 2026, reading for the cause of
   `block: could not read the last 32 blocks of usb0: the hardware did not
@@ -7149,6 +7208,8 @@ boot log.
 
 ### KF-245 - The boot menu clears the whole screen to change one digit
 
+[#488](https://github.com/neogentrics/ReconOS/issues/488)
+
 - **Found:** 16 September 2026, by Joshua watching the Gateway's boot menu and
   asking whether the flashing was normal. It was not.
 
@@ -7178,6 +7239,8 @@ boot log.
 - **Status:** fixed, loader 0.2.49.
 
 ### KF-244 - Connect reports success while the handshake is still in flight
+
+[#489](https://github.com/neogentrics/ReconOS/issues/489)
 
 - **Asked for** by the server session, 16 September 2026, and they were right
   to call it the highest-value fix available: it is the whole client half of
@@ -7213,6 +7276,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.48.
 
 ### KF-243 - The scratchpad pointer array is also scratchpad buffer zero
+
+[#490](https://github.com/neogentrics/ReconOS/issues/490)
 
 - **Found:** 16 September 2026, on the Gateway, by the diagnostic added one
   boot earlier:
@@ -7263,6 +7328,8 @@ boot log.
 
 ### KF-242 - A failed command cannot say whether it was refused or ignored
 
+[#491](https://github.com/neogentrics/ReconOS/issues/491)
+
 - **Found:** 15 September 2026, by reading for the cause of
   `xhci: port 7 would not give up a slot` -- the last USB fault standing after
   KF-238 to KF-241.
@@ -7302,6 +7369,8 @@ boot log.
   and is now diagnosable in one boot instead of none.
 
 ### KF-241 - A disk that arrives late is never read
+
+[#492](https://github.com/neogentrics/ReconOS/issues/492)
 
 - **Found:** 15 September 2026, on the Gateway, in the boot after KF-240:
 
@@ -7349,6 +7418,8 @@ boot log.
 
 ### KF-240 - A device is addressed before it is allowed to answer
 
+[#493](https://github.com/neogentrics/ReconOS/issues/493)
+
 - **Found:** 15 September 2026, the moment KF-239 let a root port reach the
   enabled state: `xhci: port 6 would not take an address (completion code 4)`.
 
@@ -7381,6 +7452,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-239 - The port reset disables the port it has just enabled
+
+[#494](https://github.com/neogentrics/ReconOS/issues/494)
 
 - **Found:** 15 September 2026, by printing the raw port registers on the
   Gateway -- three snapshots in one boot, against Linux reading the same
@@ -7432,6 +7505,8 @@ boot log.
 
 ### KF-238 - The USB summary counts enabled ports and calls them connected
 
+[#495](https://github.com/neogentrics/ReconOS/issues/495)
+
 - **Found:** 15 September 2026, while failing to explain KF-239.
 
 - **What it was.** One line:
@@ -7460,6 +7535,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
+
+[#496](https://github.com/neogentrics/ReconOS/issues/496)
 
 - **Found:** 15 September 2026, matrix 57, one round of six:
 
@@ -7504,6 +7581,8 @@ boot log.
 
 ### KF-236 - Every PCI address is printed in a form nobody can look up
 
+[#497](https://github.com/neogentrics/ReconOS/issues/497)
+
 - **Found:** 15 September 2026, by holding the Gateway's boot report beside
   `lspci` on the same machine, minutes apart, over SSH.
 
@@ -7537,6 +7616,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.41.
 
 ### KF-235 - The check that the tick arrives at the rate the kernel assumes cannot fail
+
+[#498](https://github.com/neogentrics/ReconOS/issues/498)
 
 - **Found:** 15 September 2026, by reading `time_self_test` while looking for
   KF-232's mechanism. Not by a failure: this check has never failed and cannot.
@@ -7588,6 +7669,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.40.
 
 ### KF-234 - A timer is due before the instant it was asked for
+
+[#499](https://github.com/neogentrics/ReconOS/issues/499)
 
 - **Found:** 15 September 2026, by reading `timer_start` while looking for
   KF-232's mechanism -- and it turned out to *be* KF-232's mechanism, or half
@@ -7687,6 +7770,8 @@ boot log.
 
 ### KF-233 - Recovery is offered on every boot, except the boots that go wrong
 
+[#500](https://github.com/neogentrics/ReconOS/issues/500)
+
 - **Found:** 14 September 2026, by reading the loader after Joshua reported that
   the Gateway's menu "only shows Recon OS. It doesn't even show Recon OS
   recovery." Whether this is what that machine hit is **not yet known** -- see
@@ -7772,6 +7857,8 @@ boot log.
 - **Status:** fixed, loader 0.2.38. The Gateway's menu is still unexplained.
 
 ### KF-232 - Three timers did not fire, once, on one path of twenty-eight
+
+[#501](https://github.com/neogentrics/ReconOS/issues/501)
 
 - **Renumbered on the merge**, from KF-227. Both sessions reached
   KF-225 on 14 September without being able to see the other's
@@ -7968,6 +8055,8 @@ and this entry was two bugs wearing one number.
 
 ### KF-231 - kprintf reads the width on a number and throws it away
 
+[#502](https://github.com/neogentrics/ReconOS/issues/502)
+
 - **Renumbered on the merge**, from KF-226. Both sessions reached
   KF-225 on 14 September without being able to see the other's
   register. The rule applied was that what is already on the shared
@@ -8044,6 +8133,8 @@ and this entry was two bugs wearing one number.
   own commit; see the note on KF-230.)
 
 ### KF-230 - The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen
+
+[#503](https://github.com/neogentrics/ReconOS/issues/503)
 
 - **Renumbered on the merge**, from KF-225. Both sessions reached
   KF-225 on 14 September without being able to see the other's
@@ -8122,6 +8213,8 @@ and this entry was two bugs wearing one number.
 
 ### KF-224 - The machine reported six gigabytes of memory and has four
 
+[#504](https://github.com/neogentrics/ReconOS/issues/504)
+
 - **Found:** 14 September 2026, by a C program drawing it on the laptop's panel:
   `memory  6.0 GiB, 3.8 GiB free`. The firmware's own setup says
   `Total Memory 4096 MB`, and `Max TOLUD [2 GB]` -- so that machine's RAM sits
@@ -8188,6 +8281,11 @@ saved.
 draws it last on purpose; printing more text after it would paint over the
 program instead, which is the same fight from the other side. That one belongs in
 `KERNEL-WANTS.md`, where it already is.
+
+- **Status:** not a bug. Recorded because the question was asked and the answer
+  is worth not re-deriving -- but nothing here is broken, so it does not belong
+  in the Open list. Said in a Status line rather than only in the heading,
+  because the heading is prose and the checker reads Status lines.
 
 ### KF-226 — The boot thread never stopped being work, so every drive completion waited for a timer
 
@@ -8290,6 +8388,8 @@ program instead, which is the same fight from the other side. That one belongs i
 - **Fixed in** kernel 0.2.33. The shared mapping, like its two neighbours.
 
 ### KF-229 — Five self-tests pass exactly once per volume, inside the check written to catch that
+
+[#464](https://github.com/neogentrics/ReconOS/issues/464)
 
 > **It was six, and the sixth was written the same day.** The kernel session
 > added a directory self-test creating `/selftest-dir` and
