@@ -8,7 +8,7 @@
 # port is actually asking, which is whether the pieces -- put together with the
 # ReconOS C library and nothing else -- make a program with no holes in it.
 #
-# The subject is `userland/desktop/main.c` -- the actual program that will run
+# The subject is `userland/desktop/desktop.c` -- the actual program that will run
 # from the volume -- rather than a stand-in written to be linkable. A probe
 # somebody adjusts whenever it will not link is a probe whose number is about
 # the probe.

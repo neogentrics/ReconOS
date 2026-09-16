@@ -1,23 +1,28 @@
-text-align had been read, recorded on the block, and then not drawn. The
-comment beside the field said so and said why: centring a line means knowing
-how wide it came out before placing its first word, and how wide it came out
-is only known once the last one is placed. The flow put each word down as it
-reached it, so by the time the width was known the words were already
-somewhere.
+test_malformed swept the ICO, MP4, HTML and expression parsers with
+truncations, single-byte changes and random bytes. It did not sweep the two
+parsers added since -- CSS and addresses -- and both take bytes straight
+off a web server.
 
-So the words are held now, and the line is drawn when it ends -- at a wrap, or
-at the end of the block. Each keeps the x it would have had on a left-aligned
-line and the flush adds one offset to all of them. No second pass over the
-document, no second idea of where a word goes, and left alignment comes out
-with an offset of zero, which is bit-for-bit what it did before.
+A stylesheet is as much somebody else's file as the markup is: fetched from
+whatever host the page named, parsed, and then consulted for every element on
+the page. An address is worse in one way -- it is the boundary between their
+bytes and where this machine *connects to*.
 
-The link underlines are held with the words and shifted by the same amount. A
-rule drawn at the unshifted position under a centred line is a rule sitting to
-the left of the words it belongs to.
+The CSS feeder does not stop at parsing. It matches the sheet against a
+three-deep element stack, which is the only thing a sheet is for and the path
+where a bad rule actually gets walked -- a sheet that parses without crashing
+and then reads outside itself on the first match is one a parse-only sweep
+calls fine. It also feeds the same bytes to recon_css_inline, which is the
+other way in and does not go through recon_css_add at all.
 
-justify is not here. It means changing the space *between* words rather than
-moving the line, which is a different operation on a different unit, and doing
-it badly -- stretching the last line, or leaving rivers down the column --
-looks worse than not doing it.
+The address feeder checks what a caller then relies on: that the host and path
+are terminated, that the path begins with the slash every caller assumes, that
+the port is a port, and that no fragment was left in the path -- the path
+is what goes in a request line, and a # in it is a byte sent to a server
+that was never meant to leave the machine.
+
+7,556 cases, no failures, under the address and undefined-behaviour
+sanitizers. Nothing found, which is the ordinary result and is worth having
+run.
 
 ---

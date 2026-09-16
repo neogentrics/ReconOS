@@ -1,108 +1,80 @@
-The file picker, which was the rest of form-gaps. A page that asked for a
-photograph used to get a control drawn dead and a refusal at Send; it now gets
-multipart/form-data, and the request was read back off the wire by a parser
-that is not ours.
+A program that reads its theme off the disk, fills a screen, frames a window,
+writes text in it and makes a directory now links against ReconOS and nothing
+else — 146,768 bytes, and the only symbol it cannot resolve is stat.
+With stat stubbed it links with zero undefined symbols, which is how we know
+stat is the last thing missing rather than the first.
 
-### The policy, which was a decision before it was code
+src/recon_fs.c is the 57th source to compile with no Linux under it, and it
+is the one the whole port was waiting on.
 
-A viewer that can open a file chooser is a viewer that can be asked to read
-anything on the disk. Four rules, and each one closes something:
+### What was actually in the way, which was not what the file said
 
-| the rule | what it stops |
+docs/KERNEL-WANTS.md described this as eleven symbols over thirty-one call
+sites. Handing the file to the freestanding compiler rather than reading about
+it turned up four things, and two of them were already written:
+
+| gap | what was really wrong |
 |---|---|
-| A page never names a file. It says there is a file field; a click opens the chooser | a page that opens a chooser at a path of its choosing |
-| The page learns the name and the bytes, never the path | a page reading the account name off /Users/... |
-| The choice does not outlive the submission — Reset clears it, and so does leaving the page | a file still quietly attached, sent by accident |
-| Where the chooser may go is the chooser's business — it browses recon_fs, the same confined view every program gets | a viewer with a wider reach than the file manager |
+| strerror | implemented in libc/errno.c, declared in no header — all 43 desktop call sites were reaching it by implicit declaration |
+| realpath | implemented in libc/posix.c, declared in no header |
+| rename | no system call; now declared-and-not-defined, the treatment sys/stat.h already gives stat |
+| O_NOFOLLOW | not defined |
 
-The path is not merely unused: recon_form_body_multipart has no way to send
-one, so a later change to the viewer cannot leak a path by accident.
+O_NOFOLLOW is defined as POSIX's real bit and not as 0, which compiles
+identically today and is the whole point: ReconOS has no symbolic links, so 0
+would work — and would silently disarm every caller asking for that protection
+on the day links arrive, with nothing in any source changed to notice.
 
-### The boundary is derived, not drawn
+### And one fault underneath, of the quietest kind
 
-A multipart body is a small protocol with a delimiter in it, and a wrong one
-parses — the server reads it, accepts it, and stores something other than what
-was sent. The dangerous part is the boundary: one that also occurs inside an
-upload splits the request there instead, and somebody who can choose the bytes
-of a file can end the body early and append fields the person filling in the
-form never saw.
+realpath(path, NULL) returned EFAULT. It compiles, it links, it has no
+undefined behaviour, and the function returns cleanly — it just refuses.
 
-The usual answer is a long random string and the argument that a collision is
-unlikely. That argument is fine against accident and worthless against somebody
-who has read the file. So the boundary is checked: built, looked for in
-every part it will separate, and rebuilt with a different number if it is found.
-Certain rather than probable, for one pass over the content.
+recon_fs.c's stays_inside passes NULL, reads NULL as *"not there yet"*,
+steps up to the parent and asks again, and ends at the root returning false
+— which means *"this path is outside the filesystem"*. So on ReconOS every
+write, every mkdir and every open in the desktop would have been refused,
+each with a sensible message, and nothing anywhere pointing at this function.
 
-recon_smtp_message.c reached the same conclusion for a letter, independently,
-some versions ago. Finding that was worth more than the code: two arguments
-arriving at the same place is the nearest thing to a second opinion this
-project gets.
+The caller was right: NULL is POSIX, and the comment beside that call already
+explains why it passes NULL rather than a buffer — the host's version demands
+PATH_MAX, a smaller buffer is undefined rather than truncated, and an optimised
+glibc aborts the process over it, which it once did.
 
-### What it took to believe it
+---
 
-102 checks and 12 of 12 mutations caught — but the first pass caught only
-nine, and the three misses were the interesting part:
+### The correction: stat is the wall after all
 
-- The filename was never searched for the boundary. A real hole. The test
-  was at fault: it put the boundary in a file's *contents*, which takes a file,
-  and never in its *name*, which takes a suggestion.
-- The buffer-size check was not load-bearing — snprintf already caught the
-  case the test used. It is not dead, it holds the *contract*; the test now
-  uses a buffer too small to be right and large enough to work by luck, which
-  is the only size that can tell the two apart.
-- One byte of slack in the fit check was invisible, and it wrote the
-  terminator one past the end of the allocation. Every other check in the suite
-  has slack in the buffer, and an off-by-one fit test is correct everywhere
-  there is slack. Caught now by asking for the exact length back and demanding
-  that a buffer of exactly that size is refused.
+v0.4.52 said it was not, and that was wrong. How it went wrong is the part
+worth keeping.
 
-And then the whole path was run rather than reasoned about: a server on
-localhost, the desktop driven headless through the chooser, and the request it
-sent handed to Python's email parser. Three parts, 338 bytes, the file's zero
-byte intact in the middle of it, the filename with no path in it, and the
-declared length agreeing with the body. A wrong body that passes the encoder's
-own tests is an agreed misunderstanding of the format; a foreign parser is the
-only thing that can catch one.
+An earlier linker probe came back with three unresolved symbols —
+recon_fs_write, recon_fs_append, recon_fs_mkdir. Those three were read as
+*what a desktop needs from recon_fs.c*, a call graph was walked from them, no
+stat was found, and the conclusion went into the change log, the board, the
+kernel session's inbox and this file.
 
-### And the Recovery page stopped saying something untrue
+Every step of that was sound and the premise was not. Those were the
+symbols one particular link happened to leave unresolved, not the entry points
+a desktop uses. recon_theme.c and recon_fonts.c between them call
+twelve — read, write, append, list, exists, remove, copy,
+mkdir, join, resolve, unique_name, last_error — and several reach
+stat. A correct walk from a false premise is a confident wrong answer.
 
-Control Panel's Recovery page lists five things it cannot offer, with the
-reason for each. One reason had gone stale: *"Needs a boot path of our own.
-ReconOS is started by whatever is underneath it."* ReconOS is started by its own
-loader now, and that loader has a recovery entry.
+The fix is not "check harder". A linker answers this question directly and a
+call-graph walk answers it by inference, so the walk belongs downstream,
+explaining an answer rather than producing one. scripts/link-desktop.sh is
+that linker, and it said stat in one line.
 
-The replacement is not "coming soon". The loader's own comment settles it:
-*"recovery is a decision made in front of the machine"* — the menu choice
-overrides the file on the EFI partition rather than merging with it. So the
-desktop is not going to get a button that restarts into recovery, and that is
-an answer rather than a gap: a repair mode software can start is one a broken
-program can start, and the whole point of it is that it is where you go when
-the software is broken.
+scripts/fs-reachable.py survives as the explanation of *which* paths reach
+stat, and it takes its entry points on the command line now, because
+hard-coding three of them is how it gave the wrong answer.
 
-What the page can do is say it exists and how to reach it, which is what
-somebody standing in front of a machine actually needs. The other four reasons
-were checked as well — this is the second list this week found to be describing
-finished work — and all four are still true.
-
-### Two things that were found on the way
-
-One media-type table, not two. recon_smtp_message.c had a private one.
-A .jpeg that is image/jpeg when mailed and application/octet-stream when
-uploaded is one fact with two answers, and the second copy is the one nobody
-updates. It moved to src/recon_media.c — a file of its own, after a first
-attempt put it in recon_http.c and the form test showed what that meant:
-anything wanting a media type would link an HTTP client to get one. The same
-trap the port kept hitting, caught this time by a build rather than by a
-reading.
-
-And stat is not the wall it was called. The linker probe in v0.4.51 named
-recon_fs_write, recon_fs_append and recon_fs_mkdir as all a desktop
-program needs from recon_fs.c. Walking the call graph transitively from those
-three — not one level of grep, which reports that recon_fs_write calls nothing
-— they reach fopen, fwrite, fclose, mkdir and realpath. No stat,
-no lstat. Those two are reachable only from the rest of the file.
-
-That corrects what this session told both Joshua and the kernel session.
-docs/KERNEL-WANTS.md now says so.
+Two flags matter, to this and to any real ReconOS link.
+-ffunction-sections with --gc-sections: a linker pulls a whole object out
+of an archive, so without them a program that draws would also need rename,
+unlink, chmod and the rest of a file manager. With them it needs what it
+uses — and the difference is measured rather than assumed, because the probe
+runs both ways.
 
 ---

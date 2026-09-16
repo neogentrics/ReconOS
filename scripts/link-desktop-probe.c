@@ -9,7 +9,7 @@
  * whenever it will not link, and the number it reports slowly becomes a number
  * about the probe.
  *
- * The subject is `userland/desktop/main.c` now: **the actual program**, the one
+ * The subject is `userland/desktop/desktop.c` now: **the actual program**, the one
  * that will run from the volume. This only supplies an entry point, because
  * the C runtime that calls `main` is built on the kernel side -- `recon_init`
  * is linked by `kernel/`'s makefile, not this tree's -- and the question here

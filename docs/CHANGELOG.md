@@ -9,6 +9,90 @@ way for the two to disagree.
 
 ---
 
+## v0.4.56 — the desktop program runs
+
+Not on hardware — `stat` is still the one thing missing for that. It runs
+**here**, against a machine made of `malloc` and a table of keystrokes, and the
+suite watches what it does.
+
+### The file that mattered most was the only one nothing could execute
+
+Everything else in `userland/desktop/` was already testable on the host:
+`shell_frame.c` takes a panel and draws, `keyboard.c` takes events and gives
+back keystrokes. Both were written that way on purpose.
+
+`main.c` was the exception — and it is **the worst file to have as the
+exception**, because it is the one that decides whether a machine shows a
+desktop or a black screen. Eight ways to fail, each with its own exit code, and
+not one of them had ever been executed anywhere.
+
+It could not be shimmed the way the C library is. `libc/` reaches the kernel
+through `recon_sys_open` and friends, so `userland/tests/hostsys.c` replaces
+that layer and the whole library runs on Linux. But `recon_screen` and
+`recon_map` are **`static inline` in `<recon.h>` and expand to a raw `syscall`
+instruction** — there is no function to replace, and running one on Linux would
+issue a Linux system call with a ReconOS number.
+
+### So the calls went behind the seam, for the fourth time
+
+`userland/desktop/machine.h`: six function pointers — screen, open, map, read,
+facts, and *carry on*. `machine_recon.c` is the ReconOS implementation and is
+**six pass-throughs and an entry point**, which is the measure of whether a
+seam is in the right place: everything with a decision in it ended up on the
+other side.
+
+The same argument as `recon_memory_source` for the allocator and
+`recon_panel_present` for the screen, and it has held each time.
+
+`carry_on` is worth a line. The real machine always says yes and the loop never
+ends, which is right — a desktop that returned would leave whatever the kernel
+draws next on the screen, and a frame that drew correctly would look like one
+that crashed. A test says no, eventually. **It is an honest hook rather than a
+test-only one**: "should this keep running" is a real question that a real
+system happens to always answer the same way.
+
+`main.c` is `desktop.c` now, since `main()` moved to the file that chooses a
+machine. A file called `main.c` with no `main` in it is worse than a rename.
+
+### What the 22 checks hold
+
+All of it about what happens when something is wrong, because that is all this
+file decides:
+
+- **Eight ways to fail, each saying which.** An exit code is the only thing a
+  program that cannot draw can still say, and a wrong one sends somebody
+  looking at the wrong half of the machine.
+- **The frame is drawn before the keyboard is opened.** Reversing it fails
+  three checks, and the extra two are the point: with the order swapped, a
+  machine with nothing plugged in **never draws at all**. That is the black
+  screen the order exists to avoid.
+- **A short read is dropped rather than parsed.** Half an event read as a whole
+  one is a keypress that never happened.
+- **A machine that cannot describe itself still gets a desktop**, and so does
+  one with no way to ask at all.
+
+### And the order check was wrong first
+
+It proxied *"had it drawn?"* through a flag set in `carry_on` — which is not
+called until the loop starts, so it read false however early the drawing
+happened, and failed a program doing the right thing. It looks at the
+framebuffer now. **A proxy for the thing is not the thing.**
+
+### Two includes corrected on the way
+
+`userland/include/recon_machine.h` included `<recon.h>` with angle brackets,
+which works for a program built with `-I userland/include` and fails for
+anything reaching it by relative path. Quoted now, like `sys/input.h` and
+`libc/posix.c` — *"so it finds the one beside it"*.
+
+That is not decoration: a suite **cannot** put `userland/include` on its path,
+because ReconOS's `<stdio.h>` would then answer instead of the host's, and it
+deliberately has no `printf`. Its own header argues there is no `printf` to a
+stream this library cannot usefully flush, which is a decision rather than a
+gap — so the include path is what has to bend, and it did.
+
+---
+
 ## v0.4.55 — the desktop can be typed at
 
 The desktop program reads `/dev/input` and redraws. A key goes down, the kernel

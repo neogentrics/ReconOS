@@ -16,7 +16,18 @@
 #ifndef RECON_MACHINE_H
 #define RECON_MACHINE_H
 
-#include <recon.h>
+/*
+ * Quoted, so it finds the one beside it rather than needing this directory on
+ * an include path -- the same exception `sys/input.h` and `libc/posix.c` take.
+ *
+ * It was angle-bracketed, which works for a program built with
+ * `-I userland/include` and fails for anything that reaches this header by
+ * relative path. That is not a hypothetical: a test wanting `struct
+ * recon_machine` cannot put `userland/include` on its own path, because
+ * ReconOS's `<stdio.h>` would then answer instead of the host's -- and it
+ * deliberately has no `printf`.
+ */
+#include "recon.h"
 
 struct recon_machine {
 	u32 size;		/* what the caller had room for */

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.55
+    VERSION 0.4.56
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -1081,6 +1081,74 @@ target_include_directories(recon_init_screen_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/boot/include")
 
 add_test(NAME first_screen COMMAND recon_init_screen_tests)
+
+# The desktop program itself, run.
+#
+# It could not be, until the calls it makes of the machine went behind
+# userland/desktop/machine.h. recon_screen and recon_map are static inline in
+# <recon.h> and expand to a raw syscall instruction, so there was no function
+# for a shim to replace -- which made the one file that decides between a
+# desktop and a black screen the only one in its directory nothing could run.
+#
+# The fake machine here is malloc and a table of keystrokes. What it holds is
+# everything main.c decides, which is all of it about what happens when
+# something is wrong: eight exit codes, the order the screen and the keyboard
+# are opened in, and a read whose length is not a whole number of events.
+#
+# machine_recon.c is deliberately absent: it is the ReconOS implementation and
+# the only file here a host cannot run.
+add_executable(recon_desktop_main_tests
+    userland/tests/test_desktop_main.c
+    userland/desktop/desktop.c
+    userland/desktop/keyboard.c
+    userland/desktop/shell_frame.c
+    src/recon_key.c
+    src/recon_ui.c
+    src/recon_ui_fb.c
+    src/recon_theme.c
+    src/recon_fonts.c
+    src/recon_fs.c
+    src/recon_error.c
+    src/recon_widget.c
+    src/recon_color.c
+    src/recon_clip.c
+    src/recon_widget_state.c
+    src/recon_icons.c
+    src/recon_registry.c
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_ico.c
+    src/recon_stb.c)
+
+target_include_directories(recon_desktop_main_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/userland/desktop")
+
+# userland/include goes to main.c alone, and that is not fussiness.
+#
+# It has to be on main.c's path: recon_machine.h includes <recon.h> with angle
+# brackets, so the directory must be findable. It must NOT be on the test's:
+# ReconOS's <stdio.h> would then answer instead of the host's, and it
+# deliberately has no printf -- its own header argues that there is no printf
+# to a stream this library cannot usefully flush, which is a decision rather
+# than a gap.
+#
+# So the two sources get different paths. main.c compiles against ReconOS's
+# headers, which is what it will be built with; the test compiles against the
+# host's, which is the older rule -- a test given ReconOS's headers is a test
+# comparing ReconOS against itself.
+set_source_files_properties(userland/desktop/desktop.c
+    TARGET_DIRECTORY recon_desktop_main_tests
+    PROPERTIES INCLUDE_DIRECTORIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/userland/include")
+
+target_include_directories(recon_desktop_main_tests SYSTEM PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+target_link_libraries(recon_desktop_main_tests PRIVATE m)
+
+add_test(NAME desktop_program COMMAND recon_desktop_main_tests)
 
 # Events from /dev/input, turned into keystrokes.
 #
