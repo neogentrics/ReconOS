@@ -79,6 +79,11 @@
 
 #define USBSTS_HCH		(1u << 0)	/* halted */
 #define USBSTS_CNR		(1u << 11)	/* controller not ready */
+#define USBSTS_HSE		(1u << 2)	/* host system error */
+#define USBSTS_EINT		(1u << 3)	/* an event is pending */
+#define USBSTS_PCD		(1u << 4)	/* a port changed */
+#define USBSTS_HCE		(1u << 12)	/* host controller error */
+#define CRCR_CRR		(1u << 3)	/* command ring running */
 
 #define PORTSC_CCS		(1u << 0)	/* something is connected */
 #define PORTSC_PED		(1u << 1)	/* port enabled */
@@ -266,12 +271,15 @@ static bool alloc_structures(struct xhci *x)
 	 * event ring and its table. All of them have to be physically
 	 * contiguous and none of them is large, so a page apiece is simpler
 	 * than an allocator and wastes a few kilobytes once. */
-	x->backing = pmm_alloc_pages(4 + scratch);
+	/* Four for the rings and tables, **one for the scratchpad pointer
+	 * array**, and then the scratchpad buffers themselves. The array used
+	 * to share page 4 with the first buffer, which is KF-243. */
+	x->backing = pmm_alloc_pages(5 + scratch);
 	if (!x->backing)
 		return false;
 
-	x->backing_pages = 4 + scratch;
-	kmemset(phys_to_virt(x->backing), 0, (4 + scratch) * PAGE_SIZE);
+	x->backing_pages = 5 + scratch;
+	kmemset(phys_to_virt(x->backing), 0, (5 + scratch) * PAGE_SIZE);
 
 	x->dcbaa_phys = x->backing;
 	x->dcbaa      = phys_to_virt(x->dcbaa_phys);
@@ -292,11 +300,32 @@ static bool alloc_structures(struct xhci *x)
 	if (scratch) {
 		u64 *array = phys_to_virt(x->backing + 4 * PAGE_SIZE);
 
+		/* **The buffers start at page 5, not page 4.** (KF-243)
+		 *
+		 * They used to start at 4 -- the array's own page -- so
+		 * `array[0]` pointed at the array. The controller was handed
+		 * its pointer table as scratch memory, wrote there the first
+		 * time it needed buffer zero, and destroyed the addresses of
+		 * the other 575. The next read was a garbage physical address,
+		 * the bus faulted, and it halted with `HSE` set.
+		 *
+		 * Two devices enumerated before it: scratchpads are the
+		 * controller's own working memory and it does not reach all of
+		 * them at once. The third one did.
+		 *
+		 * The comment below already said the shape of this -- *a
+		 * controller that asks for them and is not given them does not
+		 * report an error; it misbehaves later* -- written about not
+		 * allocating them. Allocating them on top of each other is the
+		 * same sentence.
+		 *
+		 * **QEMU asks for zero**, so none of this has ever run in
+		 * 1578 self-tests across twenty-eight boot paths. */
 		for (i = 0; i < scratch; i++)
-			array[i] = x->backing + (4 + i) * PAGE_SIZE;
+			array[i] = x->backing + (5 + i) * PAGE_SIZE;
 
-		/* The array itself lives in the first scratchpad page, and slot
-		 * zero of the DCBAA points at it. */
+		/* The array has page 4 to itself, and slot zero of the DCBAA
+		 * points at it. */
 		x->dcbaa[0] = x->backing + 4 * PAGE_SIZE;
 	}
 
@@ -581,10 +610,31 @@ static bool command(struct xhci *x, u64 parameter, u32 status, u32 control,
  * would not take an address (completion code 4)` named a USB transaction
  * error, and that one line was the whole of KF-240's diagnosis.
  */
-static void say_why_command_failed(const struct trb *result)
+static void say_why_command_failed(struct xhci *x, const struct trb *result)
 {
 	if (!result || !result->control) {
-		kputs(" -- the controller did not answer within a second");
+		u32 sts = op32(x, XHCI_USBSTS);
+		/* The low half is enough: CRR is bit 3, and the pointer
+		 * bits above it read as zero by design. */
+		u32 crcr = op32(x, XHCI_CRCR);
+
+		/* **Silence is three different faults and they look the same
+		 * from here.** The controller halted or took a host error; the
+		 * command ring stopped, which a command error can do and which
+		 * leaves it consuming nothing further; or completions are
+		 * being posted and never seen. It knows which, and nothing was
+		 * asking.
+		 *
+		 * `EINT` is the one that separates the last from the first
+		 * two: an event pending with no command completion found means
+		 * the controller answered and this driver did not see it. */
+		kprintf(" -- no answer in a second; usbsts 0x%08x%s%s%s%s, "
+			"command ring %s", sts,
+			(sts & USBSTS_HCH) ? " halted"        : "",
+			(sts & USBSTS_HSE) ? " host-error"    : "",
+			(sts & USBSTS_HCE) ? " controller-error" : "",
+			(sts & USBSTS_EINT) ? " event-pending" : "",
+			(crcr & CRCR_CRR) ? "running" : "STOPPED");
 		return;
 	}
 
@@ -857,7 +907,7 @@ static bool address_device(struct xhci *x, const struct usb_path *path,
 		 * slot leak that is not happening. (KF-242) */
 		kprintf("  xhci         : port %u could not be given a slot",
 			port);
-		say_why_command_failed(&result);
+		say_why_command_failed(x, &result);
 		kputs("\n");
 		return false;
 	}

@@ -364,8 +364,29 @@ static i64 sys_connect(u64 fd, u64 addr, u64 port, u64 a3, u64 a4, u64 a5)
 	if (port > 0xFFFF)
 		return SYS_EINVAL;
 
-	return socket_connect(s, (ipv4_addr)addr, (u16)port)
-		? SYS_OK : SYS_EIO;
+	/* **SYS_OK only when the handshake has finished.** (KF-244)
+	 *
+	 * `socket_connect` sends a SYN; the connection is in SYN_SENT when it
+	 * returns. This used to answer SYS_OK there, so a program was told it
+	 * had a connection and wrote into one that did not exist.
+	 *
+	 * `EAGAIN` while it is in flight, which is the shape `accept` already
+	 * has and for the same reason: blocking needs a wait queue on the
+	 * socket and a way to be interrupted, and neither exists yet. A caller
+	 * polls -- **calling this again is how it asks**, and a second call on
+	 * a socket already trying does not start a second attempt.
+	 *
+	 * `EIO` is kept for a refusal, so a caller that polls on EAGAIN and
+	 * gives up on EIO cannot spin on a connection the peer rejected. That
+	 * is why the layer below answers three things rather than two. */
+	if (!socket_connect(s, (ipv4_addr)addr, (u16)port))
+		return SYS_EIO;
+
+	switch (socket_connect_progress(s)) {
+	case SOCKET_PROGRESS_DONE:    return SYS_OK;
+	case SOCKET_PROGRESS_WAITING: return SYS_EAGAIN;
+	default:                      return SYS_EIO;
+	}
 }
 
 static i64 sys_pipe(u64 out, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
