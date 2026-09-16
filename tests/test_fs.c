@@ -600,6 +600,56 @@ static void test_private_files(void) {
         "and is left to the umask rather than forced private");
 }
 
+/*
+ * The first few bytes of a file, without reading the file.
+ *
+ * What a file *is* is decided by its first few bytes, and `recon_fs_read`
+ * would pull an entire film into memory to answer that. The header is explicit
+ * that it *"does not terminate the buffer and makes no claim about what is in
+ * it -- a file's first bytes are bytes, and treating them as a string is how a
+ * NUL in the middle of a PNG turns into a truncated read nobody notices"*, so
+ * that is what this holds it to: a file with a NUL in the middle comes back
+ * whole.
+ *
+ * It was the last function in recon_fs.c that no suite ran at all.
+ */
+static void test_reading_the_front_of_a_file(void) {
+    printf("the first bytes of a file, without reading the file\n");
+
+    /* Eight bytes with a NUL in the middle, which is what a real header looks
+     * like and what a string-shaped reader stops at. */
+    static const char HEADER[] = { 'R', 'E', 'C', 0, 'O', 'N', 'O', 'S' };
+
+    /* Its own folder: nothing makes this one, and a test that assumed an
+     * earlier one had left it behind would fail for a reason that has nothing
+     * to do with reading the front of a file. */
+    recon_fs_mkdir("/", "/Users/Documents");
+    check(recon_fs_write("/", "/Users/Documents/thing.bin", HEADER,
+            sizeof(HEADER)),
+        "there is a file to read the front of");
+
+    unsigned char head[4];
+    memset(head, 0xAA, sizeof(head));
+
+    size_t had = recon_fs_read_head("/", "/Users/Documents/thing.bin",
+        head, sizeof(head));
+
+    check(had == sizeof(head), "it reads as many as were asked for");
+    check(memcmp(head, HEADER, sizeof(head)) == 0,
+        "and they are the file's own bytes, NUL and all");
+
+    /* Asking for more than there is gives what there is. */
+    unsigned char all[64];
+    had = recon_fs_read_head("/", "/Users/Documents/thing.bin", all,
+        sizeof(all));
+    check(had == sizeof(HEADER), "asking for more than there is gives the lot");
+
+    /* And a file that is not there is nothing, not a failure to notice. */
+    check(recon_fs_read_head("/", "/Users/Documents/nothing.bin", all,
+            sizeof(all)) == 0,
+        "a file that is not there reads as nothing");
+}
+
 int main(void) {
     char root[] = "/tmp/reconos-test-XXXXXX";
     if (mkdtemp(root) == NULL) {
@@ -627,6 +677,7 @@ int main(void) {
     test_reporting_cannot_report();
     test_clipboard();
     test_private_files();
+    test_reading_the_front_of_a_file();
 
     recon_fs_finish();
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.38
+    VERSION 0.4.39
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -334,6 +334,24 @@ add_executable(recon_fs_tests
 
 target_include_directories(recon_fs_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# The Recycle Bin, which nothing ran at all.
+#
+# `coverage.sh --zero` listed fourteen functions of recon_fs.c that no suite
+# reached, and they were the whole of the bin. It is worth its own file rather
+# than more of test_fs.c because what it is for is different: every other part
+# of that file either works or says it did not, and the bin's entire job is
+# that deleting is *recoverable* -- which fails silently, and costs somebody
+# their files when it does.
+add_executable(recon_trash_tests
+    tests/test_trash.c
+    src/recon_fs.c
+    src/recon_error.c)
+
+target_include_directories(recon_trash_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_test(NAME recycle-bin COMMAND recon_trash_tests)
 
 # The registry's failures are quiet -- a value that reads back wrong makes the
 # desktop behave slightly oddly forever and nobody connects the two -- so it is

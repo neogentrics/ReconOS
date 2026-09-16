@@ -9,6 +9,75 @@ way for the two to disagree.
 
 ---
 
+## v0.4.39 — the Recycle Bin, which nothing had ever run
+
+`scripts/coverage.sh --zero` lists the functions no suite reaches. **Fourteen
+of them were the bin** — `recon_fs_trash`, `_restore`, `_purge`, `_empty`,
+`_origin`, `_count`, `_is_trash`, `_usage` and their per-volume versions. The
+whole of it, untouched.
+
+It is worth its own file rather than more of `test_fs.c` because what it is for
+is different. Every other part of `recon_fs.c` either works or reports that it
+did not; **the bin's entire job is that deleting is recoverable**, and the way
+that breaks is silent. A restore that puts a file somewhere else, a second file
+with the same name landing on the first, a purge that misses — none of those
+announce themselves. Somebody finds out when they go looking for something that
+is not there.
+
+**56 checks**, held to the sentences in `include/recon_fs.h`, which is unusually
+specific and every line of which is a claim:
+
+| the claim | what it costs when it breaks |
+|---|---|
+| *"Refuses /System, and refuses the bin itself"* | the system, or a bin inside a bin |
+| *"Fails if something is there now"* | a restore that silently replaces the file somebody made since |
+| *"restored or purged, not deleted again"* | something in the bin going into the bin |
+| *"the name in the bin is made unique"* — from the source | two files called the same thing, and the count says one |
+
+That last one is the classic way a bin loses a file, and it has a test of its
+own: two `report.txt` from different folders, and both sets of contents have to
+still be in there afterwards.
+
+A folder goes in whole and comes back whole, too — with a file two levels down,
+because that is where a bin that moves entries one at a time drops the ones it
+did not reach.
+
+### The percentage barely moved, and that is the measurement's shape
+
+`recon_fs.c` went from **46.82% to 48.94%** of 848 lines, which looks like
+almost nothing for 56 checks. It is not: `coverage.sh` reports *the most any
+single suite runs of that file*, deliberately, because gcov will not merge
+counters — and this is a separate suite, so the figure is the maximum of two
+suites that cover different halves.
+
+**The number it exists to answer moved properly: fourteen functions at zero,
+now none.** Its own header says so — *"0% means nothing runs it"* — and that is
+the question, not the percentage.
+
+The last one to fall was not the bin at all. `recon_fs_read_head` reads the
+first bytes of a file without reading the file, and its own header warns that
+treating them as a string *"is how a NUL in the middle of a PNG turns into a
+truncated read nobody notices"* — so its test writes a header with a NUL in the
+middle and requires it back whole. It went into `test_fs.c`, where it belongs.
+
+### Two guards on /System, and the suite can only see one
+
+Cutting `path_is_protected` out of `recon_fs_trash` leaves the suite passing,
+because the `recon_fs_rename` it finishes with refuses a structural path anyway.
+Defence in depth working — and written beside the test so a green run is not
+read as proof of the bin's own guard. The guard below it has one guard and does
+bite: cut it out and *"cannot be deleted again"* fails.
+
+**And the first two mutations that reported a gap were both wrong.**
+`path_is_protected` is guarded in two places in the file and the harness took
+the first, in a different function entirely; a second mutation was typed from
+memory and silently matched nothing. A mutation that does not apply reports as
+a hole in the tests, which is the most misleading thing a harness can do — so
+the third version cuts the text out *between two anchors read from the file*
+rather than writing it.
+
+---
+
 ## v0.4.38 — sockets, and the claim nobody could test
 
 The kernel took five socket numbers on 15 September and they had **no caller

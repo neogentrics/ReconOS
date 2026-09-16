@@ -3,10 +3,10 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.4.38-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
-[![release](https://img.shields.io/badge/latest_release-v0.4.38-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.38)
+[![version](https://img.shields.io/badge/version-0.4.39-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.4.39-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.39)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-46_suites,_1971_checks-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-47_suites,_1971_checks-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-313-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
@@ -86,6 +86,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.39** | **The Recycle Bin, which nothing had ever run.** `coverage.sh --zero` listed fourteen functions of `recon_fs.c` that no suite reached, and they were the whole of the bin — the one part of the filesystem whose entire job is that deleting is *recoverable*, and which fails silently when it is not. **56 checks**, held to the sentences in the header: it refuses /System and refuses itself, a restore will not replace what is there now, and two files called the same thing both survive. **Fourteen functions at zero, now none** — the percentage barely moved because `coverage.sh` reports the most any *single* suite runs, which is the measurement's shape rather than the work's |
 | **0.4.38** | **Sockets, and the claim nobody could test.** The kernel took five socket numbers and they had no caller; this is the caller. It also settles what came with them — *the claim that a socket fd works with read/write is argued, not measured*, because a kernel thread has no process and `fd_install` fails there. An installed disk, booted by itself, now reports *a descriptor, closed once, refused twice; listening, and accept says EAGAIN* — and closing twice is the sharp half, because a socket that was never really in the descriptor table closes as many times as it likes. The library adds almost nothing, which is the design: a socket is a `struct file`, so `posix.c` took no changes at all. **3,006 of 3,076 call sites**, sockets down from 35 to 14 |
 | **0.4.37** | **A cell wraps inside its column.** The board said a long cell ran the row off the side; half of that was already fixed, and what remained was worse — a cell that overran its column pushed the pen along, so every column after it on that row stopped lining up. Cells break at their own column edge now, and a row is as tall as its tallest cell. A column is measured twice: the widest whole cell it wants, and the widest single **word** it cannot go below, because scaling columns proportionally could otherwise put one narrower than a word in it and draw two cells on top of each other. **A wrapper was written, tested with 836 checks, and thrown away** — `recon_web.c` already wraps, and its own comment says why a second copy is the thing to avoid. Checked by photograph, which is what found the overlap |
 | **0.4.36** | **What installing a package actually does.** `recon_package` had 21 checks on reading a manifest and none on doing anything with it — the install path is the one that takes somebody else's shared object and loads it into this process. **73 checks** now, on installing, upgrading, verifying and removing. Every claim the header makes fails silently when it breaks, so each was broken on purpose: eight mutations, eight caught. **The one that could not be broken is worth more than the eight that could** — deleting install's leave-what-is-already-there check changes nothing, because `recon_fs_copy` refuses an existing destination anyway, so that property has two independent guards and no mutation of one can show which held |
