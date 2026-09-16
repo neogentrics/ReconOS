@@ -37,6 +37,7 @@ Nothing is marked built on the strength of having been written.
 | Streaming responses | **built** | `serve.c` — 23 checks; a declared length is a promise |
 | Form decoding, and the write side | **built** | `form.c` — 39 checks; `POST /api/name` renames the machine |
 | Conditional requests and caching | **built** | `cache.c` — ETag, `If-None-Match`, 304, `Cache-Control` |
+| Service registry | **built** | `service.c` — the web server is one service; `/api/services` reports them |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 

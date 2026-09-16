@@ -18,10 +18,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.5.0 |
+| **Version** | 0.6.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 266 across seven suites |
+| **Checks** | 303 across eight suites |
 | **Kernel** | 0.2.41 |
 
 ---
@@ -49,6 +49,7 @@ architecture document asks for:
 | `GET /` | the dashboard — what this machine is, what it has done, and a form that renames it |
 | `GET /api/status` | the same facts as JSON, from the same structure |
 | `GET /health` | `ok`, for something that is not a person |
+| `GET /api/services` | every registered service: state, polls, faults, restarts |
 | `POST /api/name` | renames the machine, validated by the same code that numbers a parallel |
 | anything else | a file from `/System/Web` on the volume, or 404 |
 
@@ -133,6 +134,7 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
 | `server_http_cache` | 31 | validators, and reading an If-None-Match |
+| `server_service` | 37 | services, their states, and the restart that has to stop |
 
 **Each was watched failing before it was believed.** The naming suite was run
 against the `atoi` shape its header rejects and nine cases failed; the HTTP
@@ -188,6 +190,9 @@ server's specification.
 - **One connection at a time.** A slow client blocks every other, which is a
   denial of service costing the attacker one socket. It needs non-blocking
   sockets, and today `accept` is the only call that reports readiness.
+- **No process supervision**, and there cannot be: nothing in user mode can
+  start a program. `server/service.c` supervises what this one process does,
+  which is a different thing and says so.
 - **No peer discovery**, so the naming above has nothing to discover yet. It
   needs broadcast, which needs the same datagram call as DNS.
 
@@ -199,6 +204,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.6.0** | **A service registry, and what it refuses to pretend.** Nothing on this system can start a program, so this supervises what *this process* does rather than daemons — the web server is one service, and discovery and DNS will register beside it without the main loop changing. A failing service is restarted a bounded number of times and then stays failed: restarting forever turns a crash into a crash loop, which reads as healthy and does nothing. |
 | **0.5.0** | **Conditional requests.** A strong ETag from a hash of the content, because there is no `stat` and so no modification time to use — which costs a second read and buys a tag that survives a file being touched and changes when a same-length edit is made. A client offering the right tag gets 304 and no body. The bytes are hashed again on the way out, because a wrong validator is cached and served until it expires. |
 | **0.4.0** | **A write side.** `urlencoded` form decoding, and `POST /api/name` renames the machine — validated by `server_name_split`, so one idea of a legal name serves both renaming and parallel numbering. A field given twice has **no** value, because two values is not an answer and choosing one is how a value walks past a filter. |
 | **0.3.0** | **Streaming, and a promise that is checked.** A handler writes into a sink as it goes, so a response is no longer limited to what a program can hold — the file handler streams and serves files far past the old cap. A declared length that is not delivered closes the connection rather than desynchronising the next request. Chunked for HTTP/1.1, close-delimited for 1.0. |

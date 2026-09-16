@@ -48,6 +48,7 @@
 #include "../http/files.h"
 #include "../http/form.h"
 #include "../include/recon_server.h"
+#include "../service.h"
 
 /* Return codes, in the workstation's numbering so that a reader of one file
  * recognises them in the other. The server's own start at 70. */
@@ -83,6 +84,16 @@ struct server_facts {
 };
 
 static struct server_facts FACTS;
+
+/*
+ * What the supervisor holds on this machine.
+ *
+ * One service today. The shape is the point: when discovery exists it
+ * registers here, and when the datagram call arrives DNS and DHCP register
+ * beside it, and the loop at the bottom of `main` does not change.
+ */
+static struct supervisor SUPERVISOR;
+
 
 static const char PAGE_HEAD[] =
 	"<!doctype html>\n<meta charset=\"utf-8\">\n"
@@ -326,16 +337,133 @@ static int handle_set_name(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/*
+ * What the supervisor holds, as JSON.
+ *
+ * This is the Services and Daemon Inspector the architecture document asks
+ * for, at the size it can honestly be: every registered service, its state,
+ * how often it has been asked, how often it has faulted, and how often it has
+ * been restarted.
+ *
+ * **`faults` and `restarts` are both here on purpose.** A service showing
+ * `running` with three restarts behind it is not the same machine as one
+ * showing `running` with none, and a console that reported only the state
+ * would say they were.
+ */
+static int handle_services(const struct http_request *r, const char *body,
+                           size_t body_len, struct http_response *out,
+                           void *ctx)
+{
+	static char json[2048];
+	struct supervisor *sup = (struct supervisor *)ctx;
+	unsigned running = 0, failed = 0, refused = 0;
+	unsigned i;
+	int n = 0, m;
+
+	(void)r; (void)body; (void)body_len;
+
+	supervisor_tally(sup, &running, &failed, &refused);
+
+	m = snprintf(json, sizeof(json),
+	             "{\"running\":%u,\"failed\":%u,\"refused\":%u,"
+	             "\"services\":[",
+	             running, failed, refused);
+	if (m < 0 || (size_t)m >= sizeof(json))
+		return HTTP_EBODY_LONG;
+	n = m;
+
+	for (i = 0; i < sup->count; i++) {
+		const struct service *s = sup->services[i];
+		const struct service_status *st = &sup->status[i];
+
+		m = snprintf(json + n, sizeof(json) - (size_t)n,
+		             "%s{\"name\":\"%s\",\"what\":\"%s\","
+		             "\"state\":\"%s\",\"reason\":%d,\"polls\":%lu,"
+		             "\"faults\":%lu,\"restarts\":%lu}",
+		             i ? "," : "", s->name, s->what,
+		             service_state_name(st->state), st->last_reason,
+		             st->polls, st->faults, st->restarts);
+		if (m < 0 || (size_t)(n + m) >= sizeof(json))
+			return HTTP_EBODY_LONG;
+		n += m;
+	}
+
+	m = snprintf(json + n, sizeof(json) - (size_t)n, "]}\n");
+	if (m < 0 || (size_t)(n + m) >= sizeof(json))
+		return HTTP_EBODY_LONG;
+	n += m;
+
+	http_response_simple(out, 200, "application/json", json, (size_t)n);
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
 	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS },
 	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS },
 	{ "GET",  "/health",      1, handle_health,    0, 0 },
+	{ "GET",  "/api/services", 1, handle_services,  0, &SUPERVISOR },
 	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
 	 * the volume can serve something larger than this program's memory. */
 	{ "GET", "",              0, 0, http_files_handler,
 	  (void *)&SITE_FILES },
+};
+
+/* --- the web server, as a service ------------------------------------------ */
+
+struct web_service {
+	int listener;
+	const struct http_site *site;
+};
+
+static struct web_service WEB;
+
+static int web_start(void *ctx)
+{
+	struct web_service *w = (struct web_service *)ctx;
+
+	w->listener = http_listen(80);
+	if (w->listener < 0)
+		return -1;
+	return SERVICE_OK;
+}
+
+/*
+ * One round of serving.
+ *
+ * Answers `SERVICE_OK` for both "served one" and "nobody was waiting", because
+ * neither is a fault -- `accept` on this kernel says `EAGAIN` with nobody
+ * there, and a supervisor told that was a fault would restart the listener
+ * every time the machine was quiet.
+ *
+ * The count that the loop and the dashboard read is `FACTS.served`, incremented
+ * here, so there is one number rather than the supervisor's and the page's.
+ */
+static int web_poll(void *ctx)
+{
+	struct web_service *w = (struct web_service *)ctx;
+	int rc = http_serve_once(w->listener, w->site);
+
+	if (rc < 0)
+		return -2;		/* the listener itself failed */
+	if (rc > 0)
+		FACTS.served++;
+	return SERVICE_OK;
+}
+
+static void web_stop(void *ctx)
+{
+	struct web_service *w = (struct web_service *)ctx;
+
+	if (w->listener >= 0)
+		close(w->listener);
+	w->listener = -1;
+}
+
+static const struct service WEB_SERVICE = {
+	"web", "serves the console and the volume on port 80",
+	web_start, web_poll, web_stop, &WEB
 };
 
 /* --- the volume this role writes to --------------------------------------- */
@@ -485,6 +613,7 @@ int main(void)
 	char line[200];
 	i64 answer, fd, mapped;
 	int listener;
+	unsigned started;
 
 	/* --- the screen, exactly as the workstation does it ------------------ */
 
@@ -560,8 +689,29 @@ int main(void)
 		say(line);
 	}
 
-	listener = http_listen(80);
-	if (listener < 0) {
+	site.routes = ROUTES;
+	site.route_count = sizeof(ROUTES) / sizeof(ROUTES[0]);
+	site.ctx = &FACTS;
+	site.server_name = "ReconOS";
+	site.bytes_sent = &FACTS.bytes_out;
+
+	/* --- the services ------------------------------------------------------ */
+
+	WEB.listener = -1;
+	WEB.site = &site;
+
+	if (supervisor_add(&SUPERVISOR, &WEB_SERVICE) != SERVICE_OK) {
+		/* The registry refused the one service this role has. Nothing
+		 * below can work, and saying which is more use than a blank
+		 * screen. */
+		say("  the supervisor: would not register the web server\n");
+		return NO_LISTENER;
+	}
+
+	started = supervisor_start(&SUPERVISOR, (unsigned long long)recon_time());
+	listener = WEB.listener;
+
+	if (started == 0) {
 		/* Said plainly rather than drawn over. A server role whose
 		 * server did not start is the one fact worth stopping for. */
 		say("  the web server: could not listen on :80\n");
@@ -572,12 +722,6 @@ int main(void)
 		         "Serving on port 80. / and /api/status, and files from "
 		         WEB_ROOT ".");
 	}
-
-	site.routes = ROUTES;
-	site.route_count = sizeof(ROUTES) / sizeof(ROUTES[0]);
-	site.ctx = &FACTS;
-	site.server_name = "ReconOS";
-	site.bytes_sent = &FACTS.bytes_out;
 
 	/* --- the first screen -------------------------------------------------- */
 
@@ -627,19 +771,42 @@ int main(void)
 	 * When the kernel can report readiness on more than a listener, this
 	 * is the loop that changes, and `docs/WEB.md` carries the row.
 	 */
+	/*
+	 * The supervisor's round, rather than a loop that serves.
+	 *
+	 * The web server is one service among what will be several, and this
+	 * loop knows nothing about it beyond that: `supervisor_poll` asks each
+	 * registered service to do a little work and records what it said. When
+	 * discovery exists it registers itself here and nothing in this loop
+	 * changes; when DNS and DHCP become possible, the same.
+	 *
+	 * **It yields when nothing happened, and not otherwise.** A round that
+	 * served a request is followed immediately by another, because a client
+	 * with a second request is waiting now. A round that served nothing
+	 * gives the processor back, for the reason the workstation's idle loop
+	 * gives: a processor held at a hundred per cent to wait for a
+	 * connection is a fan running and an hour less battery.
+	 */
 	for (;;) {
-		int rc = http_serve_once(listener, &site);
+		unsigned long before = FACTS.served;
+		unsigned running = 0;
 
-		if (rc < 0) {
-			say("  the web server: the listener failed\n");
+		supervisor_poll(&SUPERVISOR, (unsigned long long)recon_time());
+
+		supervisor_tally(&SUPERVISOR, &running, 0, 0);
+		if (running == 0) {
+			/* Everything registered has failed or refused. There
+			 * is nothing left for this round to do, and saying so
+			 * once is more use than spinning silently. */
+			say("  the supervisor: nothing is running\n");
+			draw(&canvas, &facts, served_line, sizeof(served_line));
 			return NO_LISTENER;
 		}
-		if (rc == 0) {
+
+		if (FACTS.served == before) {
 			recon_yield();
 			continue;
 		}
-
-		FACTS.served++;
 
 		/* Reported on every request, because this line is the
 		 * measurement the whole exercise exists for. */

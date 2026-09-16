@@ -44,7 +44,7 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 266 checks, **running on the machine** |
+| Web / API server | server | **built** | `server/http/` — 303 checks, **running on the machine** |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
@@ -84,7 +84,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | Parallel naming (`M16` → `M17`) | server | **built** | `server/identity.c` — 34 checks |
 | Peer discovery on first boot | server | **blocked** | no broadcast; sweep is the way through |
 | Configuration clone onto unlike hardware | server | spec | discovery first |
-| Service supervisor | server | not started | needed before there is a second service |
+| Service supervisor | server | **partial** | `server/service.c` — 37 checks. In-process only: **nothing can start a program**, so this is not process supervision and does not pretend to be |
 | Cron / job scheduler | server | **blocked** | no user-mode timer |
 | Structured REST / RPC management API | server | **partial** | reads and one write: `POST /api/name` renames the machine |
 | Hypervisor daemon | server | not started | needs VT-x from the kernel |
@@ -103,7 +103,7 @@ the same two things: a static file handler and a JSON API.
 | Server Manager dashboard | **partial** | one page, real numbers, and a form that changes something |
 | Storage / RAID manager | spec | waits on the kernel's RAID |
 | Network and firewall centre | spec | |
-| Services and daemon inspector | spec | waits on the supervisor |
+| Services and daemon inspector | **partial** | `GET /api/services` — state, polls, faults, restarts |
 | Directory and user manager | spec | waits on LDAP |
 | Performance monitor | spec | `SYS_MACHINE` gives some of it today |
 | Event viewer and log explorer | spec | waits on the audit daemon |

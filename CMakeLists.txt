@@ -972,6 +972,22 @@ add_executable(recon_server_cache_tests
 
 add_test(NAME server_http_cache COMMAND recon_server_cache_tests)
 
+# Services, their states, and the restart that has to stop.
+#
+# Pure: the services are fakes whose behaviour the test sets, and the clock is
+# a number the test supplies -- so a service can be run through fifty rounds,
+# made to fail on the first, and checked in microseconds.
+#
+# The case it exists for is the crash loop. A supervisor that restarts whatever
+# stops turns one crash into an endless one: the dashboard says `running`, the
+# log fills with identical lines nobody reads, and the machine looks healthy
+# while doing nothing. The bound is checked, and so is what it leaves behind.
+add_executable(recon_server_service_tests
+    server/service.c
+    server/tests/test_service.c)
+
+add_test(NAME server_service COMMAND recon_server_service_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the
