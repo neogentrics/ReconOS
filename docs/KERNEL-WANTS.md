@@ -16,6 +16,89 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## `connect` says yes to a closed port, so nothing can find anything
+
+**Where:** building peer discovery for the server role, 16 September 2026. Hit
+before a line of it could be written, and **measured on the machine rather than
+deduced** -- the code suggested it and a boot confirmed it.
+
+*Filed from the server role. So is the datagram entry below it, for the same
+reason `docs/ROLES.md` gives.*
+
+### The measurement
+
+Three calls, one boot, printed by `server_init.c`:
+
+```
+the client side: connect(closed port)=0 connect(own :80)=0 write=-1 read=0
+```
+
+- **`connect` to 10.0.2.2 port 9, where nothing is listening: `SYS_OK`.**
+- `connect` to this machine's own listener, which certainly exists: `SYS_OK`.
+- A `write` immediately after the second: **-1**.
+
+So the two cases are indistinguishable, and the one that should have worked was
+not usable when `connect` returned.
+
+### What it is
+
+`socket_connect` in `kernel/core/socket.c` calls `tcp_open` and returns as soon
+as it has a connection index:
+
+```c
+s->conn = tcp_open(s->local_ip, s->local_port, addr, port);
+if (s->conn < 0)
+        return false;
+s->connected = true;
+return true;
+```
+
+`tcp_open` starts a handshake. It does not finish one. So `SYS_OK` means *a SYN
+was sent*, which is not what any caller of `connect` means by it -- and there is
+no call that waits for the handshake, and none that reports its outcome. A
+program cannot ask whether it is connected, and `tcp_write` refuses anything not
+`TCP_ESTABLISHED`, so the only signal is a write that fails for a reason that
+might equally be a dead peer.
+
+**This is the mirror of `accept`.** That one answers `EAGAIN` and says so in
+`sys/socket.h`, which is honest and lets a caller poll. `connect` answers `OK`
+and tells a caller nothing, which is the version that cannot be worked around.
+
+### What it stops
+
+- **Peer discovery**, which is the one feature `docs/ROLES.md` describes at
+  length: a machine finding another ReconOS on the wire and offering to become
+  its parallel. A sweep cannot tell who answered.
+- **A reverse proxy**, and anything else that opens an outbound connection.
+- It is the whole of the client side. Everything this role has proved so far is
+  the server half.
+
+### What would answer it
+
+Smallest first, and the first is probably enough:
+
+**`SYS_CONNECT` returns `SYS_EAGAIN` while the handshake is in flight**, `SYS_OK`
+once established, and a refusal when the peer said no. A caller then polls
+exactly as it already does for `accept`, with no new call and no new idea --
+and the two halves of the socket interface start behaving the same way, which
+is worth something on its own.
+
+Failing that, anything that lets a program ask the state of a connection.
+
+### The other half of the same problem
+
+**A program cannot learn its own address.** `struct recon_machine` carries the
+processor, the memory, the page size and the architecture, and nothing about
+the network. The kernel knows -- it prints `net: eth0 is 10.0.2.15, via
+10.0.2.2` at boot -- and there is no way to ask.
+
+So even with a working `connect`, discovery would not know what to sweep. An
+address and a mask on `struct recon_machine` would answer it; the structure is
+already grown by appending, and `recon_machine_facts` already handles a kernel
+newer than its caller.
+
+---
+
 ## A datagram cannot carry an address, so DNS and DHCP cannot be written
 
 **Where:** opening the server role on branch `server`, 15 September 2026. Hit

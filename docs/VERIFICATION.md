@@ -182,3 +182,28 @@ None.
 - **Why it belongs here** Twice in a row the build system reported success for
   work it had not done, and both times the only thing that noticed was a figure
   that could not be true. `rc=0` is a claim like any other.
+
+### VF-009 -- "`connect` exists, so this is buildable today"
+
+- **Found in** `docs/WEB.md`, written by this seat on 15 September. **Found by**
+  measuring `connect` on the machine a day later.
+- **What it was** The reverse-proxy row read *`connect` exists, so this is
+  buildable today*, and the discovery design in `docs/SERVER.md` was built on
+  the same assumption -- a TCP sweep, described as the way through precisely
+  because it "works with exactly the five calls that exist today".
+- **What is actually true** `connect` returns `SYS_OK` for a port nothing is
+  listening on. Measured: `connect(closed port)=0`, and a `write` straight after
+  a connect that *should* have worked answers -1, because the handshake has not
+  finished and there is no way to wait for it. A sweep cannot tell who answered.
+  Neither a proxy nor discovery is buildable.
+- **How the wrong claim was arrived at** By checking that the *call* existed
+  rather than what it did. The five syscalls were verified against the enum --
+  carefully, in the entry that opens this file -- and "exists" was then read as
+  "works as a caller would expect". A present call with surprising semantics
+  passes every check that asks whether it is present.
+- **Why it belongs here** It is the same shape as VF-004, and by the same seat.
+  That one was a limitation that had stopped being true; this is a capability
+  that was never true. Both were written down as fact after a check that could
+  not have distinguished them.
+- **Filed** as its own entry at the top of `docs/KERNEL-WANTS.md`, with the
+  measurement. No number claimed; it is the kernel's.

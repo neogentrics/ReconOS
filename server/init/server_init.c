@@ -466,6 +466,87 @@ static const struct service WEB_SERVICE = {
 	web_start, web_poll, web_stop, &WEB
 };
 
+/* --- measuring the client side, which nothing has ever exercised ----------- */
+
+/*
+ * What `connect` actually does on this kernel.
+ *
+ * Everything this role has proved so far is the *server* side: bind, listen,
+ * accept, and bytes over a connection somebody else opened. Discovery needs
+ * the other half -- opening a connection to somebody else -- and reading
+ * `socket_connect` suggests it does not mean what a caller would assume: it
+ * calls `tcp_open` and returns, without waiting for the handshake.
+ *
+ * Reading is not measuring, so this measures. Three cases, and the numbers go
+ * to the serial console where they can be compared against what the code
+ * appeared to say:
+ *
+ *   a port nothing is listening on   -- does `connect` report success anyway?
+ *   this machine's own web server    -- does a connection that should work?
+ *   a write straight after connect   -- is the connection usable yet?
+ *
+ * It runs once at boot and costs two sockets. It is here rather than in a suite
+ * because a suite on the host measures the *host's* sockets, which answer these
+ * questions differently and correctly -- which is exactly why reading the code
+ * and running a host suite both failed to catch this.
+ *
+ * --- What it found, 16 September 2026 ---
+ *
+ *     the client side: connect(closed port)=0 connect(own :80)=0
+ *                      write=-1 read=0
+ *
+ * `connect` answers `SYS_OK` for a port nothing is listening on, and the
+ * connection that should have worked was not usable when it returned.
+ * `socket_connect` calls `tcp_open`, which starts a handshake and does not
+ * finish one. Filed at the top of `docs/KERNEL-WANTS.md`.
+ *
+ * --- Why it stays in, now that the answer is known ---
+ *
+ * **It is a standing check on a gap somebody else will close.** When
+ * `SYS_CONNECT` learns to say `EAGAIN` while a handshake is in flight, the
+ * first number on this line changes, and whoever boots this next finds out
+ * without going looking. A limitation recorded only in a document is a
+ * limitation that stays recorded after it stops being true -- which this role
+ * has now done twice, as VF-004 and VF-009.
+ */
+static void measure_the_client_side(void)
+{
+	char line[220];
+	i64 fd, rc_closed = 0, rc_open = 0, wrote = 0, red = 0;
+	char buf[64];
+
+	/* 10.0.2.2 is the gateway QEMU's user networking provides; port 9 is
+	 * discard and nothing here serves it. A connect that reports success
+	 * to a closed port is a connect that cannot be used to find anything. */
+	fd = recon_socket(1);
+	if (fd >= 0) {
+		rc_closed = recon_connect((int)fd, 0x0A000202u, 9);
+		recon_close((int)fd);
+	} else {
+		rc_closed = -999;
+	}
+
+	/* This machine's own listener, which is certainly there. */
+	fd = recon_socket(1);
+	if (fd >= 0) {
+		rc_open = recon_connect((int)fd, 0x0A00020Fu, 80);
+		if (rc_open == 0) {
+			wrote = recon_write((int)fd,
+			                    "GET /health HTTP/1.0\r\n\r\n", 24);
+			red = recon_read((int)fd, buf, sizeof(buf));
+		}
+		recon_close((int)fd);
+	} else {
+		rc_open = -999;
+	}
+
+	snprintf(line, sizeof(line),
+	         "  the client side: connect(closed port)=%ld"
+	         " connect(own :80)=%ld write=%ld read=%ld\n",
+	         (long)rc_closed, (long)rc_open, (long)wrote, (long)red);
+	say(line);
+}
+
 /* --- the volume this role writes to --------------------------------------- */
 
 /*
@@ -709,6 +790,9 @@ int main(void)
 	}
 
 	started = supervisor_start(&SUPERVISOR, (unsigned long long)recon_time());
+
+	/* After the listener exists, so the second case has something to reach. */
+	measure_the_client_side();
 	listener = WEB.listener;
 
 	if (started == 0) {

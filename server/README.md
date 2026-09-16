@@ -18,7 +18,7 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.6.0 |
+| **Version** | 0.7.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
 | **Checks** | 303 across eight suites |
@@ -193,8 +193,16 @@ server's specification.
 - **No process supervision**, and there cannot be: nothing in user mode can
   start a program. `server/service.c` supervises what this one process does,
   which is a different thing and says so.
-- **No peer discovery**, so the naming above has nothing to discover yet. It
-  needs broadcast, which needs the same datagram call as DNS.
+- **No peer discovery, and not for the reason this file used to give.** It
+  needs broadcast — and the TCP sweep that was written down as the way around
+  that does not work either. Measured on the machine: `connect` answers
+  `SYS_OK` for a port nothing is listening on, so a probe cannot tell a
+  reachable host from an unreachable one, and a write straight after a
+  successful `connect` fails because the handshake has not finished. A program
+  also cannot learn its own address, so it would not know what to sweep. Both
+  are filed in `docs/KERNEL-WANTS.md`; the wrong claim is VF-009.
+- **No outbound connections at all**, for the same reason. Everything this role
+  has proved is the server half of a socket.
 
 ---
 
@@ -204,6 +212,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.7.0** | **The client side, measured — and it does not work.** `connect` answers `SYS_OK` for a port nothing is listening on and returns before the handshake, so a write straight after it fails. Discovery, a reverse proxy and every outbound connection are blocked, and the TCP sweep this role had written down as the way around the missing broadcast was never possible. The measurement stays in as a standing check, so the day the kernel fixes it somebody finds out without looking. |
 | **0.6.0** | **A service registry, and what it refuses to pretend.** Nothing on this system can start a program, so this supervises what *this process* does rather than daemons — the web server is one service, and discovery and DNS will register beside it without the main loop changing. A failing service is restarted a bounded number of times and then stays failed: restarting forever turns a crash into a crash loop, which reads as healthy and does nothing. |
 | **0.5.0** | **Conditional requests.** A strong ETag from a hash of the content, because there is no `stat` and so no modification time to use — which costs a second read and buys a tag that survives a file being touched and changes when a same-length edit is made. A client offering the right tag gets 304 and no body. The bytes are hashed again on the way out, because a wrong validator is cached and served until it expires. |
 | **0.4.0** | **A write side.** `urlencoded` form decoding, and `POST /api/name` renames the machine — validated by `server_name_split`, so one idea of a legal name serves both renaming and parallel numbering. A field given twice has **no** value, because two values is not an answer and choosing one is how a value walks past a filter. |

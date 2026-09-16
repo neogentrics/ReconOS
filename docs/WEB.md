@@ -121,7 +121,7 @@ can run, not by what it can send.
 | **Long-polling** | **blocked** | needs a request to be parked without occupying the only process. See concurrency below. |
 | **CGI-style external programs** | **blocked** | nothing in user mode can start a program — `KERNEL-WANTS.md` carries the entry. |
 | **FastCGI / a persistent app backend** | **blocked** | same, plus a socket to talk to it over. |
-| **Reverse proxy to another machine** | specified | `connect` exists, so this is buildable today. The docx names it explicitly. |
+| **Reverse proxy to another machine** | **blocked** | `connect` exists and does not work: it answers `SYS_OK` for a closed port and returns before the handshake. Measured 16 September; `KERNEL-WANTS.md` has it. This row previously said *buildable today*, which was wrong — see VF-009. |
 | **Template rendering** | specified | with escaping by default; a template engine that escapes on request is one that is forgotten once. |
 
 ### The two that shape the others

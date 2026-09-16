@@ -50,7 +50,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
 | DDNS | server | **blocked** | follows DNS |
 | NTP / PTP time sync | server | **blocked** | same; and no user-mode timer |
-| Reverse proxy | server | spec | `connect` exists, so buildable today |
+| Reverse proxy | server | **blocked** | `connect` answers OK for a closed port — see `KERNEL-WANTS.md` |
 | Multi-queue NIC drivers | kernel | **blocked** | virtio-net only |
 | LACP bonding, VLAN, bridging | kernel | not started | firewall role needs it first |
 | Stateful firewall / NAT | kernel | not started | firewall role owns it |
@@ -82,7 +82,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | subsystem | owner | status | note |
 |---|---|---|---|
 | Parallel naming (`M16` → `M17`) | server | **built** | `server/identity.c` — 34 checks |
-| Peer discovery on first boot | server | **blocked** | no broadcast; sweep is the way through |
+| Peer discovery on first boot | server | **blocked** | no broadcast, **and the sweep does not work either**: `connect` cannot tell a reachable host from an unreachable one, and nothing can learn its own address |
 | Configuration clone onto unlike hardware | server | spec | discovery first |
 | Service supervisor | server | **partial** | `server/service.c` — 37 checks. In-process only: **nothing can start a program**, so this is not process supervision and does not pretend to be |
 | Cron / job scheduler | server | **blocked** | no user-mode timer |
@@ -323,26 +323,48 @@ a name that names no family gets no parallel:
 Counting goes *upward from the peer*, never from one. A parallel of `M16`
 handed `M1` would read as the original to anyone looking at the pair.
 
-### Finding the peer — blocked, with a way through
+### Finding the peer — blocked, and the way through was not one
 
-Broadcast is the obvious mechanism and is not available. Two candidates, and
-the choice is deferred rather than guessed:
+Broadcast is the obvious mechanism and is not available: no system call opens an
+unconnected datagram. That was known.
 
-**A sweep over TCP.** Connect to a known port on each address in the local
-range and see who answers. Works with exactly the five calls that exist today,
-needs nothing from the kernel, and is how this will be built if the datagram
-entry is not answered first. It is slower and noisier than broadcast, and on a
-wide subnet it is slow enough to be felt on a first boot — a `/16` is 65,534
-connects. Bounded, then, and the bound is a decision rather than a constant to
-be picked here.
+**This file previously said a TCP sweep was the way through** — connect to a
+known port on each address in the local range and see who answers, "with exactly
+the five calls that exist today, needs nothing from the kernel". That was
+written on 15 September and is wrong. It is recorded as VF-009 in
+`docs/VERIFICATION.md` rather than quietly deleted, because the way it was
+arrived at is worth keeping: the five calls were verified to *exist*, carefully,
+and "exists" was then read as "works as a caller would expect".
 
-**UDP broadcast**, once the datagram call exists. Correct, immediate, and how
-this would be done if it could be.
+Measured on the machine on 16 September:
 
-The second is better and the first is available. Since discovery has to run
-*before the first screen* — `ROLES.md` is explicit about that — the sweep is
-worth building rather than waiting on, and worth writing so that the transport
-can be replaced without the discovery logic changing.
+```
+the client side: connect(closed port)=0 connect(own :80)=0 write=-1 read=0
+```
+
+**`connect` answers `SYS_OK` for a port nothing is listening on.** It calls
+`tcp_open`, which starts a handshake and does not finish one, and returns. So
+the reachable host and the unreachable one are indistinguishable, and the
+connection that should have worked was not usable when `connect` returned — the
+write straight after it failed. There is no call that waits for a handshake and
+none that reports its outcome.
+
+A sweep whose probe cannot tell a hit from a miss is not a slow way to discover
+peers. It is not a way to discover peers.
+
+**And there is a second blocker underneath it.** A program cannot learn its own
+address. `struct recon_machine` carries the processor, the memory, the page size
+and the architecture, and nothing about the network — while the kernel prints
+`net: eth0 is 10.0.2.15, via 10.0.2.2` at boot. Even with a working `connect`,
+discovery would not know what range to sweep.
+
+Both are filed at the top of `docs/KERNEL-WANTS.md` with the measurement. The
+smaller fix would answer both halves of the first one at once: **`SYS_CONNECT`
+returning `SYS_EAGAIN` while the handshake is in flight**, exactly as `accept`
+already does, so a caller polls with no new call and no new idea.
+
+Until then discovery is not deferred, it is blocked, and the naming in
+`server/identity.c` has nothing to discover.
 
 ### Cloning — not started
 
