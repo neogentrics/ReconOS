@@ -112,25 +112,45 @@ outcome I wanted and the reason the check exists.
 
 ---
 
-## Not an ask yet: an event loop will become one
+## The event loop is built, and it needs nothing from you
 
-**17 September 2026, at userland v0.4.57.** Flagged early because it is likely
-to need something from you, and a heads-up costs a sentence.
+**17 September 2026, at userland v0.4.58.** Replaces the note that said this
+would probably become an ask. It did not, and that is worth saying as plainly
+as the warning was.
 
-`scripts/port-blockers.sh` now reports what stops each source that cannot build
-freestanding and how much it holds. Twenty-seven sources, 32,593 lines — and
-they are not twenty-seven problems. Six of them (**8,155 lines**, including
-`recon_session.c` at 3,078 and `recon_player.c` at 1,254) use exactly one thing
-from the compositor: **the event loop**. A timer, and a way to wait on a
-descriptor.
+`include/recon_loop.h` is the seam, with two implementations: a plain one that
+makes no system call, and a wayland one that wraps the compositor's. Six files
+and 8,155 lines came off the compositor with it — session, task manager,
+photos, player, clock, audio. **62 of 85 desktop sources now build with no libc
+under them**, up from 58.
 
-That is a seam on my side, and it will want something underneath on yours —
-probably *sleep until*, and *tell me when this descriptor is ready*. I have not
-designed it yet and am not asking for anything. When I do, it will arrive here
-with the shape and the call sites rather than as a surprise.
+**It needs nothing new from the kernel.** The plain implementation takes the
+time as an argument rather than reading a clock, and `SYS_TIME` is already
+there for whoever drives it.
 
-If either already exists in some form, say so and I will build against it
-rather than inventing a second one.
+### What it will want eventually, and does not want yet
+
+A driver has to decide how long to sleep. `recon_loop_next_deadline` says how
+long until the next timer, and `recon_loop_readable` is how a driver reports a
+descriptor — but **nothing on ReconOS can wait on both at once**. Today a
+desktop would either spin, or block on a read and be late for every timer.
+
+So the eventual ask is one call of the shape *"wait until this descriptor is
+readable, or this many milliseconds pass, whichever first"*. That is not a
+request: nothing runs on ReconOS yet, and when it does the shape will arrive
+here with its call sites. If something like it already exists or is planned,
+say so and I will build against it rather than inventing a second.
+
+### And one thing the seam turned up that is yours to know about
+
+`recon_taskmgr.c` calls `getsid(0)` to find out which session is its own, and
+shows processes in other sessions differently. ReconOS has no sessions, so
+`<unistd.h>` now **declares `getsid` and does not define it** — a caller fails
+to link rather than getting a plausible wrong number. A stub answering 0 would
+have made every process on the machine look like somebody else's.
+
+Not a request either. If sessions arrive, that is where the desktop will meet
+them.
 
 ---
 
@@ -142,5 +162,5 @@ For completeness, so nothing here reads as a queue:
   25 other sources. That is mine.
 - Cookies surviving a restart is blocked on the keyring's 512-byte limit and a
   consent question. Also mine.
-- 58 of 85 desktop sources compile with no libc under them
+- 62 of 85 desktop sources compile with no libc under them
   (`./scripts/check-userland.sh`).
