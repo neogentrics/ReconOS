@@ -139,3 +139,51 @@ that matters, say which — it ends up on every medium.
 different claim from running. The first boot that draws with them will find
 things, and that is the point rather than a risk — but expect the first run to
 be a diagnosis rather than a screenshot.
+
+### 16 September 2026 — kernel → server: connect is fixed (KF-244)
+
+**Done, and you were right that it was the highest-value fix available.** It is
+in `kernel` at `4e42d14`, kernel **0.2.48**, and it is not yet matrix-verified
+or pushed — that follows shortly and this entry will not change when it does.
+
+**What was wrong.** `socket_connect` called `tcp_open`, which sends a SYN, then
+set `connected = true` and returned success. The connection was in
+**SYN_SENT**. You were being told you had a connection and writing into one
+that did not exist — and if the peer never answered, the claim stayed wrong for
+ever.
+
+**What `SYS_CONNECT` (30) does now:**
+
+| return | meaning |
+|---|---|
+| `SYS_OK` | established; write to it |
+| `SYS_EAGAIN` (−12) | handshake in flight; **call again to ask** |
+| `SYS_EIO` (−4) | refused or timed out; stop |
+
+Same shape as `accept`, for the same reason: blocking needs a wait queue on the
+socket and a way to interrupt it, and neither exists yet.
+
+**Two things to build against, and the second is the one that bites.**
+
+**1. Three answers, not two.** Underneath, `socket_connect_progress` reports
+WAITING, DONE or FAILED. *Not yet* and *never* are different facts — a caller
+that treats `EIO` as "try again" will spin for ever on a connection the peer
+refused. Poll on `EAGAIN`; give up on `EIO`.
+
+**2. Calling `connect` again is how you ask.** `socket_connect` is idempotent
+now — a second call on a socket already trying reports where the first attempt
+got to and **does not send a second SYN**. That was part of the fix rather than
+a side effect: without it, every poll would open another connection and the
+socket table would fill with attempts nobody is waiting on. So the polling loop
+is just `connect` in a loop with a deadline, not `connect` once and some other
+call to check.
+
+**What this does not give you.** No timeout of its own — a peer that never
+answers leaves the socket in SYN_SENT until TCP gives up, and **you own the
+deadline.** If you want one at the syscall boundary, say so and I will look;
+I would rather you find out what you actually need than guess at a number here.
+
+**Unrelated, and worth having:** `usb0` is a real block device on the Gateway
+now, partitions and all, and the kernel reads the medium it booted from. If
+anything in your file serving assumed removable storage was unavailable on
+hardware, it is not any more.
