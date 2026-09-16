@@ -128,6 +128,8 @@ fi
 # wallpaper, the icon generator, the avatar, the file dialog, Notepad and the
 # Terminal. None of them was ever a library gap.
 # And three that only ever wanted third_party/ on the include path.
+# Added 15 September 2026, when five applications stopped including the whole
+# compositor for one field and the check stopped being stricter than the build.
 FILES="
 src/recon_expr.c
 src/recon_url.c
@@ -177,6 +179,13 @@ src/recon_ico.c
 src/recon_icons.c
 src/recon_web.c
 src/recon_ui.c
+
+src/recon_calendar.c
+src/recon_control_panel.c
+src/recon_explorer.c
+src/recon_help.c
+src/recon_mailwin.c
+src/recon_ui_fb.c
 "
 
 out=$(mktemp -d)
@@ -203,7 +212,16 @@ for f in $FILES; do
 		-I include \
 		-I third_party \
 		-DRECONOS_VERSION='"0.0.0"' \
-		-Wall -Wextra -Werror \
+		# The same warning flags the build uses, including the
+		# -Wno-unused-parameter CMakeLists.txt sets deliberately.
+		#
+		# Without it this check was *stricter* than the build and refused
+		# src/recon_explorer.c over two unused callback parameters -- not a
+		# portability fault, and a warning the project has decided not to
+		# care about. **A check stricter than the build rejects files that
+		# would build**, which is the same fault as the one in the header
+		# above wearing the other shoe.
+		-Wall -Wextra -Wno-unused-parameter -Werror \
 		2> "$out/err"; then
 		echo "--- $f does not build without glibc"
 		head -20 "$out/err"

@@ -26,7 +26,7 @@
 #include "recon_version.h"
 #include "recon_fs.h"
 #include "recon_props.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_shell.h"
 #include "recon_icons.h"
 #include "recon_registry.h"
@@ -664,7 +664,7 @@ static void open_with_now(struct recon_explorer *ex, const char *file,
         return;
     }
 
-    if (!recon_shell_open_file(server->shell, path)) {
+    if (!recon_shell_open_file(recon_server_shell(server), path)) {
         set_status(ex, true, "'%s' could not be opened with %s.", file,
             application);
         return;
@@ -997,7 +997,7 @@ static void do_open_selected(struct recon_explorer *ex) {
     }
 
     struct recon_server *server = recon_appwin_server(ex->win);
-    if (server != NULL && recon_shell_open_file(server->shell, path)) {
+    if (server != NULL && recon_shell_open_file(recon_server_shell(server), path)) {
         return;
     }
 

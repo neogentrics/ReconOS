@@ -9,6 +9,84 @@ way for the two to disagree.
 
 ---
 
+## v0.4.46 — the same shape a third time, and once in the instrument
+
+**46 of 80 sources built with no Linux underneath. 52 do now**, and not one of
+the six was a library gap.
+
+`include/recon_server.h` is the compositor: a wlroots scene, a seat, an output
+layout, a cursor manager, an xdg shell and a dozen `wl_listener`s. **Five of
+the desktop's applications were including all of it for one field.**
+
+| what it wanted | files |
+|---|---|
+| `server->shell` | File Explorer, Help, Control Panel |
+| and the screen size | Control Panel |
+| **nothing at all** | Calendar, Mail |
+
+The last row is the flattest version of it: `recon_calendar.c` and
+`recon_mailwin.c` include `recon_server.h`, write `struct recon_server *` in
+one prototype each, and pass it along — and `recon_appwin.h` has forward-
+declared that name all along. **The include was doing nothing.** Deleting it
+builds both files.
+
+`include/recon_server_facts.h` is the seam for the other three: they ask for
+the shell and the screen size rather than reaching in, and the implementation
+is the one file that includes both headers — which is where the wayland stops.
+`recon_background_reload` moved there too, because setting the wallpaper is
+something an application asks for rather than something the compositor keeps
+to itself.
+
+### And the same shape a third time in two days
+
+- **v0.4.42** — `recon_ui.h` included xkbcommon for one typedef, and held
+  twenty-four files.
+- **v0.4.44** — `recon_ui.c` had twenty-eight lines of wlroots holding three
+  thousand lines of drawing.
+- **This one** — a header describing a compositor, included by files that
+  wanted a pointer.
+
+None was a design problem and none was a missing library. Each was **an
+include**, and each was found the same way: by offering files to a compiler
+instead of reading them.
+
+### The check was stricter than the build, which is the same fault reversed
+
+`src/recon_explorer.c` came free of `recon_server.h` and still failed — on two
+**unused callback parameters**. `CMakeLists.txt` sets `-Wno-unused-parameter`
+deliberately; `check-userland.sh` did not.
+
+That check's own header carries the rule in the other direction: *"a predictor
+with looser rules than the thing it predicts is worth less than no
+predictor"*, written after a probe put a file on a list the check then refused.
+**The converse costs the same way round: a check stricter than the build
+rejects files that would build**, and answers a question nobody asked. It uses
+the build's flags now.
+
+### And `pid_t`, which had been measured and left out
+
+It was tried on 15 September and left out on the grounds that every file
+wanting it was behind `wayland-server-core.h` anyway — measured, correct, and
+it stopped being true the same afternoon, because two of those files were
+reaching wayland only through an include they did not use. **A typedef nobody
+can use does not belong in a header; one two files need does.**
+
+### What is left
+
+Four files still reach `recon_server.h`, and three of them want something that
+really is wayland's:
+
+| file | what it wants | why it is different |
+|---|---|---|
+| `recon_cmd.c` | `toplevels` | a `wl_list` of windows — needs a way to walk the open windows that is not a wayland list |
+| `recon_photos.c`, `recon_player.c` | `wl_display` | a timer — *"call me back in N milliseconds"*, which is a seam worth having and is not this one |
+| `recon_server_facts.c` | all of it | by design; it is the file where the wayland stops |
+
+Behind those: fifteen files that are the compositor itself, eight wanting one
+missing thing each, and one wanting a hosted `<math.h>`.
+
+---
+
 ## v0.4.45 — the other side of the seam
 
 v0.4.44 put a table of function pointers between the desktop's drawing and the

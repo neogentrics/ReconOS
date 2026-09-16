@@ -23,6 +23,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* The few things an application asks of the server, which are declared
+ * where an application can reach them without reaching wayland. */
+#include "recon_server_facts.h"
+
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
@@ -284,10 +288,6 @@ void recon_restart(struct recon_server *server);
  * something changed, and not at all otherwise.
  */
 void recon_damage_all(struct recon_server *server);
-
-/* Put the chosen wallpaper on, replacing whatever is there. Called when the
- * choice changes, so it takes effect without a restart. */
-void recon_background_reload(struct recon_server *server);
 
 /*
  * How light the wallpaper is under a point, 0 to 255.

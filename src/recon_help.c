@@ -17,7 +17,7 @@
 #include "recon_icons.h"
 #include "recon_modules.h"
 #include "recon_registry.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_shell.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
@@ -1061,7 +1061,7 @@ static bool help_key(void *user, recon_keysym sym, uint32_t modifiers) {
      * in Notepad. Somebody who has learnt it in one place should not have to
      * learn it again in the other.
      */
-    if ((modifiers & WLR_MODIFIER_CTRL) != 0 &&
+    if ((modifiers & RECON_MOD_CTRL) != 0 &&
             (sym == RECON_KEY_f || sym == RECON_KEY_F)) {
         recon_edit_focus(&help->search);
         return true;
@@ -1624,7 +1624,7 @@ static bool notice_click(void *user, uint32_t hit_id, int cx, int cy,
          * alternative -- leaving it unseen so it comes back next time --
          * punishes the person who took the trouble to read further.
          */
-        struct recon_shell *shell = notice->server->shell;
+        struct recon_shell *shell = recon_server_shell(notice->server);
         recon_registry_set(RECON_REG_USER, RECON_HELP_SEEN_KEY,
             RECONOS_VERSION);
         recon_appwin_hide(notice->win);

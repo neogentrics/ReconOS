@@ -19,7 +19,6 @@
 #include "recon_clock.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
-#include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 #include "recon_widget.h"

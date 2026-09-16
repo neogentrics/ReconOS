@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.45
+    VERSION 0.4.46
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -171,6 +171,10 @@ add_executable(ReconOS
     # Split out so the three thousand lines of drawing above it stop
     # needing a wayland header -- see src/recon_ui_internal.h.
     src/recon_ui_wlr.c
+    # Where the wayland stops for an application: a few fields and one
+    # action, asked for rather than reached into. See
+    # include/recon_server_facts.h.
+    src/recon_server_facts.c
     # And the other implementation of that seam: straight onto a screen,
     # which is what a program on the ReconOS kernel does.
     src/recon_ui_fb.c

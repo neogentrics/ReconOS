@@ -35,7 +35,7 @@
 #include "recon_procinfo.h"
 #include "recon_props.h"
 #include "recon_registry.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_shell.h"
 #include "recon_theme.h"
 #include "recon_tls.h"
@@ -5434,8 +5434,8 @@ static void draw_system(struct control_panel *cp, struct recon_panel *p,
         used_mb);
     info_row(cp, p, x, &y, w, "Memory", value);
 
-    snprintf(value, sizeof(value), "%d by %d", cp->server->screen_width,
-        cp->server->screen_height);
+    snprintf(value, sizeof(value), "%d by %d", recon_server_screen_width(cp->server),
+        recon_server_screen_height(cp->server));
     info_row(cp, p, x, &y, w, "Display", value);
 
     /* Every space, so the one number here is the one the Storage page adds
@@ -5874,7 +5874,7 @@ static void answered(void *user, int choice) {
         cp->skin_scroll = 0;
 
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "'%s' is gone.", was);
         recon_appwin_refresh(cp->win);
         return;
@@ -5904,7 +5904,7 @@ static void answered(void *user, int choice) {
         } else {
             cp->installing = false;
             recon_edit_end(&cp->name);
-            recon_shell_restyle(cp->server->shell);
+            recon_shell_restyle(recon_server_shell(cp->server));
             set_status(cp, false, named ? "Upgraded %s to %s." : "Upgraded.",
                 info.name, info.version);
         }
@@ -5953,7 +5953,7 @@ static void answered(void *user, int choice) {
              * and point at whichever program slid up into its place. */
             cp->selected = -1;
             /* The Start menu listed it; it has to stop. */
-            recon_shell_restyle(cp->server->shell);
+            recon_shell_restyle(recon_server_shell(cp->server));
             set_status(cp, false, "Removed '%s'.", name);
         }
         recon_appwin_refresh(cp->win);
@@ -6255,7 +6255,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
         /* The taskbar and the menu are drawn from the application list, so
          * they have to be told the list now answers differently. */
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
 
         set_status(cp, false, turning_off
             ? "'%s' is turned off. It is offered nowhere until it is turned "
@@ -6274,7 +6274,7 @@ static void do_action(struct control_panel *cp, enum action action) {
          * picture or a font now installs a program -- three ways of saying
          * "take this file into the system", said one way.
          */
-        recon_shell_open_named(cp->server->shell, "File Explorer");
+        recon_shell_open_named(recon_server_shell(cp->server), "File Explorer");
 
         struct recon_appwin *win =
             recon_installed_app_existing("File Explorer");
@@ -6356,7 +6356,7 @@ static void do_action(struct control_panel *cp, enum action action) {
             }
             cp->installing = false;
             recon_edit_end(&cp->name);
-            recon_shell_restyle(cp->server->shell);
+            recon_shell_restyle(recon_server_shell(cp->server));
             set_status(cp, false, named
                 ? "Installed %s %s." : "Installed.",
                 info.name, info.version);
@@ -6371,7 +6371,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_edit_end(&cp->name);
         /* The Start menu lists applications, so it has to hear about a new
          * one arriving. */
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "Installed, and loaded.");
         break;
     }
@@ -6601,8 +6601,8 @@ static void do_action(struct control_panel *cp, enum action action) {
          * like it does not do anything.
          */
         recon_theme_init();
-        recon_access_apply(recon_shell_font(cp->server->shell));
-        recon_shell_restyle(cp->server->shell);
+        recon_access_apply(recon_shell_font(recon_server_shell(cp->server)));
+        recon_shell_restyle(recon_server_shell(cp->server));
 
         set_status(cp, false, "Saved '%s'.", key);
         break;
@@ -6702,7 +6702,7 @@ static void do_action(struct control_panel *cp, enum action action) {
             (action == ACTION_SPACING_MORE ? 1 : -1);
         recon_registry_set_int(RECON_REG_USER, RECON_ACCESS_LETTER_KEY, value);
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         break;
     }
 
@@ -6712,7 +6712,7 @@ static void do_action(struct control_panel *cp, enum action action) {
             (action == ACTION_LINES_MORE ? 2 : -2);
         recon_registry_set_int(RECON_REG_USER, RECON_ACCESS_LINE_KEY, value);
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         break;
     }
 
@@ -6723,7 +6723,7 @@ static void do_action(struct control_panel *cp, enum action action) {
             (action == ACTION_SIZE_MORE ? 1 : -1);
         recon_registry_set_int(RECON_REG_USER, RECON_ACCESS_FONT_SIZE_KEY, value);
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         break;
     }
 
@@ -6740,7 +6740,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
         recon_registry_set(RECON_REG_USER, RECON_ACCESS_FONT_KEY, path);
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
 
         /*
          * Reported honestly if it did not take. A font file the drawing code
@@ -6776,7 +6776,7 @@ static void do_action(struct control_panel *cp, enum action action) {
     case ACTION_DEFAULT_FONT:
         recon_registry_remove(RECON_REG_USER, RECON_ACCESS_FONT_KEY);
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "Back to the system's own font.");
         break;
 
@@ -6786,7 +6786,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         /* Everything that shows a time, not just the corner: the taskbar, the
          * Calendar and this page all read the same clock, and an hour applied
          * to some of them is worse than an hour applied to none. */
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, was
             ? "Summer time off. The clock is back on its zone's own offset."
             : "Summer time on. The clock is an hour ahead of its zone.");
@@ -6809,7 +6809,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         bool was = recon_registry_get_bool(RECON_REG_USER,
             RECON_CLOCK_24H_KEY, true);
         recon_registry_set_bool(RECON_REG_USER, RECON_CLOCK_24H_KEY, !was);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, was ? "Showing am and pm."
             : "Showing a 24-hour clock.");
         break;
@@ -6864,7 +6864,7 @@ static void do_action(struct control_panel *cp, enum action action) {
          * the old bottom edge was, which on a larger screen is a bar floating
          * across the middle of the desktop.
          */
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
 
         set_status(cp, false, "The screen is now %d by %d.", mode.width,
             mode.height);
@@ -6879,7 +6879,7 @@ static void do_action(struct control_panel *cp, enum action action) {
          * exist; what does exist is a right-click on a file. This opens
          * somewhere fonts plausibly are and says what to do there.
          */
-        recon_shell_open_named(cp->server->shell, "File Explorer");
+        recon_shell_open_named(recon_server_shell(cp->server), "File Explorer");
 
         struct recon_appwin *win =
             recon_installed_app_existing("File Explorer");
@@ -6920,7 +6920,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_registry_remove(RECON_REG_USER, RECON_ACCESS_LINE_KEY);
         recon_registry_remove(RECON_REG_USER, RECON_ACCESS_FONT_SIZE_KEY);
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "Back to the defaults.");
         break;
 
@@ -6944,7 +6944,7 @@ static void do_action(struct control_panel *cp, enum action action) {
          * the one that exists, and somebody who wants to see what is about to
          * go wants to see it in the thing they already know how to use.
          */
-        recon_shell_open_named(cp->server->shell, "File Explorer");
+        recon_shell_open_named(recon_server_shell(cp->server), "File Explorer");
 
         struct recon_appwin *win =
             recon_installed_app_existing("File Explorer");
@@ -7074,7 +7074,7 @@ static void do_action(struct control_panel *cp, enum action action) {
          * says what to do there, which is the same number of clicks and one
          * fewer thing to build.
          */
-        recon_shell_open_named(cp->server->shell, "File Explorer");
+        recon_shell_open_named(recon_server_shell(cp->server), "File Explorer");
 
         struct recon_appwin *win =
             recon_installed_app_existing("File Explorer");
@@ -7099,7 +7099,7 @@ static void do_action(struct control_panel *cp, enum action action) {
             set_status(cp, true, "%s", recon_theme_last_error());
             break;
         }
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "Skin is now '%s'.", info.name);
         break;
     }
@@ -7220,7 +7220,7 @@ static void do_action(struct control_panel *cp, enum action action) {
          */
         recon_theme_set(name);
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
 
         /*
          * And the list behind the editor moves to Your Own, which is where
@@ -7261,7 +7261,7 @@ static void do_action(struct control_panel *cp, enum action action) {
             if (strcmp(info.name, recon_theme_current()) != 0) {
                 recon_theme_set(info.name);
                 recon_access_apply(cp->font);
-                recon_shell_restyle(cp->server->shell);
+                recon_shell_restyle(recon_server_shell(cp->server));
             }
 
             open_skin_editor(cp, info.name);
@@ -7336,7 +7336,7 @@ static void do_action(struct control_panel *cp, enum action action) {
              * is guessing at hex numbers. */
             recon_theme_set(info.name);
             recon_access_apply(cp->font);
-            recon_shell_restyle(cp->server->shell);
+            recon_shell_restyle(recon_server_shell(cp->server));
 
             snprintf(cp->skin_name, sizeof(cp->skin_name), "%s", info.name);
             cp->skin_editing = true;
@@ -7396,7 +7396,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
             /* The frame is drawn from these numbers, so the window this is
              * sitting in changes shape as the sentence appears. */
-            recon_shell_restyle(cp->server->shell);
+            recon_shell_restyle(recon_server_shell(cp->server));
             break;
         }
 
@@ -7441,7 +7441,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
         /* Everything on screen is drawn from this palette, so the change is
          * visible before the sentence saying it happened. */
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         break;
     }
 
@@ -7489,7 +7489,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_edit_end(&cp->skin_new_name);
 
         /* The skin list behind this window shows the name too. */
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "'%s' is called '%s' now.", was, cp->skin_name);
         break;
     }
@@ -7536,7 +7536,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         char now[64];
         recon_theme_metric_text(metric, recon_theme_metric(metric),
             now, sizeof(now));
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "%s is out of the file. It is %s again.",
             skin_row_name(cp->skin_row), now);
         break;
@@ -7548,7 +7548,7 @@ static void do_action(struct control_panel *cp, enum action action) {
             set_status(cp, true, "%s", recon_theme_last_error());
             break;
         }
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "%s is flat now.",
             skin_row_name(cp->skin_row));
         break;
@@ -7694,7 +7694,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
         recon_registry_set_int(RECON_REG_USER, RECON_BLANK_AFTER_KEY,
             BLANK_STEPS[at]);
-        recon_shell_blank_reload(cp->server->shell);
+        recon_shell_blank_reload(recon_server_shell(cp->server));
 
         char label[48];
         blank_label(BLANK_STEPS[at], label, sizeof(label));
@@ -7706,7 +7706,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         bool lock = !recon_registry_get_bool(RECON_REG_USER,
             RECON_BLANK_LOCK_KEY, false);
         recon_registry_set_bool(RECON_REG_USER, RECON_BLANK_LOCK_KEY, lock);
-        recon_shell_blank_reload(cp->server->shell);
+        recon_shell_blank_reload(recon_server_shell(cp->server));
         set_status(cp, false, lock
             ? "Waking the screen will ask for your password."
             : "Waking the screen goes straight back to your desktop.");
@@ -7870,7 +7870,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         char version[48];
         snprintf(version, sizeof(version), "v%s", RECONOS_VERSION);
 
-        recon_shell_open_named(cp->server->shell, "Help");
+        recon_shell_open_named(recon_server_shell(cp->server), "Help");
         recon_help_show_topic(recon_installed_app_existing("Help"), version);
         clear_status(cp);
         break;
@@ -7965,7 +7965,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         }
 
         recon_access_apply(cp->font);
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, *wanted != 0
             ? "The chrome is tinted %s." : "The tint is off.", wanted);
         return true;
@@ -7979,7 +7979,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
 
             /* The taskbar shows the time too, and it is the reason somebody
              * came here. It has to change while they are looking at it. */
-            recon_shell_restyle(cp->server->shell);
+            recon_shell_restyle(recon_server_shell(cp->server));
             set_status(cp, false, "The clock is now on %s.", zone);
         }
         return true;
@@ -8196,7 +8196,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         }
         cp->picking_avatar = false;
         /* The Start menu and the login screen show it too. */
-        recon_shell_restyle(cp->server->shell);
+        recon_shell_restyle(recon_server_shell(cp->server));
         set_status(cp, false, "%s's picture is set.", cp->question_target);
         return true;
     }
@@ -8777,7 +8777,7 @@ static void open_page_from(struct control_panel *cp,
      * like some minutes ago. */
     sub->storage_measured = false;
 
-    if (!recon_shell_adopt_window(server->shell, sub->win)) {
+    if (!recon_shell_adopt_window(recon_server_shell(server), sub->win)) {
         if (cp != NULL) {
             set_status(cp, true, "No room for another window.");
         }
@@ -8792,7 +8792,7 @@ static void open_page_from(struct control_panel *cp,
      * one. Only raising it handed somebody a window on top that their
      * keyboard was not talking to.
      */
-    recon_shell_focus_window(server->shell, sub->win);
+    recon_shell_focus_window(recon_server_shell(server), sub->win);
 
     /*
      * Placed after it is shown, not before.
@@ -8888,7 +8888,7 @@ static void open_skin_editor(struct control_panel *cp, const char *skin) {
     ed->skin_value_editing = false;
     clear_status(ed);
 
-    if (!recon_shell_adopt_window(cp->server->shell, ed->win)) {
+    if (!recon_shell_adopt_window(recon_server_shell(cp->server), ed->win)) {
         set_status(cp, true, "No room for another window.");
         return;
     }
@@ -8905,7 +8905,7 @@ static void open_skin_editor(struct control_panel *cp, const char *skin) {
     (void)ph;
     recon_appwin_set_origin(ed->win, px + pw / 3, py + 40);
 
-    recon_shell_focus_window(cp->server->shell, ed->win);
+    recon_shell_focus_window(recon_server_shell(cp->server), ed->win);
 }
 
 static void open_page_window(struct control_panel *cp, enum page page) {

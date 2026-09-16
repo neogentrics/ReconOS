@@ -25,7 +25,6 @@
 #include "recon_smtp.h"
 #include "recon_mailwin.h"
 #include "recon_net.h"
-#include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 #include "recon_widget.h"
