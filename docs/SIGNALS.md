@@ -165,6 +165,44 @@ behaves the way the simulation pretends. Register offsets, the reset sequence
 and the meaning of every bit are checked by running on silicon and nowhere
 else, which for this card has not happened.
 
+### And the Intel's, which asserts the opposite — NW-007 is closed
+
+`e1000_self_test` is the mirror. The Realtek's test insists four bytes come
+**off**; this one insists **nothing** does, because `RCTL_SECRC` makes that
+card strip the check sequence itself. Both are right, and the failure worth
+guarding against is somebody tidying one line into the other file — which reads
+as consistency and is a four-byte error.
+
+Eight more breaks, all eight caught:
+
+| break | boot said |
+|---|---|
+| the Realtek's subtraction copied in | lease ✗ ping ✗ |
+| four bytes **too long** | lease ✓ ping ✓ |
+| the tail walks past a hole (NW-006) | lease ✓ ping ✓ |
+| the tail offers the whole ring | lease ✓ ping ✓ |
+| end-of-packet ignored | lease ✓ ping ✓ |
+| the error byte ignored | lease ✓ ping ✓ |
+| an empty frame accepted | lease ✓ ping ✓ |
+| a jumbo frame accepted | lease ✓ ping ✓ |
+
+Thirteen breaks across both drivers now, thirteen caught, and **twelve of the
+thirteen boot perfectly while doing the wrong thing**. A ninth break did not
+compile at all: removing the error-byte test leaves the variable unused and
+`-Werror=unused-but-set-variable` refuses it, which is the one case where the
+toolchain is the check.
+
+**NW-006 has a check in front of it now**, which it did not when I reported it.
+The tail walk is in `rx_available`, which `e1000_poll` calls — so the test
+drives the running code, not a copy — and it can be handed a ring with a hole
+punched in it, which is the situation the fault needs and which a self-test
+must not create for real by exhausting the page allocator.
+
+**NW-007 is closed**, and the Open list is down to 12. What is still uncovered
+is named in its entry rather than left implied: neither driver's *transmit*
+length is checked by anything except a network that answers, and a simulated
+card cannot say the real chip matches the simulation.
+
 ### What is unfinished, stated plainly
 
 **The r8169 has never touched silicon.** It compiles on both architectures and
@@ -204,17 +242,10 @@ of them was fixed here:
   and nothing above them consults `net_device.link`, so a machine whose cable
   is pulled still believes it has a route.
 
-And one that is nobody's fault, now narrower than when it was opened:
-
-- **NW-007** — a receive length four bytes **too short** loses the DHCP lease
-  and is caught. Four bytes **too long** produces a lease and a ping reply that
-  no instrument in this kernel can tell from correct. Measured both ways. Too
-  long is what forgetting to strip the frame check sequence looks like, so the
-  boot test catches the mistake nobody makes and misses the one they do.
-
-  `r8169_self_test` closes that for the Realtek's receive path, as above. It
-  **stays open** because the Intel has no equivalent and neither driver's
-  *transmit* path is checked by anything except a network that answers.
+NW-007 stood alongside these four when this signal was first written, as the
+one that was nobody's fault. **It is closed** --
+both drivers' receive lengths now have checks that were proven able to fail.
+See the section on the two tests below.
 
 ---
 

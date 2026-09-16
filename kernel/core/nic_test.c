@@ -25,17 +25,25 @@
  * Realtek's receive length includes the four-byte frame check sequence and the
  * Intel's does not, because the Intel is told to strip it.
  *
- * It is not asserted *in this file*, and for the Realtek it is asserted in
- * `r8169.c` instead -- beside the loop it is about, driving that loop against
- * a page of memory standing in for the register window. It is there rather
- * than here because the alternative was lifting the arithmetic out into
- * something this file could call, and then the thing under test would be the
- * lifted copy while the loop went on being the thing that runs. A test that
- * proves a copy of the code is the shape of fault this project keeps finding.
+ * It is not asserted *in this file*. Each driver asserts it in its own, beside
+ * the loop it is about, driving that loop against a page of memory standing in
+ * for the register window -- `r8169_self_test` and `e1000_self_test`. They are
+ * there rather than here because the alternative was lifting the arithmetic
+ * out into something this file could call, and then the thing under test would
+ * be the lifted copy while the loop went on being the thing that runs. A test
+ * that proves a copy of the code is the shape of fault this project keeps
+ * finding.
  *
- * **Why it needed its own test at all**, measured rather than assumed:
- * breaking the Intel's receive length on purpose, in each direction, and
- * booting each one --
+ * **And the two assert opposite things, which is why neither could be
+ * skipped.** The Realtek's length includes the four-byte frame check sequence
+ * and the Intel's does not, because the Intel is told to strip it. So one test
+ * insists four bytes come off and the other insists nothing does. Both are
+ * right; there is nothing in a frame to say which card you are holding; and
+ * the failure worth guarding against is somebody tidying one line into the
+ * other file, which reads as consistency and is a four-byte error.
+ *
+ * **Why booting was not enough**, measured rather than assumed: breaking the
+ * Intel's receive length on purpose, in each direction --
  *
  *   four bytes too short   no DHCP lease and no ping reply
  *   four bytes too long    a lease and a ping reply, indistinguishable
@@ -47,12 +55,12 @@
  * forgetting the subtraction looks like -- so booting catches the mistake
  * nobody makes and misses the one they do.
  *
- * `r8169_self_test` closes that for one driver and one direction of traffic.
- * Every one of the five faults it catches was introduced on purpose, and every
- * one of those boots still reported a DHCP lease and a ping reply. **NW-007
- * stays open** for what is still uncovered: the Intel has no equivalent, and
- * neither driver's transmit path is checked by anything but a network that
- * answers.
+ * Thirteen faults were introduced across the two tests and all thirteen are
+ * caught. **Twelve of those thirteen kernels still took a DHCP lease and
+ * answered a ping**, which is the measurement that says the tests reach ground
+ * a running machine cannot. NW-007 is closed on that basis; what remains
+ * uncovered is the *transmit* length, and it is named in that entry rather
+ * than implied here.
  */
 #include <recon/kernel/net.h>
 #include <recon/kernel/console.h>
@@ -236,6 +244,10 @@ bool nic_self_test(void)
 	/* And the Realtek's receive loop, which has no other way to be run at
 	 * all: the rig emulates no card it recognises. */
 	if (!r8169_self_test())
+		ok = false;
+
+	/* And the Intel's, which asserts the opposite arithmetic. */
+	if (!e1000_self_test())
 		ok = false;
 
 	return ok;

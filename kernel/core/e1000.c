@@ -382,6 +382,47 @@ static void collect_tx(struct e1000 *e)
 	}
 }
 
+/* How far the receive tail may be advanced: how many descriptors, counting
+ * from `rx_next`, have a buffer without a gap -- capped at `RX_RING - 1`.
+ *
+ * The tail names the **last** descriptor the card may write, not one past it,
+ * and everything from the card's head up to it is fair game. So it may only be
+ * advanced across a run of descriptors that *all* hold a buffer. The first
+ * version did not do that: it remembered the last index it had successfully
+ * re-stocked, which under memory pressure can be a *later* index than one
+ * whose allocation failed. Slot 1 fails, slot 2 succeeds, the tail goes to 2,
+ * and the card is free to write descriptor 1 -- which still holds the physical
+ * address of the buffer just handed up to IP. A card DMA-ing into a frame the
+ * stack is parsing is not a dropped packet; it is somebody else's data
+ * appearing in the middle of one. That is NW-006.
+ *
+ * The cap is not decoration: a tail equal to the head is how this card is told
+ * there is nowhere to write, so the ring can never offer all of itself at once
+ * without meaning the opposite of what it says.
+ *
+ * --- Why this is a function and not four lines inside the loop ---
+ *
+ * Because NW-006 needs `netbuf_alloc` to fail before it can happen at all, and
+ * a self-test cannot make the page allocator run out on purpose without
+ * wrecking the machine it is running in. Pulled out here, the rule can be
+ * handed a ring with a hole punched in it and asked what it would do.
+ *
+ * **`e1000_poll` calls this**, which is the whole difference between
+ * extracting a function and copying one: what the test exercises is what runs.
+ * A test of a lifted copy would leave the original unproven, which is the
+ * shape of fault this project keeps finding.
+ */
+static unsigned rx_available(const struct e1000 *e)
+{
+	unsigned n;
+
+	for (n = 0; n < RX_RING - 1; n++)
+		if (!e->rx_buf[(e->rx_next + n) % RX_RING])
+			break;
+
+	return n;
+}
+
 /* --- The cable ------------------------------------------------------------- */
 
 static void update_link(struct e1000 *e)
@@ -493,43 +534,8 @@ static void e1000_poll(struct net_device *dev)
 
 	stock_rx(e);
 
-	/* The tail, computed from what is actually stocked rather than from
-	 * what this pass happened to hand back.
-	 *
-	 * The tail names the **last** descriptor the card may write, not one
-	 * past it, and everything from the card's head up to it is fair game.
-	 * So it may only be advanced across a run of descriptors that *all*
-	 * have a buffer -- and the first version of this did not do that. It
-	 * remembered the last index it had successfully re-stocked, which
-	 * under memory pressure can be a *later* index than one whose
-	 * allocation failed: slot 1 fails, slot 2 succeeds, the tail goes to 2,
-	 * and the card is now free to write descriptor 1 -- which still holds
-	 * the physical address of the buffer that was just handed up to IP.
-	 *
-	 * A card DMA-ing into a frame the stack is parsing is not a dropped
-	 * packet, it is somebody else's data appearing in the middle of one.
-	 * NW-006. It needs `netbuf_alloc` to fail to happen at all, which is
-	 * why walking the run is cheap insurance rather than a hot path.
-	 *
-	 * The Realtek cannot have this fault, and the contrast is the reason
-	 * it is written out here: that card has no tail register, a descriptor
-	 * is available if and only if its ownership bit is set, and the only
-	 * place that bit is set is after an allocation succeeded. The
-	 * availability *is* the buffer. Here they are two facts that have to
-	 * be kept in step by hand. */
 	{
-		unsigned avail = 0;
-		unsigned n;
-
-		/* At most RX_RING - 1: a tail equal to the head is how this
-		 * card is told there is nowhere to write, so the ring can
-		 * never offer all of itself at once. */
-		for (n = 0; n < RX_RING - 1; n++) {
-			if (!e->rx_buf[(e->rx_next + n) % RX_RING])
-				break;
-
-			avail = n + 1;
-		}
+		unsigned avail = rx_available(e);
 
 		if (avail)
 			wr(e, R_RDT, (e->rx_next + avail - 1) % RX_RING);
@@ -873,4 +879,325 @@ void e1000_print_summary(void)
 			kprintf("               : no vector was available for "
 				"it -- see NW-005; it is polled\n");
 	}
+}
+
+/* --- The receive path, with the card played by this file ------------------- */
+
+/* The other half of NW-007, and the mirror image of `r8169_self_test`.
+ *
+ * This driver *can* be booted -- QEMU emulates an 82540EM -- so unlike the
+ * Realtek it is not untested silicon. What booting cannot do is catch the one
+ * mistake it is most likely to make, and that was measured rather than
+ * assumed: breaking the receive length four bytes **too long** produced a DHCP
+ * lease and a ping reply indistinguishable from a correct run. Every layer
+ * reads its own length field and ignores what trails it.
+ *
+ * --- The assertion that matters here is the opposite of the Realtek's ---
+ *
+ * `r8169_self_test` asserts that four bytes come **off**, because that card
+ * counts the frame check sequence and cannot be told not to. This asserts that
+ * **nothing** comes off, because `RCTL_SECRC` makes this card strip it before
+ * the length is written.
+ *
+ * Both are right, they are opposites, and there is nothing in a frame to say
+ * which card you are holding. So the failure worth guarding against is a
+ * subtraction copied from one driver to the other by somebody tidying up --
+ * which reads as consistency and is a four-byte error. This test is what makes
+ * that copy fail loudly instead of silently.
+ *
+ * --- And one thing the Realtek's test has no equivalent of ---
+ *
+ * NW-006, the receive tail. That fault cannot exist on the Realtek: there a
+ * descriptor is available if and only if its ownership bit is set, and that
+ * bit is only ever set after an allocation succeeded, so availability *is*
+ * having a buffer. Here they are two separate facts kept in step by hand, and
+ * `rx_available` is the hand. It is asked directly, with a hole punched in the
+ * ring, because the fault it prevents needs the page allocator to run out --
+ * which a self-test must not arrange.
+ *
+ * --- What this cannot prove ---
+ *
+ * The same limit the Realtek's test states: that the real chip behaves the way
+ * this file pretends. Register offsets, the reset sequence and the meaning of
+ * every bit are proved by booting with the card, not here. The two halves are
+ * complementary rather than overlapping -- booting proves the card is driven,
+ * this proves the arithmetic is right.
+ */
+
+static struct e1000 test_card;
+
+/* What the card leaves behind when it has filled a descriptor.
+ *
+ * `length` is the frame **without** its four-byte check sequence, because
+ * `start_card` sets `RCTL_SECRC` and this is what that setting means. Writing
+ * the fake this way round is the whole point: a driver that subtracted four
+ * here would be measured against a card that had already done it. */
+static void card_delivers(struct e1000 *e, unsigned i, u32 length,
+			  u8 status, u8 errors)
+{
+	struct e1000_rx_desc *d = &e->rx_desc[i];
+	struct netbuf *b = e->rx_buf[i];
+
+	/* A frame addressed to this device with an ethertype nothing claims,
+	 * so Ethernet accepts it as ours and drops it there rather than
+	 * parsing it as a malformed IP packet further up. */
+	if (b && length >= ETH_HDR_LEN) {
+		kmemcpy(b->data, &e->ndev->mac, MAC_LEN);
+		kmemset(b->data + MAC_LEN, 0x02, MAC_LEN);
+		b->data[12] = 0x88;
+		b->data[13] = 0xB5;
+	}
+
+	d->length = (u16)length;
+	d->errors = errors;
+
+	/* The status byte last and behind a barrier, because it is what says
+	 * the rest of the descriptor is worth reading -- the same order the
+	 * silicon has to use and the driver relies on. */
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	d->status = status;
+}
+
+/* One frame through the driver's own loop; out come the bytes and the frames.
+ *
+ * Both, not just the bytes, and the reason was learned the hard way on the
+ * Realtek: a refused frame and a frame accepted with a length of zero both add
+ * nothing to `rx_bytes`, so bytes alone cannot tell "correctly refused" from
+ * "wrongly accepted, and empty". */
+static void deliver_one(struct e1000 *e, struct net_device *dev, u32 length,
+			u8 status, u8 errors, u64 *bytes, u64 *frames)
+{
+	u64 b0 = dev->rx_bytes;
+	u64 f0 = dev->rx_packets;
+
+	card_delivers(e, e->rx_next % RX_RING, length, status, errors);
+	e1000_poll(dev);
+
+	*bytes = dev->rx_bytes - b0;
+	*frames = dev->rx_packets - f0;
+}
+
+/* --- NW-006: the tail, asked directly -------------------------------------- */
+
+/* Punches a hole `at` descriptors ahead of where the driver is reading and
+ * asks `rx_available` what it would offer the card.
+ *
+ * The buffer is taken out and put back rather than freed, so the ring is
+ * exactly as it was afterwards and nothing leaks. */
+static bool tail_stops_at_a_hole(struct e1000 *e, unsigned at, unsigned expect)
+{
+	unsigned slot = (e->rx_next + at) % RX_RING;
+	struct netbuf *held = e->rx_buf[slot];
+	unsigned got;
+
+	e->rx_buf[slot] = NULL;
+	got = rx_available(e);
+	e->rx_buf[slot] = held;
+
+	if (got == expect)
+		return true;
+
+	kprintf("  e1000: with no buffer %u descriptor(s) ahead, the tail "
+		"would offer %u rather than %u -- the card would be given a "
+		"descriptor holding a frame the stack is reading (NW-006)\n",
+		at, got, expect);
+
+	return false;
+}
+
+bool e1000_self_test(void)
+{
+	struct e1000 *e = &test_card;
+	struct net_device *dev;
+	char name[NET_NAME_MAX];
+	static const struct mac_addr mac = { { 0x02, 0x4E, 0x57, 0, 0, 0x20 } };
+	const u8 done = RX_STATUS_DD | RX_STATUS_EOP;
+	paddr_t regs;
+	unsigned i;
+	u64 got, frames;
+	bool ok = true;
+
+	kmemset(e, 0, sizeof(*e));
+	spin_init(&e->lock, "e1000-test");
+
+	/* Declared already known and down, so `update_link` finds nothing
+	 * changed and stays quiet. There is no cable and no card. */
+	e->link_known = true;
+	e->link_up = false;
+
+	regs = pmm_alloc_page();
+	e->ring_page = pmm_alloc_page();
+
+	if (!regs || !e->ring_page) {
+		kputs("  e1000: no memory for the test's rings\n");
+
+		if (regs)
+			pmm_free_pages(regs, 1);
+		if (e->ring_page)
+			pmm_free_pages(e->ring_page, 1);
+
+		return false;
+	}
+
+	e->mmio = phys_to_virt(regs);
+	kmemset((void *)e->mmio, 0, 4096);
+
+	{
+		u8 *base = phys_to_virt(e->ring_page);
+
+		kmemset(base, 0, 4096);
+		e->rx_desc = (struct e1000_rx_desc *)(base + RX_RING_OFFSET);
+		e->tx_desc = (struct e1000_tx_desc *)(base + TX_RING_OFFSET);
+	}
+
+	if (!stock_rx(e)) {
+		kputs("  e1000: no memory for the test's buffers\n");
+		pmm_free_pages(regs, 1);
+		pmm_free_pages(e->ring_page, 1);
+		return false;
+	}
+
+	if (!netdev_name("eth", name, sizeof(name))) {
+		kputs("  e1000: no name for the test device\n");
+		ok = false;
+		goto out;
+	}
+
+	dev = netdev_register(name, &e1000_ops, e, &mac);
+
+	if (!dev) {
+		kputs("  e1000: the test device was refused\n");
+		ok = false;
+		goto out;
+	}
+
+	e->ndev = dev;
+
+	/* Drained before anything is measured: the bounded-queue test
+	 * deliberately overflows the receive queue, and a full queue makes
+	 * `netdev_receive` drop without counting -- so every assertion below
+	 * would read zero and blame this driver for the previous test's
+	 * leftovers. */
+	netdev_service();
+
+	/* --- the four bytes that must NOT come off ------------------------- */
+
+	deliver_one(e, dev, 64, done, 0, &got, &frames);
+
+	if (got != 64 || frames != 1) {
+		kprintf("  e1000: a 64-byte frame came up as %u byte(s) in %u "
+			"frame(s) -- this card strips the check sequence "
+			"itself and nothing here may subtract it again\n",
+			(unsigned)got, (unsigned)frames);
+		ok = false;
+	}
+
+	/* The largest frame the driver accepts, which on this card is the
+	 * whole of `ETH_FRAME_MAX` rather than four less -- the boundary a
+	 * copied subtraction would move. */
+	deliver_one(e, dev, ETH_FRAME_MAX, done, 0, &got, &frames);
+
+	if (got != ETH_FRAME_MAX || frames != 1) {
+		kprintf("  e1000: the largest acceptable frame came up as %u "
+			"rather than %u\n",
+			(unsigned)got, (unsigned)ETH_FRAME_MAX);
+		ok = false;
+	}
+
+	/* --- and the four kinds of frame that must be refused --------------- */
+
+	deliver_one(e, dev, 64, RX_STATUS_DD, 0, &got, &frames);
+
+	if (got || frames) {
+		kputs("  e1000: a frame not marked end-of-packet was passed "
+		      "up as though it were whole\n");
+		ok = false;
+	}
+
+	deliver_one(e, dev, 64, done, 0x02, &got, &frames);
+
+	if (got || frames) {
+		kputs("  e1000: a frame the card marked bad was passed up\n");
+		ok = false;
+	}
+
+	deliver_one(e, dev, 0, done, 0, &got, &frames);
+
+	if (got || frames) {
+		kprintf("  e1000: an empty frame was passed up -- %u frame(s), "
+			"%u byte(s)\n", (unsigned)frames, (unsigned)got);
+		ok = false;
+	}
+
+	deliver_one(e, dev, ETH_FRAME_MAX + 1, done, 0, &got, &frames);
+
+	if (got || frames) {
+		kprintf("  e1000: a frame of %u bytes was passed up, and this "
+			"kernel does not accept jumbo frames\n",
+			(unsigned)(ETH_FRAME_MAX + 1));
+		ok = false;
+	}
+
+	/* --- NW-006, the tail ----------------------------------------------- */
+
+	/* A full ring offers all but one descriptor. Not all of them: a tail
+	 * equal to the head is how this card is told there is nowhere to
+	 * write, so offering the whole ring says the opposite of what it
+	 * means. */
+	if (rx_available(e) != RX_RING - 1) {
+		kprintf("  e1000: a fully stocked ring offers %u of %u "
+			"descriptors; it must offer %u, because a tail equal "
+			"to the head means empty\n",
+			rx_available(e), RX_RING, RX_RING - 1);
+		ok = false;
+	}
+
+	/* And it stops at the first descriptor with no buffer, wherever that
+	 * is -- including immediately, which means offering nothing at all
+	 * rather than offering the card a descriptor it must not have. */
+	if (!tail_stops_at_a_hole(e, 3, 3))
+		ok = false;
+
+	if (!tail_stops_at_a_hole(e, 0, 0))
+		ok = false;
+
+	if (!tail_stops_at_a_hole(e, 1, 1))
+		ok = false;
+
+	/* --- and once round, so the wrap in the index arithmetic runs ------- */
+
+	for (i = 0; i < RX_RING + 2; i++) {
+		deliver_one(e, dev, 64, done, 0, &got, &frames);
+
+		if (got != 64 || frames != 1) {
+			kprintf("  e1000: frame %u of a lap came up as %u "
+				"byte(s) -- the ring does not survive a "
+				"wrap\n", i, (unsigned)got);
+			ok = false;
+			break;
+		}
+
+		/* Walked up as they go. The receive queue holds 64 and this
+		 * lap alone makes 34, and a frame dropped for a full queue is
+		 * counted in the same `overflowed` number the bounded-queue
+		 * test uses to prove its bound -- which must not be borrowed
+		 * for ordinary test traffic. */
+		if ((i % 8) == 7)
+			netdev_service();
+	}
+
+	netdev_service();
+	netdev_forget_last();
+
+out:
+	for (i = 0; i < RX_RING; i++) {
+		netbuf_free(e->rx_buf[i]);
+		e->rx_buf[i] = NULL;
+	}
+
+	pmm_free_pages(regs, 1);
+	pmm_free_pages(e->ring_page, 1);
+	kmemset(e, 0, sizeof(*e));
+
+	return ok;
 }

@@ -527,6 +527,11 @@ bool e1000_attach(const struct pci_device *d);
 unsigned e1000_count(void);
 void e1000_print_summary(void);
 
+/* The receive loop and the tail rule, driven against a page of memory standing
+ * in for the register window. The mirror of the Realtek's: that one asserts
+ * four bytes come off, this asserts nothing does -- and both are right. */
+bool e1000_self_test(void);
+
 /* Both drivers' off-hardware checks: the descriptor arithmetic, the ring
  * bookkeeping and the wake path, on a machine with neither card in it. */
 bool nic_self_test(void);

@@ -177,7 +177,7 @@ one-line instruction and the badge arithmetic that goes with it.
 
 ## Open
 
-13, and each entry says why. They are listed because a register that only
+12, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -193,7 +193,6 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-003** — Half fixed: the link state is read from the card now, and still nothing consults it
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
-- **NW-007** — The boot test catches the frame-length mistake nobody makes and misses the one they do
 - **NW-008** — `enable_interrupts` is declared and documented in `net_device_ops` and called by nothing
 
 ---
@@ -350,7 +349,16 @@ turned out to be true.
   run of descriptors that all have a buffer, and stops at the first that does
   not.
 
-### NW-007 — Open — The boot test catches the length mistake nobody makes
+  **And it has a check in front of it now**, which it did not when it was first
+  written up. The walk lives in `rx_available`, which `e1000_poll` calls, so
+  the test drives the running code rather than a copy of it -- and it can be
+  handed a ring with a hole punched in it, which is the situation the fault
+  needs and which a self-test must not create for real by exhausting the page
+  allocator. Breaking the walk so it ignores the hole is caught, and so is
+  removing the cap that keeps the tail from meeting the head. Both of those
+  broken kernels still take a DHCP lease and answer a ping.
+
+### NW-007 — The boot test caught the length mistake nobody makes
 
 - **Found in** kernel 0.2.46, by the network session, breaking its own driver
   on purpose to find out what the test could see.
@@ -375,32 +383,65 @@ turned out to be true.
 
   **And too long is the direction a driver errs in**, because it is what
   forgetting the subtraction looks like.
-- **Status:** open, and narrower than it was.
+- **Fixed in** kernel 0.2.48 on `network`, by `r8169_self_test` and
+  `e1000_self_test`.
 
-  `r8169_self_test` now drives **the real receive loop** against a page of
-  memory standing in for the register window — nothing is lifted out into a
-  testable copy, which was the objection that kept this open in the first
-  place. Five faults were introduced on purpose and all five are caught: the
-  subtraction removed, the end-of-ring bit taken from the card instead of the
-  index, the short-length guard removed, a frame the card marked bad accepted,
-  and half of a split frame accepted. **Every one of those five boots still
-  reported a DHCP lease and a ping reply**, which is the measurement that says
-  the test is covering ground booting cannot reach.
+  Each drives **the real receive loop** against a page of memory standing in
+  for the register window. Nothing is lifted out into a testable copy — that
+  objection was the whole reason this stayed open, and the two places where a
+  helper *was* extracted (`rx_available`) are called by the loop, so what the
+  test exercises is what runs.
 
-  One of those five also found a fault in the test rather than the driver, and
-  it is the same shape as everything else here: the assertions measured
+  **Thirteen faults introduced on purpose, thirteen caught**, and the column
+  that matters is the third:
+
+  | driver | break | boot said |
+  |---|---|---|
+  | r8169 | the subtraction removed | lease ✓ ping ✓ |
+  | r8169 | end-of-ring taken from the card, not the index | lease ✓ ping ✓ |
+  | r8169 | the short-length guard removed | lease ✓ ping ✓ |
+  | r8169 | a frame the card marked bad accepted | lease ✓ ping ✓ |
+  | r8169 | half of a split frame accepted | lease ✓ ping ✓ |
+  | e1000 | the Realtek's subtraction copied in | lease ✗ ping ✗ |
+  | e1000 | four bytes **too long** | lease ✓ ping ✓ |
+  | e1000 | the tail walks past a hole (NW-006) | lease ✓ ping ✓ |
+  | e1000 | the tail offers the whole ring | lease ✓ ping ✓ |
+  | e1000 | end-of-packet ignored | lease ✓ ping ✓ |
+  | e1000 | the error byte ignored | lease ✓ ping ✓ |
+  | e1000 | an empty frame accepted | lease ✓ ping ✓ |
+  | e1000 | a jumbo frame accepted | lease ✓ ping ✓ |
+
+  **Twelve of the thirteen boot perfectly** — a DHCP lease and a ping answered
+  in about 300 microseconds — while doing the wrong thing. That is the measured
+  statement that these tests cover ground a running machine cannot reach, and
+  it is the reason this entry existed.
+
+  A fourteenth break did not compile: removing the error-byte test entirely
+  leaves the variable unused and `-Werror=unused-but-set-variable` refuses it.
+  Worth recording as the one case where the toolchain is the check.
+
+  **One break found a fault in the test rather than the driver**, which is the
+  same shape as everything else here. The Realtek's assertions measured
   `rx_bytes` alone, so removing the short-length guard — which turns a
   four-byte descriptor into a frame of length **zero**, passed up the stack —
-  moved no bytes and read exactly like a correct refusal. It counts frames as
-  well as bytes now. Found by breaking the guard and watching the test stay
-  green.
+  moved no bytes and read exactly like a correct refusal. Both tests count
+  frames as well as bytes now. Found by breaking the guard and watching the
+  test stay green.
 
-  **What is still uncovered, and why this stays open:** the Intel has no
-  equivalent test, and neither driver's *transmit* path is checked by anything
-  except a network that answers. A simulated card also cannot say that the real
-  chip behaves the way the simulation pretends — every register offset and the
-  reset sequence are still proved only by running on silicon, which for the
-  Realtek has not happened.
+  **And one break was wrong rather than uncaught**, separated from that because
+  the difference matters: or-ing `DESC_OWN` into a Realtek descriptor instead
+  of rebuilding it does *not* lose the end-of-ring bit, because that driver
+  re-derives the bit from the index every time. The break that loses it is
+  taking the bit from what the card left — which is what Linux's driver does —
+  and the simulated card here clears it deliberately so the difference is
+  testable at all.
+
+  **What this does not cover, so that it is not assumed:** neither driver's
+  *transmit* length is checked by anything except a network that answers, and a
+  simulated card cannot say that the real chip behaves the way the simulation
+  pretends. Register offsets, the reset sequence and the meaning of every bit
+  are proved by booting with the card and nowhere else — which for the Realtek
+  has not happened at all.
 
 ### NW-008 — A hook in the device interface that nothing has ever called
 
