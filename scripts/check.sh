@@ -248,6 +248,24 @@ if [ "$generated_drift" = "1" ]; then
 fi
 echo "the generated files match their sources"
 
+# --- and the badges say what the tree says ---
+#
+# The kernel session wrote this after the badges read "version 0.4.0" and
+# "135 bugs" against an actual 0.4.37 and 311 -- the same fault as the
+# checkpoint board's "34 of 43 reachable, unchanged since 7 September", found
+# the same morning. It runs in verify-kernel.sh too.
+#
+# It is here because the numbers it checks come out of docs/CHANGELOG.md and
+# docs/BUGS.md, which this side changes on every landing: a check that only
+# the other session runs goes red for commits this one made.
+echo
+echo "Checking that the README's badges say what the tree says"
+if ! python3 "$REPO_DIR/scripts/check-readme-badges.py"; then
+    echo
+    echo "Run scripts/check-readme-badges.py --fix and commit what changes."
+    exit 1
+fi
+
 # --- and nowhere says a string may be cut ---
 #
 # Seventeen such places stood in this build. Five of them were not text at all:

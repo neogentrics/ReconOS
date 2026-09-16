@@ -47,6 +47,17 @@ def bug_counts():
     return {"BG": heads.count("BG"), "KF": heads.count("KF")}
 
 
+def suite_count():
+    """How many suites there are, which the tree does know.
+
+    `add_test(` in CMakeLists.txt, counted. The check count beside it in the
+    same badge genuinely cannot be derived -- it is a figure from a run -- but
+    this one is a fact the repository holds, and it had drifted from 34 to 45
+    while sitting next to a number that excused it.
+    """
+    return len(re.findall(r"^add_test\(", read("CMakeLists.txt"), re.M))
+
+
 def desktop_version():
     """The desktop's version, which is what the top badges are about.
 
@@ -94,11 +105,22 @@ def main():
         fixed = re.sub(r"(latest_release-v)[\d.]+(-)", r"\g<1>%s\g<2>" % dv, fixed)
         fixed = re.sub(r"(releases/tag/v)[\d.]+(\))", r"\g<1>%s\g<2>" % dv, fixed)
 
-    # --- what cannot be checked from here ------------------------------
+    # --- the half that can be checked, and the half that cannot --------
+    #
+    # The suite count is `add_test(` counted. The check count is a figure from
+    # a run and stays unchecked -- reading it from a log lying around would be
+    # worse than leaving it, because the log might be from any commit.
     m = re.search(r"tests-(\d+)_suites,_(\d+)_checks", readme)
     if m:
-        print("  note: tests badge claims %s suites / %s checks -- not "
-              "derivable from the tree, so not checked" % (m.group(1), m.group(2)))
+        suites = suite_count()
+        if int(m.group(1)) != suites:
+            problems.append("tests badge says %s suites, CMakeLists.txt "
+                            "registers %d" % (m.group(1), suites))
+        fixed = re.sub(r"(tests-)\d+(_suites,)", r"\g<1>%d\g<2>" % suites,
+                       fixed)
+
+        print("  note: the tests badge's %s checks is a figure from a run, "
+              "not something the tree holds -- left alone" % m.group(2))
 
     if fix and fixed != readme:
         io.open(os.path.join(ROOT, "README.md"), "w", encoding="utf-8",
