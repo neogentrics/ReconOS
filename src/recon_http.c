@@ -168,13 +168,50 @@ static void read_head(struct recon_http_request *r) {
 
         const char *value = header_value(line, "Content-Type");
         if (value != NULL) {
-            snprintf(r->content_type, sizeof(r->content_type), "%s", value);
+            /*
+             * Cut, deliberately, and unlike the Location below it that is
+             * safe: the part anything acts on -- `text/html` -- is at the
+             * front, and what a cut loses is the parameters after it. A
+             * header longer than this field is a header with a great deal of
+             * charset and boundary in it, and none of that changes which
+             * reader the body goes to.
+             *
+             * Written out rather than through `recon_text_copy`, because this
+             * file is on the list that compiles with no libc under it and does
+             * not include `ReconOS.h` -- and because the cut and the refusal
+             * below then read as the same shape with one line different, which
+             * is the whole distinction between them.
+             */
+            size_t length = strlen(value);
+            if (length >= sizeof(r->content_type)) {
+                length = sizeof(r->content_type) - 1;
+            }
+            memcpy(r->content_type, value, length);
+            r->content_type[length] = '\0';
             continue;
         }
 
         value = header_value(line, "Location");
         if (value != NULL) {
-            snprintf(r->location, sizeof(r->location), "%s", value);
+            /*
+             * **Left empty when it will not fit, rather than cut.** A header
+             * line can be twice the size of this field, and the redirect is
+             * *followed* -- `recon_http_parse_url(r->location, ...)` a few
+             * hundred lines down. A cut URL is a different address, so it
+             * would be fetched, and the only sign would be a page nobody
+             * asked for.
+             *
+             * Empty is already the "no redirect" state the status check
+             * beside it tests for, so this needs no new branch anywhere: a
+             * 302 whose Location cannot be held is a 302 that is not
+             * followed.
+             */
+            size_t length = strlen(value);
+            if (length < sizeof(r->location)) {
+                memcpy(r->location, value, length + 1);
+            } else {
+                r->location[0] = '\0';
+            }
             continue;
         }
 

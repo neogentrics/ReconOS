@@ -1,96 +1,107 @@
-ReconOS could not draw a letter. Not for want of a font or a rasteriser: the
-rasteriser is third_party/stb_truetype.h and it calls sqrt, floor,
-ceil, pow, fmod, acos and cos, and on a kernel with no glibc under it
-there was nothing to answer them. The maths library is not a calculator's
-luxury; it sits between this system and its first glyph.
+The last large piece of the C library, and the one every other piece was
+waiting behind. Measured rather than guessed: 5 symbols, 430 call sites --
+more than two thirds of everything the desktop still could not link.
 
-Twenty functions, 3,613,874 checks against the host's, and no failures.
+userland/include/stdlib.h used to open by saying there was no malloc in it,
+so that a caller failed to *link* rather than getting a stub that returned
+nothing and crashed an hour later somewhere else. That paragraph is gone.
 
-### Two standards, because these functions are two kinds
+### The memory comes from two function pointers
 
-Eight have an exactly right answer and are held to bit-for-bit equality --
-fabs, floor, ceil, round, fmod, ldexp, lrintf, and sqrt. The
-last is exact for free: IEEE 754 requires square root to be correctly rounded
-and both architectures have the instruction, so sqrt here is sqrtsd and
-nothing else. Verified in the object file rather than assumed.
+malloc.c names no system call. It asks a struct recon_memory_source -- take
+a range, give one back -- and everything else is written against those.
 
-Bit-for-bit catches what == cannot. floor(-0.4) is -0.0, and a caller
-who divides by it gets negative infinity rather than positive. The two compare
-equal.
+This is the same split userland/init/layout.c uses for making directories,
+and it is here for the same reason: the part that can be wrong is the
+allocator, not the call underneath it. With the source behind a pointer the
+whole file runs on the host against the library it replaces, and against three
+sources no kernel can be made to be:
 
-Twelve are approximations, held to a bound in units in the last place --
-and the suite prints the worst error it found for each rather than only
-whether it stayed under the line, because a tolerance nobody looks inside is a
-tolerance that can grow by a factor of a thousand and still pass. Measured:
+- one that can hand memory back,
+- one that cannot -- which is the configuration ReconOS is actually in, so
+  every scenario runs twice,
+- and one that refuses after a while, which is how the out-of-memory path gets
+  exercised at all.
 
-| | ulp | | ulp | | ulp |
-| --- | --- | --- | --- | --- | --- |
-| exp | 1 | sin | 2 | asin | 3 |
-| log | 3 | cos | 2 | acos | 3 |
-| log10 | 2 | tan | 4 | atan | 2 |
-| pow | 17 | | | atan2 | 3 |
-| cbrt | 4 | | | | |
+Boundary tags, coalescing on both sides, free lists segregated by size, and a
+region handed back when nothing in it is in use. An allocation larger than a
+quarter of a megabyte gets a region of its own and returns the whole thing --
+because KERNEL-WANTS measured a browser tab at 6.8 MiB, and a window where
+twelve tabs have been opened and closed has lost eighty-one megabytes if
+nothing is released.
 
-Every bound in the suite is that figure rounded up to the next even number.
-They were set after the runs. Setting them first would have been setting
-them from hope.
+### 11,506 checks, and the suite earned its keep on the first run
 
-### Four faults, and every one was a wrong answer rather than a close one
+The heap is audited after every operation, not at the end: every block of
+every region, footers against headers, each block's flag about its predecessor
+against whether that block is really in use, no two free blocks side by side,
+and the running counters against a fresh count. A shadow copy of what every
+live block should contain is checked alongside it, because alignment and audit
+would both pass an allocator that hands the same address out twice.
 
-BG-186 -- the reduction subtracted the same piece of pi/2 twice. 860 billion
-ulp at three pi. PIO2_1T is the tail of PIO2_1 and PIO2_2 is the leading
-part of that same tail; they are alternatives, not a chain. Fixing that left a
-second fault underneath: k * pi/2 is only exact while k has under twenty
-bits, so everything past about 1e6 was still wrong and no test of small angles
-could see it. The reduction now runs in 2,048 bits of 2/pi, in integer
-arithmetic where nothing rounds. scripts/gen-two-over-pi.py computes that
-table and checks it against the published expansion before writing it;
-check.sh regenerates and compares it, like the help pages.
+It found BG-194 before the allocator had run anywhere else: in the smallest
+block -- 32 bytes, a 16-byte header and a 16-byte payload -- the payload is
+*exactly* the two free-list pointers, and the footer was being written into its
+last eight bytes. Every smallest-size block on a free list had its prev link
+overwritten by its own size. The fix is the layout every allocator of this
+shape uses: the footer lives in the next block's header, and the flags move
+into the low bits of the size.
 
-BG-187 -- a ten-bit hole between two doubles. The reduction accumulates 126
-bits and has to get them into doubles; taking the top half as
-(double)(acc >> 63) rounds, so bits 53 to 62 were in neither piece. Only
-visible near a multiple of pi, where those are the only significant bits there
-are. Three pieces of 42 instead, each of which a double holds exactly. sin
-and cos are 2 ulp out to 1e300 now, and the suite prints that sweep so
-the limit is a measurement rather than a claim.
+That fault would have been invisible until it was a crash somewhere else
+entirely, minutes later, with no allocator in sight.
 
-BG-188 -- pow(1, nan) and pow(-8, 3). One to any power is one,
-including to a power that is not a number; the check for a base of one came
-after the check for a NaN, and the order is the whole of what decides it. And
-exp(3 * log 8) returned 511.99999999999994, which is what somebody notices
-first. A small integer power is repeated squaring now -- bounded at 8, because
-squaring costs a rounding per doubling and at a power of 60 it was 33 ulp where
-the logarithm was 17.
+### And two instruments that could not see the allocator
 
-BG-189 -- cbrt overflowed in its own last step. guess * (cube + 2x) /
-(2cube + x) multiplies before it divides, so the numerator at x = 1e300 is
-1e100 times 3e300 and there is no such double. Found by printing the
-intermediates, which mattered: the formula was right, and reading it again
-would have kept saying so.
+BG-195. scripts/measure-libc.py went on reporting 430 call sites
+unanswered while the functions sat in the build, tested, next to it -- because
+it read the objects of *one test target*, and the allocator has a suite of its
+own. That is the third of a family: BG-182 counted from a list of expected
+names, BG-185 corrected the list, and this one defined "the library" as
+whatever one target had compiled. Each time the measurement took its idea of
+the thing from the same place the thing came from.
 
-### And pow is honestly the weak one
+Fixed by removing the name rather than correcting it: every object compiled
+from userland/libc/ anywhere counts, and the script now refuses to report a
+number when a library source has no object, naming it. It caught one on its
+first run.
 
-Seventeen units where everything else is two to four, and it is inherent rather
-than unfinished. pow is exp(y * log x), and exp turns an error in its
-argument into the same *relative* error in its answer -- so log's own last bit
-gets multiplied by y before it reaches the result. At y = 40 that was 576
-ulp. Carrying log to a hundred bits, in two doubles, took it to 17; the rest
-would need exp carried the same way. Seventeen units is two parts in 1e15 --
-the last two digits of sixteen, where a calculator shows fifteen.
+BG-196. check.sh builds every suite twice, once sanitized and once the
+way a release is -- and built the second list from the *desktop's* tests only.
+The four suites under userland/tests/ had never been built optimised: the C
+library, the file layer, the maths, and the allocator. -O2 is where strict
+aliasing and pointer provenance start to matter, and an allocator is nothing
+but pointer arithmetic across type boundaries.
 
-### What it unblocked
+It surfaced as a fix that would have been dead code, which is the part worth
+keeping: the sanitized pass aborted on the calloc overflow check, because
+under AddressSanitizer the host's calloc is ASan's and ASan kills the process
+rather than returning NULL. Skipping the comparison under a sanitizer would
+have meant skipping it everywhere. 34 suites became 40.
 
-scripts/check-userland.sh is at 11 of 11, and the new one is
-src/recon_expr.c -- the calculator's expression grammar, 459 lines, which
-holds seventeen maths functions in a table of function pointers and therefore
-could not compile until they existed. ReconOS can do arithmetic with no glibc
-underneath it.
+### Where it leaves the library
 
-A sweep of all seventy-nine sources says where the rest stand, and the picture
-is now one word wide: fourteen are blocked on nothing but malloc,
-calloc or free. Three want assert.h, three want errno.h, four want
-dirent.h, and the remainder want Wayland, DRM or xkbcommon, which are Linux
-and always were.
+| | before | now |
+|---|---|---|
+| symbols answered | 72 of 132 | 77 of 132 |
+| call sites answered | 2,478 of 3,113 | 2,908 of 3,113 |
+
+205 call sites left. The largest group is files and directories at 96, then
+errno at 43 and sockets at 44.
+
+### What it needs from the kernel, which is one call
+
+mem_recon.c asks SYS_MAP for a range with no file behind it -- fd -1,
+the spelling docs/KERNEL-WANTS.md proposes. Today the kernel finds no such
+descriptor and refuses with EBADF, so malloc answers NULL and
+recon_malloc_stats().refusals counts it. The day the kernel accepts it,
+this works with nothing rebuilt.
+
+No new system call number is taken here, deliberately: two sessions build this
+kernel, and a number claimed in advance by the half that does not own core/
+is a number claimed twice. That has happened, and it is in docs/BUGS.md.
+
+The program on the disk links the allocator already, so the wiring is in place
+and compiled -- and the freestanding build has to keep working for it, which is
+what stops it drifting while it is only ever exercised on the host.
 
 ---

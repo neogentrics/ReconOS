@@ -213,7 +213,9 @@ static void push_kind(struct recon_terminal *term, const char *text,
         index = term->line_start;
         term->line_start = (term->line_start + 1) % SCROLLBACK_LINES;
     }
-    snprintf(term->lines[index], LINE_MAX, "%s", text);
+    /* A line wider than the scrollback holds is cut, which is what a
+     * terminal does. Nothing reads these back except the drawing. */
+    recon_text_copy(term->lines[index], LINE_MAX, text);
     term->kinds[index] = (unsigned char)kind;
 }
 

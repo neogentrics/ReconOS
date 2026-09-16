@@ -1,4 +1,6 @@
-Choose an account, then sign in — two screens rather than one, so nothing
-about how an account signs in is shown before one is chosen.
+Gradients. A skin can ask for a surface to fade from one colour to
+another, which is what the Beacon skin needed to look like the era it is
+reaching for.
 
-Updates announce themselves on the first start after one.
+A startup screen, with the Recon Towers mark and a count of what the
+system found as it came up.

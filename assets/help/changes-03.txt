@@ -1,71 +1,59 @@
-Fourteen call sites, and until v0.4.30 it was in neither half of the coverage
-figure: glibc emits it as __isoc99_sscanf, which sat behind a filter meant
-for compiler internals (BG-197).
+The board's next row: *"Fourteen places where an optimised build says a path
+may be cut ... Every one builds a string to display rather than to open, which
+is why they were left rather than fixed in the same sweep."*
 
-What the desktop asks for was measured before any of it was written, by
-reading all fourteen calls: %d with widths, %u %lu %llu, %lx, %63s,
-%n, and literal text around them — MemTotal: %lu kB, * %d EXISTS,
-%4d-%2d-%2d %2d:%2d %n. Those fourteen formats open the suite, verbatim, on
-realistic input.
+There were seventeen, and five of them were not text. They build a name
+something is then looked up by, and include/recon_fs.h has carried the
+sentence about that for months, above recon_fs_join: *"A truncated path is
+not a shortened name for the same file, it is the name of a different one."*
 
-Implemented is that set plus the rest of the integer and floating conversions,
-* suppression, and the hh h l ll z j modifiers. Scansets and %p are
-not, and a format holding one stops the scan rather than skipping it — so
-a caller gets a short count instead of a field in the wrong variable.
+| | what a cut one does |
+|---|---|
+| a keyring entry name | two mail accounts collide and one silently overwrites the other's password |
+| where move and copy put things | the file lands somewhere else and the command reports success |
+| an icon's stamp key | the cache vouches for a different file |
+| a redirect's Location | a different URL is fetched |
+| a pinned menu entry | pins something that can never be found again |
 
-### The failure that matters is not the count
+### The keyring one
 
-It is assigning the right value to the wrong variable. So every case
-declares a block of storage, fills it with a sentinel, runs both libraries on
-identical copies, and compares the whole block — a variable that should not
-have been touched is checked to be untouched.
+secret_name builds mail/user@host because — its own comment — *"a single
+mail/password would have them overwriting each other with no sign that
+anything had happened."* user holds 128 bytes and host 192; a keyring name
+holds 128. So an address over about 122 characters is cut, and two accounts on
+one host with a long shared prefix produce the same name — which is exactly
+the collision the function exists to prevent, reintroduced by the one line that
+builds it.
 
-### Two faults in the tools, and neither in the library
+All five refuse now. Four refuse invisibly and correctly; the fifth changes what
+a window offers, so it says why — VT-J003, *a password could not be
+remembered*.
 
-BG-198. The mutation harness crashed between mutating and restoring — a
-mutated build printed the sentinel bytes, which are not UTF-8 — and left the
-mutation in the tree. The next run took that as its original and restored it.
-Then rsync --checksum brought the correct source back with an older
-modification time than the object, so make did nothing and the next run
-tested the mutation again.
+### And the other twelve say they are text
 
-The result was a function that had passed cleanly an hour earlier failing the
-one case its own comment says must work, with diff reporting the source
-identical to the kept copy — true, and useless, because the kept copy was the
-mutated one. A harness that can leave the tree in a state it invented is
-worse than no harness. The restore is now in a finally, forces a rebuild,
-and is verified.
+include/ReconOS.h wrote recon_text_copy and recon_text_printf for exactly
+this, and said why: *"a build with fourteen warnings in it is a build where the
+fifteenth is invisible. This says the same thing in a way that names the intent,
+so what is left on the list is what nobody meant."*
 
-BG-199. Once the harness worked it caught four of five mutations and missed
-one: an unimplemented conversion being *skipped* rather than stopping. The
-suite tested that with %[a-z], and a version that skipped it would then match
-the leftover a-z] as literals and fail anyway — returning the same 0. The
-test was asserting a number that agrees either way, which is the exact failure
-its own header exists to catch. Fixed with an unknown conversion between
-two numbers, where stopping and skipping write to different variables.
+So the desktop is at zero, and scripts/check-truncation.sh holds it there
+as the seventh pass of check.sh. It compiles rather than greps, because the
+warning is the optimiser's and no pattern over the source can tell an
+snprintf into a buffer that provably fits from one that does not. And it
+touches src/ first, because an incremental build compiles nothing and reports
+nothing — a check reading one would pass on any tree whose build directory was
+warm, which is every tree after the first run.
 
-### And one fault in the library, caught by building it for the machine
+It says what it does not cover, too. -Wall gives level 1: the compiler
+warns where it can *prove* a cut is reachable. Level 2 assumes any argument can
+be arbitrarily long, and the desktop has 147 sites at that level — measured,
+not estimated — so it is not a bar this tree holds today. A check whose limits
+are unstated gets read as covering everything.
 
-posix.c called recon_strlen. On the host that compiles and works —
-prefix.h renames strlen to precisely that — so every suite passed. It only
-fails where there is no renaming, which is the freestanding build.
-
-scanf.c and posix.c were added to the program on the disk for exactly this:
-it is the only place the library is compiled with no glibc, the kernel's flags
-and -Werror. A library file built only for Linux is a library file that has
-quietly stopped being portable.
-
-### Where it leaves things
-
-| | before | now |
-|---|---|---|
-| call sites answered | 3,020 of 3,134 | 3,034 of 3,134 |
-| desktop sources with no libc | 19 of 79 | 20 of 79 |
-
-src/recon_cookie.c is the twentieth — it came off the list an hour earlier
-for wanting sscanf, and has one now.
-
-Sockets is the largest group left at 44 call sites, then the ten remaining file
-calls at 31.
+Both mutations bite: a named cut turned back into a bare snprintf, and a new
+one appearing in a file that never had one. The first version of that second
+mutation copied from an unbounded const char * and was not caught — which
+was the check being honest about level 1, and is why its scope is now written
+down beside it.
 
 ---

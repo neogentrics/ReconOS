@@ -1,3 +1,2 @@
-Four desktops. Alt+1 to Alt+4 switches between them; the numbers on the
-right of the taskbar do the same. Alt+Shift and a number takes the current
-window with you.
+Notepad can undo, by word rather than by keystroke, and has an Edit menu
+so the shortcuts are findable.

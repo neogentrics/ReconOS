@@ -3,11 +3,11 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.4.33-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
-[![release](https://img.shields.io/badge/latest_release-v0.4.33-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.33)
+[![version](https://img.shields.io/badge/version-0.4.37-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.4.37-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.37)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-34_suites,_1971_checks-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-311-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-313-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -82,67 +82,13 @@ in the Control Panel itself, page by page, and in
 
 ## Version history
 
-Newest first. The number tracks what works, not what is planned.
+Every version and what it brought, newest first, is
+**[docs/VERSIONS.md](docs/VERSIONS.md)** -- forty-one rows, and the file to edit
+when one lands.
 
-| Version | What it brought |
-| --- | --- |
-| **0.4.33** | **Memory a program can ask for.** `SYS_MAP` with an fd of -1 returns a demand-paged anonymous range -- the first entry in `KERNEL-WANTS.md`, answered, with nothing in `userland/` rebuilt for it: `mem_recon.c` had been sending that call since the allocator was written. An installed disk, booted by itself, running a program loaded off its own volume, reports *64 blocks and 512 KiB written, read back and freed; 1536 KiB from the kernel*. A heap that grows costs one region however far it grows, and still ends where it was asked to end. Also `sincos`, `sqrtf` and `strtoll` -- three functions nothing here calls and the compiler writes, which a release build needs and a debug build does not, which is how the coverage measurement had been overstating itself. **2,998 of 3,089 call sites, measured against a release** |
-| **0.4.32** | **The nine that need nothing from the kernel.** Byte order, `inet_pton`, `inet_ntoa`, `gai_strerror`, and the stdio readers `feof`, `ferror` and `ungetc`. `htons` is arithmetic on the value rather than a byte swap of its storage -- the two agree on every machine in the rig and differ on the first big-endian one -- so the suite checks the bytes directly as well as against the host. `inet_pton` is mostly a refusal, and most of its corpus is text that must not parse. Three faults: a stream field the slot reset forgot, so every fresh `fopen` had a NUL pushed back; `assert` placed by what it is about rather than what it needs; and a test that depended on running before one that deletes its fixture. **3,043 of 3,134 call sites, and every one still missing now needs the kernel** |
-| **0.4.31** | **`sscanf`.** Fourteen call sites, and what the desktop asks of it was measured by reading all fourteen before any of it was written -- those formats open the suite, verbatim. Scansets and `%p` are not implemented and a format holding one stops the scan rather than skipping it, so a caller gets a short count instead of a field in the wrong variable. Every case compares a whole block of storage, because the failure that matters for a scanner is which variable got written. Two faults found, both in the tools: BG-198, a mutation harness that crashed between mutating and restoring and left the mutation in the tree, where it read as a fault in a correct library; and BG-199, a check that could not tell stopping from skipping. And one in the library, found only by compiling it for the machine |
-| **0.4.30** | **Files by name, by number, and by directory.** The eleven of twenty-one that have a system call underneath them already; the other ten are declared and deliberately not defined, so a caller fails to link rather than getting a plausible wrong answer. Every call is a flag translation and that is the whole risk -- `O_RDONLY` is 0 and `RECON_O_READ` is 1 -- so the suite makes each one twice and also writes through a read-only descriptor to prove the translation happened at all. Two faults on its first run, both in the host stand-in, which had a looser contract than the call it stands in for. And BG-197: the coverage measurement was hiding five library functions behind its double-underscore filter, wrong in both directions. 3,020 of 3,134 call sites, and 19 of the desktop's 79 sources now build with no libc at all |
-| **0.4.29** | **`errno`, and two numberings that meet in one place.** One symbol, 43 call sites, and the last group needing nothing from the kernel. The values are Linux's deliberately -- the desktop is compiled against both libraries at once today, and `ENOENT` being 7 in one translation unit and 2 in another reads as a filesystem fault. All 52 messages held to equality against the host's, and the suite reads the *kernel's* own error list while it runs, so the translation cannot go quietly stale -- mutation-tested in both directions. Where it deliberately disagrees with glibc (`ENOSTR`, `EDQUOT` and two more, for conditions this system does not have) that is an assertion rather than a surprise. 2,951 of 3,113 call sites answered |
-| **0.4.28** | **The allocator.** The last large piece of the C library and the one the other 430 call sites were behind -- boundary tags, coalescing, segregated free lists, and regions handed back when nothing in them is in use. It takes its memory from two function pointers rather than a system call it names, so the whole of it runs on the host against three sources no kernel can be made to be: one that releases, one that cannot -- which is what ReconOS has -- and one that refuses. 11,506 checks with the heap audited after every operation, which caught BG-194 on the first run: in the smallest block the free-list links and the footer were the same eight bytes. Two instruments that could not see the allocator were fixed with it, BG-195 and BG-196. 2,908 of 3,113 call sites answered |
-| **0.4.27** | **The kernel starts the system instead of containing it.** `recon_init` was 121 KiB of `.rodata` inside the kernel image and the installer put nothing on the volume it formatted, so changing a string on the first-boot screen meant reflashing a kernel. Now the medium carries `/reconos/init.elf`, the installer writes it to `/System/init.elf` -- the first thing it has ever written into a ReconFS volume -- and the kernel asks the volume before its own copy and says which it used. Proved by keeping a kernel binary, changing the program, and booting a disk that carries the old kernel byte for byte and runs the new program |
-| **0.4.26** | **The volume has a shape, and a second boot finds it.** `SYS_MKDIR`, and the ten directories a ReconOS machine has, laid down on first boot and found already there on every boot after. The list is data and the directory-maker is a function pointer, so the whole arrangement is checked on the host in a millisecond rather than by installing onto a disk. Getting it to run on a real one cost four kernel faults, KF-226 to KF-229, every one invisible to every test in the tree: the boot thread never stopped being work, so a directory took seventy seconds to create on NVMe and none at all on virtio; the root of a volume could not be listed; every refusal from a listing reached a program as "the disk failed"; and five self-tests passed exactly once per volume, inside the one check written to catch exactly that |
-| **0.4.25** | **ReconOS is on the screen.** The first program on its own kernel that is a system rather than a self-test: it asks the machine what it is, the display how it is arranged and the volume what is on it, and draws a screen somebody can read. The first thing built on `userland/libc/` rather than against nothing. Its drawing is a separate file that makes no system call, so the host renders exactly what the machine renders and 306,797 checks hold it -- with padding on every row of every canvas, because a program that confuses pitch with width times four draws a perfect picture on an emulator |
-| **0.4.24** | The maths: twenty functions, 3,613,874 checks against the host's, none failing. Eight held to bit-for-bit equality and twelve to a bound in units in the last place that the suite measures and prints rather than merely asserts. Four faults, every one a wrong answer rather than a close one -- including an argument reduction 860 billion units out at three pi, now done in 2,048 bits of 2/pi. It is what lets ReconOS draw a letter: the font rasteriser calls seven of them |
-| **0.4.23** | Dates: the two clocks, the calendar and `strftime`, held against the host's across two and a half centuries. Two more desktop sources compile with no glibc under them. And the coverage figure moved from a grep to the linker -- `nm` on the object files knows the external surface exactly, where a list of expected names finds only what is on it and could never have found `puts`, which the compiler puts there by rewriting a `printf` |
-| **0.4.22** | A C library of ReconOS's own, for the day there is no glibc underneath: strings and memory, `snprintf`, the character classes, numbers out of text, and the file layer. 2,473 of the 3,113 library calls in `src/` are answered by it, counted rather than estimated. Held against the library it replaces by compiling both into one program and making every call twice -- 511,000 checks. Nine of the desktop's own sources already compile with every system header directory removed. Three faults found before any of it ran, BG-179 to BG-181, every one of them the reference accepting something this refused |
-| **0.4.6 - 0.4.21** | The web viewer becomes a browser: a parser checked against fifteen hundred cases nobody here wrote, stylesheets, tables with columns, text alignment, links to a place on a page, History and Bookmarks as pages, forms that submit, and cookies with four things they are not allowed to do. Packages say who made them and the signature is checked. A fuzzer that learns. And the configuration that actually ships, built for the first time |
-| **0.4.5** | A framework for how every control looks and behaves, versioned on its own so it can be fixed without arguing about the system's number. The taskbar in a scene layer of its own, above every window, because it is how you reach everything else. Icon sets that belong to a skin and can be improved after they are installed. Two more skins -- Smoked, and Metallic in eight metals -- and a tint that carries its own lightness rather than borrowing the palette's. The skin list split four ways, so choosing a look is choosing between looks. A Start menu search that finds settings, places and files rather than programs and help. Twenty-two faults, BG-137 to BG-158 |
-| **0.4.0** | ReconOS makes a sound, shows a picture, and can be seen through: `recon_audio`, a codec registry, WAV written from the specification, our own MP4 demuxer, and video playing with the sound device as the clock. Colour conversion and scaling are ours; H.264 is borrowed, in a module. A Media Player, a web viewer, an icon for every kind of file. And the decision about what an application is once there is a kernel, settled with a measurement. Glass in six colours, four wallpapers made for it, and a clock in the corner with the date under it. Text read out of a picture — including a screenshot of its own desktop — by drawing the shapes it is looking for. A theme protocol, so a client that is not part of this program can look like the desktop it is on. Mail that sends. An expression grammar with its own tests, and a grapher on top of it. A filesystem call that creates a file already private rather than tightening it afterwards |
-| **0.3.0** | TLS both ways — the port, and outgoing with the far end verified. Mail over IMAP and POP3. A clock, Photos, a Calendar. The Calculator gains five modes. Applets update on their own. A fixed-width terminal with colour schemes. Screen resolution. The kernel begins, alongside |
-| **0.2.17** | The Control Panel becomes icons, one window per item. Appearance, Network and Programs split into sections. Storage becomes three spaces with a bin each, plus Disk Cleanup. Tooltips. Fonts and wallpapers installable from a right-click. Presets that cannot be deleted |
-| **0.2.16** | Error codes with a screen and a log. A firewall. Remote access, two ways. A startup screen that checks rather than counts |
-| **0.2.15** | Help and the change log, in the system. Skins writable from inside it. Storage. Typing in the Start menu |
-| **0.2.14** | Packages — a manifest and a receipt, so removing takes back exactly what installing placed. Find |
-| **0.2.13** | Removing an account can take its files. The menu footer becomes icons |
-| **0.2.12** | A text clipboard, which the system did not have at all |
-| **0.2.11** | Notepad can undo, and a menu to find it in |
-| **0.2.10** | A skin can set the *shape* of a window frame, not only its colours |
-| **0.2.9** | Desktop icons move and are remembered. Files open when you click them |
-| **0.2.8** | Properties — and the explorer and the box agreeing about what a file is |
-| **0.2.7** | Four desktops, the last thing the Multitasking page said was missing |
-| **0.2.6** | Window snapping, and Alt+Tab — which had been quietly dead for months |
-| **0.2.5** | The registry can be changed, not only read |
-| **0.2.4** | Skins can be installed, which the file format had been waiting for |
-| **0.2.3** | Gradients, a boot splash, and the unreadable labels that finding them revealed |
-| **0.2.2** | All Programs. The control socket restricted to the account that owns it |
-| **0.2.1** | Connections that carry data. Screen capture. Installing programs. Wallpapers |
-| **0.2.0** | The network — seen and reached across, not implemented |
-| **0.1.3** | Choose an account, then sign in |
-| **0.1.2** | Setup that looks like it belongs to something. Accounts with faces |
-| **0.1.1** | One account at a time, properly. The shape of the rest, in the Control Panel |
-| **0.1.0** | The milestone defined as *a usable desktop* |
-
-[docs/ROADMAP.md](docs/ROADMAP.md) has what each version did in full, and what
-is known to be missing. [docs/BUGS.md](docs/BUGS.md) has every fault ever
-found — what it actually was, how it surfaced, who found it, and what was done
-about it. Every entry is also a
-[GitHub issue](https://github.com/neogentrics/ReconOS/issues).
-
-Still early. The desktop still runs on Linux, and its account roles are
-enforced by ReconOS inside ReconOS rather than by anything underneath it. What
-is here works and is tested; what is not here is listed at the end.
-
-**There is now a kernel of its own**, built alongside the desktop and not yet
-underneath it — see [The kernel](#the-kernel) below. It boots on two
-architectures under three firmwares, on its own bootloader, off its own
-filesystem, installed by its own installer, and it reads a keyboard and a
-mouse. It has a network stack of its own now too. What it does not have yet is
-the **display** a desktop needs, and a way for a program to reach that network
-— which is exactly the list that section ends with.
----
+The prose account of each is `docs/CHANGELOG.md` for the desktop and
+`docs/KERNEL-CHANGELOG.md` for the kernel. The number tracks what works, not
+what is planned.
 
 ## Contents
 

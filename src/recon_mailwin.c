@@ -16,6 +16,7 @@
 #include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_crypt.h"
+#include "recon_error.h"
 #include "recon_filedlg.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
@@ -203,8 +204,29 @@ static void set_message(struct recon_mailwin *m, bool error, const char *fmt,
  * what identifies an account everywhere else in this file, so they are what
  * identifies it here.
  */
-static void secret_name(const struct recon_mailwin *m, char *out, size_t size) {
-    snprintf(out, size, "mail/%s@%s", m->account.user, m->account.host);
+/*
+ * **False when it would not fit, rather than a cut name.**
+ *
+ * `user` holds 128 bytes and `host` 192; a keyring name holds 128. So an
+ * address longer than about 122 characters is cut -- and two accounts on one
+ * host whose usernames share a long enough prefix then produce *the same
+ * name*, which is exactly the collision the paragraph above says this function
+ * exists to prevent. `recon_keyring_put` would overwrite one password with the
+ * other and report success.
+ *
+ * Long, but not invented: a corporate address on a long host reaches this, and
+ * the failure is silent in both directions -- the password that was stored is
+ * gone, and the one that comes back belongs to somebody else.
+ */
+static bool secret_name(const struct recon_mailwin *m, char *out, size_t size) {
+    int wanted = snprintf(out, size, "mail/%s@%s", m->account.user,
+        m->account.host);
+
+    if (wanted < 0 || (size_t)wanted >= size) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
 }
 
 /*
@@ -220,7 +242,13 @@ static void recall_password(struct recon_mailwin *m) {
     m->was_remembered = false;
 
     char name[RECON_KEYRING_NAME_MAX];
-    secret_name(m, name, sizeof(name));
+    if (!secret_name(m, name, sizeof(name))) {
+        /* Nothing was ever stored under a name that cannot be built, so there
+         * is nothing to recall and no error to report: the window opens with
+         * an empty password, which is what it does for any account that never
+         * asked to be remembered. */
+        return;
+    }
 
     char secret[RECON_KEYRING_SECRET_MAX];
     if (!recon_keyring_get(name, secret, sizeof(secret))) {
@@ -258,7 +286,18 @@ static void recall_password(struct recon_mailwin *m) {
  */
 static void remember_password(struct recon_mailwin *m) {
     char name[RECON_KEYRING_NAME_MAX];
-    secret_name(m, name, sizeof(name));
+    if (!secret_name(m, name, sizeof(name))) {
+        /* **Refused, and the checkbox goes back**, so the window stops saying
+         * it will remember something it cannot. Storing under a cut name would
+         * work, appear to work, and hand this account's password to whichever
+         * other account cut to the same name. */
+        recon_error_raisef(NULL, RECON_ERR_J003,
+            "%s@%s is too long to name a keyring entry",
+            m->account.user, m->account.host);
+        m->remember = false;
+        m->was_remembered = false;
+        return;
+    }
 
     if (m->remember) {
         if (recon_keyring_put(name, m->password.text)) {

@@ -1,3 +1,5 @@
-Properties tells you what something is: its name, kind, size, where it
-lives and when it last changed. It had been in the menu and greyed out since
-the menus existed.
+A text clipboard. Cut, copy and paste work in Notepad, in every text field
+in the system, and into the Terminal. Before this, text could not be moved
+from one place to another at all.
+
+Notepad can select text — with the mouse, or Shift and the arrow keys.

@@ -1,23 +1,26 @@
-text-align had been read, recorded on the block, and then not drawn. The
-comment beside the field said so and said why: centring a line means knowing
-how wide it came out before placing its first word, and how wide it came out
-is only known once the last one is placed. The flow put each word down as it
-reached it, so by the time the width was known the words were already
-somewhere.
+A sweep of twelve real sites, looking at *what came back* rather than at
+whether anything crashed. Eleven were fine. Wikipedia's "Comparison of
+operating systems" had {{cite web|...}} and [[Lisa OS]] in the middle of
+it -- wiki source, in a rendered article.
 
-So the words are held now, and the line is drawn when it ends -- at a wrap, or
-at the end of the block. Each keeps the x it would have had on a left-aligned
-line and the flush adds one offset to all of them. No second pass over the
-document, no second idea of where a word goes, and left alignment comes out
-with an offset of zero, which is bit-for-bit what it did before.
+BG-171. The parser found the end of a tag with memchr for the first >.
+An attribute value may be quoted, and a quoted value may contain anything at
+all -- including > -- and it is still inside the tag. Wikipedia carries the
+wiki source of every reference in a data-mw='{"parts":...}' attribute:
+single-quoted, holding JSON, and that JSON holds escaped HTML. The scan
+stopped at the first > and rendered the rest of the attribute as page text.
 
-The link underlines are held with the words and shifted by the same amount. A
-rule drawn at the unshifted position under a centred line is a rule sitting to
-the left of the words it belongs to.
+411 blocks before, 219 after. Nearly half of what that article appeared to
+say was attribute rather than content.
 
-justify is not here. It means changing the space *between* words rather than
-moving the line, which is a different operation on a different unit, and doing
-it badly -- stretching the last line, or leaving rivers down the column --
-looks worse than not doing it.
+Nothing had caught it because every hand-written test uses well-formed markup
+with short attributes -- that is what somebody writing a test writes. The
+html5lib corpus did not catch it either: it tests tree construction, this
+parser builds no tree, so it is only run for the invariants, and "the page
+says something it should not" is not an invariant. It took loading real pages.
+
+The sweep is worth keeping as a habit rather than a script. The other eleven
+sites all rendered, and the RFC 2616 page hit the four-thousand-block ceiling
+and said so, which is the behaviour that ceiling exists for.
 
 ---

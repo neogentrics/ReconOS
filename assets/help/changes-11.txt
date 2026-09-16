@@ -1,102 +1,104 @@
-### Dates
+Said plainly, because it is the thing this version is about:
 
-userland/include/time.h and libc/time.c: the two clocks, the calendar, and
-strftime. 436,012 checks against the host's, including a sweep of
-gmtime_r every seven hours and thirteen minutes across two and a half
-centuries in both directions, and every conversion strftime claims at every
-buffer size around the answer.
+> *"The system and the kernel are two separate systems when they should be one
+> and the same relying on each other."*
 
-The corpus is the dates a calendar is actually wrong on rather than a range of
-plausible ones: the century that is divisible by four and is not a leap year,
-the second either side of an epoch, the day a 32-bit time_t stops, year 1 and
-year 9999. A sweep of ordinary timestamps agrees with anything.
+They were separate in a way that can be stated as a build dependency.
+recon_init — the program a person sees when a ReconOS machine starts — was
+121 KiB of .rodata inside the kernel image, pulled in by .incbin. The
+installer wrote an EFI partition with a loader and a kernel, formatted a System
+volume, and put nothing in it. The ten directories v0.4.26 added were
+empty.
 
-The two clocks stay two calls. clock_gettime(CLOCK_MONOTONIC, ...)
-reaches SYS_TIME, which never goes backwards and means nothing outside this
-boot; time() reaches SYS_WALLTIME, which is the date and can jump. Neither
-can reach the other, and an unknown clock is refused rather than answered from
-whichever is nearer — a duration measured across a clock correction comes out
-negative, and a negative duration is a number that gets used.
+So changing a string on the first-boot screen meant rebuilding and reflashing a
+kernel. Not a figure of speech: on real hardware, a stick, a reboot and a
+firmware menu, to change a sentence in a program.
 
-localtime_r is gmtime_r, deliberately, and it costs nothing. There is
-no host to ask on this kernel and no zone database to read, so UTC is the only
-true answer — and src/recon_clock.c already applies ReconOS's own zone to its
-own civil-date arithmetic, under a comment from months ago saying exactly why
-it does not call localtime. The difference is asserted in the suite rather
-than skipped, along with %Z being UTC where the host's C locale says GMT.
+### What was missing was the join, not the parts
 
-Two faults, and both were the standard's wording rather than the
-reference's behaviour. %C and %F were written as two- and four-digit
-padded fields, because that is how POSIX describes them. The suite disagreed on
-year 1, and a probe settled it: glibc pads neither, and floors %C rather than
-truncating it, so year -1 gives -1 where -1 / 100 in C is 0. The goal
-here has never been to match a document; it is that the desktop prints the same
-thing it printed on Linux yesterday.
+Almost everything this needed already existed and had never been connected:
 
-And the suite was checked against itself again. Four faults introduced one
-at a time — the century leap gone, the leap-day shift in tm_yday gone, the
-weekday off by one, floored division truncated instead — caught at 7, 8143,
-40111 and 120622 failures. The century leap is the interesting one: seven
-checks out of 436,012, and every one of them is a date somebody put in the
-corpus on purpose.
+| | |
+|---|---|
+| a kernel that runs a program from a path on the volume | user_exec_path, built, and passing a self-test on every boot |
+| a standalone recon_init.elf | built, 126,880 bytes |
+| a filesystem that can be written by the installer | reconfs_mount, reconfs_create, reconfs_write_named — all take a volume |
+| a medium that carries a system | no |
+| an installer that writes one | no |
+| a kernel that looks for one | no |
 
-### A measurement that has never heard of the list
+Three of those are now yes.
 
-The coverage figure in v0.4.22 was a grep for a list of function names.
-BG-182 is the record of what that is worth, and correcting it by hand was
-not enough: the corrected list then missed gmtime_r, localtime_r, and
-sixteen of the twenty floating-point functions the desktop references.
+The medium carries /reconos/init.elf — the first file on a ReconOS
+install medium that is neither a loader nor a kernel.
 
-It could never have found puts at all. src/main.c calls printf with a
-string literal containing no conversions in it, and the compiler rewrites that
-into puts — so the desktop needs a function whose name appears nowhere in
-its source. No grep can see that. Reading the file cannot see it.
+The installer writes it onto the System volume as /System/init.elf. This
+is the first thing the installer has ever written into a ReconFS volume;
+every copy before it was FAT32 to FAT32, because everything before it was what
+firmware reads.
 
-scripts/measure-libc.py asks the linker instead. Every object file carries a
-table of the symbols it needs and a table of the symbols it has; the difference
-is the external surface, exactly, and nm reads both in one command. It gives
-two numbers because there are two questions:
+And the kernel asks the volume first, falling back to the copy inside
+itself and saying which it used. That line matters more than it looks: the
+whole point is that the screen can now come from somewhere other than the
+kernel, and a boot that does not say where it got its program cannot be used to
+tell whether any of this works.
 
-- 52 of the 132 C library symbols the desktop references. That is the
-  completeness measure: 80 missing symbols is 80 functions to write.
-- 2,473 of 3,113 call sites in src/. That is where the weight is — and
-  the names it counts now come out of nm rather than out of a list.
+### Creating on a volume that is not the one you booted from
 
-Three functions came out of that first run and are written and checked:
-memmem (recon_html.c, finding the end of a comment in a page that may hold
-a zero byte), strcasestr (recon_http.c, spotting a chunked transfer), and
-puts.
+rootfs_create_file and rootfs_create_directory did exactly the right three
+moves — walk to the parent, act, rewrite the chain to the root — against
+rootfs(), which is the one volume an installer must never touch.
 
-### Two more desktop sources build with no glibc under them
+So the three moves moved down a layer into reconfs_place_file and
+reconfs_place_directory, which take the volume as an argument, and the two
+rootfs_* entry points became those calls with rootfs() filled in. An
+extraction rather than a rewrite: the bodies are the bodies that were there, so
+the suites that covered them cover them still — 67 self-tests, unchanged, on
+the first boot after the move.
 
-src/recon_url.c joins the nine, so scripts/check-userland.sh is at
-10 of 10. src/recon_access.c turned out to want xkbcommon as well and is
-in the group waiting on that.
+### The proof, and why it had to be built this way round
 
-It found something on the way: include/recon_fs.h includes
-<sys/types.h> and does not use it. Every type in its thirty-odd
-declarations is size_t, bool or time_t. The two files that actually want
-mode_t both already include <sys/stat.h>. One line in a public header,
-inherited by everything that reads it, and it was the whole of what stood
-between recon_access.c and a freestanding compile.
+A claim that two things are separate can only be shown by changing one and not
+the other. So:
 
-### What is left, by what it needs
+1. Keep the kernel binary exactly as built.
+2. Change a string in the program and rebuild it.
+3. Build a medium carrying the old kernel and the new program.
+4. Install from it and boot.
 
-| | symbols | call sites |
-| --- | --- | --- |
-| an allocator | 5 | 430 |
-| files and directories | 21 | 96 |
-| sockets | 19 | 44 |
-| an errno | 1 | 43 |
-| loading a module at run time | 4 | 12 |
-| processes and signals | 6 | 8 |
-| floating-point maths | 20 | 5 |
-| an environment | 1 | 2 |
-| the rest of stdio | 3 | 0 |
 
-The allocator is still the wall and is still first in docs/KERNEL-WANTS.md.
-What the linker changed is the shape of the rest: floating-point maths is
-twenty functions, not the four a grep found, and it is a self-contained
-afternoon that needs nothing from the kernel at all.
+kernel kept:   402df0f6403460f0
+program built: 666db5e4b023ed04
+
+the system: /System/init.elf, from the volume
+first screen [BUILT-WITHOUT-THE-KERNEL]: 1920 x 1200, 7680 bytes a row
+
+is the kernel on that disk the one we kept?
+  yes -- byte for byte the kernel built before the program changed
+
+
+Yesterday that was impossible by construction.
+
+### And the test asserts it, because the fallback is designed to hide it
+
+scripts/install-then-boot-test.sh gained an eighth check: the system it
+runs came off the volume. Without it the run passes either way — the kernel
+falls back to its built-in copy deliberately and quietly, so an installer that
+stopped writing /System/init.elf would still produce a machine that boots,
+draws a screen and reports 67 self-tests passing, and the file would still have
+printed 7 of 7 forever.
+
+That is the shape KF-229 was: a check sitting on top of the fault it was
+written to catch, unable to fail. Taking the program off the medium turns the
+run red and names the reason — the system: no /System/init.elf (-7), using the
+copy inside the kernel — while every other check still passes, which is also
+the graceful fallback being shown to work.
+
+### What is still in the kernel image
+
+The copy. It is the fallback for a machine that has not been installed onto —
+every blank disk in the verification rig, and any medium built before this
+existed. Taking it out is a separate decision and wants a machine that can be
+recovered without it.
 
 ---

@@ -9,6 +9,257 @@ way for the two to disagree.
 
 ---
 
+## v0.4.37 — a cell wraps inside its column
+
+The board said *"a long cell sets a wide column and the row runs off the
+side."* **Half of that had already been fixed** — columns are scaled down
+together to fit the window, and have been for a while. What was still true was
+worse and less visible: a cell whose text overran its column pushed the pen
+along, so **every column after it on that row stopped lining up**. The comment
+beside it called that readable, and it is; it is also the table quietly
+stopping being a table half way across.
+
+Three things change, and a table is a table all the way across now:
+
+- a cell's lines break at the end of **its column** rather than at the edge of
+  the window
+- a line that breaks inside a cell starts again at that cell's left edge
+- every cell starts at the top of its row, and the row ends at the bottom of
+  whichever cell reached furthest down
+
+### The wrapper that was written and thrown away
+
+The first attempt was a clean little module — `recon_wrap`, a measuring
+function rather than a font so the host could measure in characters, 836 checks
+against it, and it found two real faults in itself on the first run. One of them
+would have made every row measure as **zero** lines high: `(int)~0U >> 1` is not
+the largest `int`, it is −1.
+
+It was also the wrong shape, and it went in the bin. **`recon_web.c` already
+wraps text** — that is what the word loop does — and the paragraph at the top of
+`flow` says exactly why a second copy is the thing to avoid: *"two copies of a
+word-wrap loop drift, and the drift shows up as a scrollbar that does not reach
+the bottom of the page."* What a cell was missing was never a wrapper. It was a
+right-hand edge.
+
+Recorded because the tests passing is not what makes a piece of code right, and
+836 of them is not an argument for keeping it.
+
+### A column has two widths, and only one was measured
+
+Making cells snap back to their column turned the old misalignment into
+something worse — cells drawn **on top of each other**, which the first
+photograph showed immediately. Columns were being scaled down proportionally,
+which pays no attention to whether the result still holds a word, and a column
+narrower than a word in it now overlaps its neighbour instead of merely running
+past it.
+
+So a column is measured twice:
+
+| | |
+|---|---|
+| the most it wants | its widest whole cell |
+| the least it can be | its widest single **word**, because there is nowhere to break inside one |
+
+Scaling moves each column from the first towards the second in proportion to the
+room it has *spare*, and stops at the floor. A column already at its minimum
+gives up nothing. A table whose minimums do not fit gets its minimums and runs
+over the edge — at that point there is nothing left to give, and squeezing
+further would put the overlap back rather than remove it.
+
+### How it was checked
+
+By photograph, through `scripts/look.sh`, against a page served with one column
+far too narrow for its contents — and then against a table that already fits, to
+show the common case takes the path it always did. The first photograph is what
+found the overlap; no test in the tree would have.
+
+**Still not done**, and the row stays on the board saying so: no colspan, no
+rowspan, no nested tables, no borders.
+
+---
+
+## v0.4.36 — what installing a package actually does
+
+`recon_package` had **21 checks on reading a manifest and none on doing
+anything with it**, which the signing suite's own opening paragraph had already
+called out: *"the install path -- the one that takes somebody else's shared
+object and loads it into this process -- was the least tested thing in the
+system."* Half of that was answered by the signature tests. This is the other
+half: **73 checks** on installing, upgrading, verifying and removing.
+
+### Why it can run without a display or a kernel
+
+`recon_package_install` copies files, places them, writes settings and writes a
+receipt. The only step needing anything else is `recon_modules_load` at the very
+end, reached only by a package that declares a module — and a package of
+*content*, a wallpaper pack or a set of skins, is a real thing the manifest
+supports that exercises everything up to that line.
+
+The module path is tested from the other side, which is the more interesting
+one: **a package whose code will not load must leave nothing behind.** The
+install has already copied the module, the icon and the wallpaper and written a
+receipt by the time it finds out.
+
+Three symbols of the compositor's are stood in for at link time, and what that
+costs is written in the file rather than left to be discovered: the loader is
+not under test here; what is under test is what install does when a loader
+refuses.
+
+### The claims, and that they bite
+
+Every behaviour `include/recon_package.h` promises fails **silently** when it
+breaks. Nothing crashes if an install quietly overwrites a wallpaper somebody
+chose, or if a failed upgrade takes a working program away — somebody's machine
+is just wrong afterwards. So each claim was broken on purpose to see whether the
+check written for it noticed:
+
+| broken on purpose | caught by |
+|---|---|
+| install records a file it did not place | *removing the package leaves their file behind* |
+| install answers a setting somebody had answered | *the setting they had chosen is still theirs* |
+| a failed module load leaves its files | *the module it copied is gone* |
+| the allow-list lets anything through | *a package that wants /System/Config is refused* |
+| upgrade accepts the same version | *the same version is refused* |
+| installing twice is allowed | *the second is refused* |
+| a failed upgrade does not restore the files | *its own code, not the one that would not load* |
+| a failed upgrade does not restore the receipt | *the program that worked is still installed* |
+
+**The one that could not be broken is worth more than the seven that could.**
+Deleting install's *"leave a file that is already there alone"* check changes
+nothing, because `recon_fs_copy` refuses an existing destination on its own.
+That property has two independent guards, so no mutation of one can show which
+held — which is defence in depth working, and is now written beside the test so
+a green run is not read as proof of install's own check.
+
+### What the suite learned about the code
+
+Two of its first failures were the test being wrong, and both are recorded in it
+rather than quietly fixed:
+
+- **A setting is `key value`, not `key = value`.** `split_two` splits on the
+  first space, the same as `place = file directory` — so `setting = notes.width
+  = 80` set the key to the string `"= 80"`. Caught because the check compares
+  the value rather than asking whether something was written.
+- **Signing refuses a package that brings nothing**, not just installing. The
+  refusal lives in reading the manifest and both paths read it, so a package
+  with an icon and some settings and no files is turned down a step earlier than
+  expected. That is the better place for it, and it has a check of its own now.
+
+---
+
+## v0.4.35 — five of them were not text
+
+The board's next row: *"Fourteen places where an optimised build says a path
+may be cut ... Every one builds a string to display rather than to open, which
+is why they were left rather than fixed in the same sweep."*
+
+**There were seventeen, and five of them were not text.** They build a name
+something is then looked up by, and `include/recon_fs.h` has carried the
+sentence about that for months, above `recon_fs_join`: *"A truncated path is
+not a shortened name for the same file, it is the name of a different one."*
+
+| | what a cut one does |
+|---|---|
+| a keyring entry name | two mail accounts collide and one silently overwrites the other's password |
+| where `move` and `copy` put things | the file lands somewhere else and the command reports success |
+| an icon's stamp key | the cache vouches for a different file |
+| a redirect's `Location` | a different URL is fetched |
+| a pinned menu entry | pins something that can never be found again |
+
+### The keyring one
+
+`secret_name` builds `mail/user@host` because — its own comment — *"a single
+`mail/password` would have them overwriting each other with no sign that
+anything had happened."* `user` holds 128 bytes and `host` 192; a keyring name
+holds 128. So an address over about 122 characters is cut, and two accounts on
+one host with a long shared prefix produce **the same name** — which is exactly
+the collision the function exists to prevent, reintroduced by the one line that
+builds it.
+
+All five refuse now. Four refuse invisibly and correctly; the fifth changes what
+a window offers, so it says why — **VT-J003**, *a password could not be
+remembered*.
+
+### And the other twelve say they are text
+
+`include/ReconOS.h` wrote `recon_text_copy` and `recon_text_printf` for exactly
+this, and said why: *"a build with fourteen warnings in it is a build where the
+fifteenth is invisible. This says the same thing in a way that names the intent,
+so what is left on the list is what nobody meant."*
+
+So the desktop is at **zero**, and `scripts/check-truncation.sh` holds it there
+as the seventh pass of `check.sh`. It compiles rather than greps, because the
+warning is the optimiser's and no pattern over the source can tell an
+`snprintf` into a buffer that provably fits from one that does not. And it
+touches `src/` first, because an incremental build compiles nothing and reports
+nothing — a check reading one would pass on any tree whose build directory was
+warm, which is every tree after the first run.
+
+**It says what it does not cover, too.** `-Wall` gives level 1: the compiler
+warns where it can *prove* a cut is reachable. Level 2 assumes any argument can
+be arbitrarily long, and the desktop has **147 sites** at that level — measured,
+not estimated — so it is not a bar this tree holds today. A check whose limits
+are unstated gets read as covering everything.
+
+Both mutations bite: a named cut turned back into a bare `snprintf`, and a new
+one appearing in a file that never had one. The first version of that second
+mutation copied from an unbounded `const char *` and was **not** caught — which
+was the check being honest about level 1, and is why its scope is now written
+down beside it.
+
+---
+
+## v0.4.34 — every error code has something that can raise it
+
+The checkpoint board asked for *"the seven error codes that have sites"* to be
+wired: `B-001`, `B-002`, `B-005`, `D-002`, `F-001`, `J-002`, `L-003`.
+
+**They were wired already.** `git log -S` puts every one of them in `2b45b53`,
+on 12 September, under the commit message *"Wire the seven error codes that had
+sites and no callers"* — and the board went on calling them work for three days
+afterwards, because the figure beside them, *34 of 43 reachable*, was counted
+once by hand and never counted again.
+
+So the work was not the wiring. **The work was the thing that would have said
+so.**
+
+### What the measurement found on its first run
+
+`scripts/check-errors.py` reads every code out of `include/recon_errors.def`,
+finds every `recon_error_raise` in `src/`, and refuses when the two disagree.
+The true figure is **41 of 43**, and the two without a site are exactly the two
+that were always meant to be:
+
+| | |
+|---|---|
+| `A-006` | the startup checks it reports on do not exist yet |
+| `E-005` | uninstalling is written not to fail, so no path could raise it |
+
+And it found three more (**BG-204**). The start sequence runs eight checks; two
+of them raise their fault *and* show it on the splash, and three show it only.
+`VT-L001`, `VT-L002` and `VT-E001` reached a person's eyes and never reached
+`/System/Logs` — so somebody who watched a start, saw a code and then typed
+`errors log` would not find it. All three are FAULTs, which the table defines as
+*reported where it happened*.
+
+**A code that is shown looks wired from every angle except the log.** It is in
+the enumeration, it is in `docs/ERRORS.md`, `errors VT-L001` describes it, and a
+person really does see it. The one question that separates the two cases is
+*can this be found again tomorrow*, and nothing was asking it.
+
+### Checked in both directions, because that is how the last one went stale
+
+An exception list nobody re-reads is the same fault in a new file. So the
+script refuses four more things besides a code with no site: an **excused** code
+that has since gained one, an excused code that no longer exists, a code raised
+that nothing defines, and a number defined twice. Five mutations, five distinct
+messages, each caught.
+
+The sixth pass of `scripts/check.sh`.
+
+---
+
 ## v0.4.33 — memory a program can ask for
 
 **The first entry in `docs/KERNEL-WANTS.md` is answered.** `SYS_MAP` with an fd

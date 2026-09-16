@@ -1,2 +1,5 @@
-All Programs at the foot of the Start menu lists everything installed. The
-column above it is what this account opens most.
+Windows snap to the edges. Drag one to the left or right edge for that
+half of the screen, or to the top to fill it.
+
+Alt+Tab works again. It had quietly stopped working when ReconOS began
+drawing its own windows.

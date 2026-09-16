@@ -584,7 +584,9 @@ static void add_folder(struct recon_player *p, const char *folder) {
         }
 
         struct track *track = &p->tracks[p->count++];
-        snprintf(track->name, sizeof(track->name), "%s", entries[i].name);
+        /* The name shown in the list. The *path* two lines down is the one
+         * that matters, and the comment under it says so. */
+        recon_text_copy(track->name, sizeof(track->name), entries[i].name);
         /* recon_fs_join, which refuses rather than cutting. A truncated
          * path is the name of a different file, and this one is opened and
          * played. Found by the optimised build, where the value ranges make

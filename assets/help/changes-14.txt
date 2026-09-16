@@ -1,76 +1,96 @@
-The viewer could show a search box and could not search with it. That was the
-largest thing missing from it by a distance: a browser you have to leave to go
-and use a browser.
+ReconOS could not draw a letter. Not for want of a font or a rasteriser: the
+rasteriser is third_party/stb_truetype.h and it calls sqrt, floor,
+ceil, pow, fmod, acos and cos, and on a kernel with no glibc under it
+there was nothing to answer them. The maths library is not a calculator's
+luxury; it sits between this system and its first glyph.
 
-Every control a page can have. Text boxes, passwords drawn as dots,
-checkboxes, radios grouped by name, <select> with a list that drops down over
-the page, <textarea>, submit and reset buttons, and hidden fields that are
-sent and never drawn. A control is a *run* in the document rather than a block
-of its own, so it sits in the line where the page put it -- "Search for [ ] in
-the menu" is one sentence with a box in the middle of it, which is what it is.
+Twenty functions, 3,613,874 checks against the host's, and no failures.
 
-A GET goes; a POST asks first. That split is the whole of what survives of
-the old rule that a viewer able to submit a form could change something on
-somebody's server. A GET is a question: everything it says is in the address,
-asking twice is asking once twice, and it is what every search box on the web
-is. A POST is a statement -- not in the address, not in the history, and asking
-twice may have done the thing twice -- so it says how many answers it is about
-to send, to which host, and whether one of them is a password, and waits to be
-told again. One dialogue between somebody meaning to sign in and somebody's
-first click on a page they have not read.
+### Two standards, because these functions are two kinds
 
-The rules about what is sent are HTML's, and each one has a page that breaks
-without it. An unchecked box is absent entirely rather than empty. A checked
-box with no value of its own sends on. A menu sends its option's *value*, not
-the words shown. Of all the submit buttons on a form, only the one pressed is
-sent, which is how a page tells Save from Delete. Two controls sharing a name
-send twice, in document order, because that is how a page sends a list.
+Eight have an exactly right answer and are held to bit-for-bit equality --
+fabs, floor, ceil, round, fmod, ldexp, lrintf, and sqrt. The
+last is exact for free: IEEE 754 requires square root to be correctly rounded
+and both architectures have the instruction, so sqrt here is sqrtsd and
+nothing else. Verified in the object file rather than assumed.
 
-A control a stylesheet has hidden is still part of the form. That changed a
-rule this parser already had: inside something hidden, only the structure is
-followed. Form elements are now the one exception, because what a hidden
-control contributes is not a picture, it is a value -- and half the search
-forms on the web carry a hidden field saying which section is being searched.
-Measured on Wikipedia's article for *HTML form*: twenty-six controls, of which
-six are its search forms and twenty are page furniture.
+Bit-for-bit catches what == cannot. floor(-0.4) is -0.0, and a caller
+who divides by it gets negative infinity rather than positive. The two compare
+equal.
 
-Every control a pointer can reach, a keyboard reaches too. Tab moves
-through them, Space works whatever has the ring, Enter in a text box sends the
-form it is in, and Escape puts a field back to what the page had. A first
-version stepped only between text boxes, which reads as working until the form
-has a box somebody has to tick.
+Twelve are approximations, held to a bound in units in the last place --
+and the suite prints the worst error it found for each rather than only
+whether it stayed under the line, because a tolerance nobody looks inside is a
+tolerance that can grow by a factor of a thousand and still pass. Measured:
 
-recon_form.c is its own file, and that is the point. These rules decide
-what leaves the machine, and testing them inside the browser meant linking a
-compositor -- the same reason recon_url.c was split out of recon_http.c.
-Forty-eight checks in tests/test_form.c, written against Wikipedia's search
-form and the HTML5 standard's own example form rather than against markup
-invented for the test. The fuzzer now sends every form of every mutated page:
-9,862 cases, up from 7,556.
+| | ulp | | ulp | | ulp |
+| --- | --- | --- | --- | --- | --- |
+| exp | 1 | sin | 2 | asin | 3 |
+| log | 3 | cos | 2 | acos | 3 |
+| log10 | 2 | tan | 4 | atan | 2 |
+| pow | 17 | | | atan2 | 3 |
+| cbrt | 4 | | | | |
 
-POST in recon_http, and what a redirect does to one. A 303 becomes a GET
-with no body, and so do 301 and 302 -- they are *specified* to keep the method
-and are implemented everywhere as though they were 303, and a client that
-followed the specification alone would re-post an order to a server that was
-redirecting to a receipt. 307 and 308 exist to say "again, exactly", and are
-the only two where a body crosses a redirect.
+Every bound in the suite is that figure rounded up to the next even number.
+They were set after the runs. Setting them first would have been setting
+them from hope.
 
-And a fourth pass in scripts/check.sh, for a fault that was nobody's
-code. assets/help is generated from this file by a script, and the rule was
-to run it in the same commit -- which held until it did not.
-[BG-175](BUGS.md#bg-175): the Help application inside a running v0.4.19 was
-describing a system that ended at v0.4.5, and nothing said so. The check
-regenerates into a copy, compares, and puts the tree back exactly as it found
-it: a check that repairs what it is checking passes the second time it is run.
+### Four faults, and every one was a wrong answer rather than a close one
 
-Three faults, and how each was found. [BG-174](BUGS.md#bg-174), a textarea
-drawn three times too tall, straight through the buttons under it -- found in
-the first photograph, and invisible to every number, because the page's height
-was correct and only the drawing was wrong. [BG-173](BUGS.md#bg-173), Space on
-a checkbox ticking it and then letting go of the focus, so the next Tab started
-again from the top of the form -- found by asking the window where its focus
-was after each key, because a ticked box looks the same either way.
-[BG-172](BUGS.md#bg-172), a tooltip left explaining a button that had already
-gone; the same fault as BG-089 one level down, and fixed the same way.
+BG-186 -- the reduction subtracted the same piece of pi/2 twice. 860 billion
+ulp at three pi. PIO2_1T is the tail of PIO2_1 and PIO2_2 is the leading
+part of that same tail; they are alternatives, not a chain. Fixing that left a
+second fault underneath: k * pi/2 is only exact while k has under twenty
+bits, so everything past about 1e6 was still wrong and no test of small angles
+could see it. The reduction now runs in 2,048 bits of 2/pi, in integer
+arithmetic where nothing rounds. scripts/gen-two-over-pi.py computes that
+table and checks it against the published expansion before writing it;
+check.sh regenerates and compares it, like the help pages.
+
+BG-187 -- a ten-bit hole between two doubles. The reduction accumulates 126
+bits and has to get them into doubles; taking the top half as
+(double)(acc >> 63) rounds, so bits 53 to 62 were in neither piece. Only
+visible near a multiple of pi, where those are the only significant bits there
+are. Three pieces of 42 instead, each of which a double holds exactly. sin
+and cos are 2 ulp out to 1e300 now, and the suite prints that sweep so
+the limit is a measurement rather than a claim.
+
+BG-188 -- pow(1, nan) and pow(-8, 3). One to any power is one,
+including to a power that is not a number; the check for a base of one came
+after the check for a NaN, and the order is the whole of what decides it. And
+exp(3 * log 8) returned 511.99999999999994, which is what somebody notices
+first. A small integer power is repeated squaring now -- bounded at 8, because
+squaring costs a rounding per doubling and at a power of 60 it was 33 ulp where
+the logarithm was 17.
+
+BG-189 -- cbrt overflowed in its own last step. guess * (cube + 2x) /
+(2cube + x) multiplies before it divides, so the numerator at x = 1e300 is
+1e100 times 3e300 and there is no such double. Found by printing the
+intermediates, which mattered: the formula was right, and reading it again
+would have kept saying so.
+
+### And pow is honestly the weak one
+
+Seventeen units where everything else is two to four, and it is inherent rather
+than unfinished. pow is exp(y * log x), and exp turns an error in its
+argument into the same *relative* error in its answer -- so log's own last bit
+gets multiplied by y before it reaches the result. At y = 40 that was 576
+ulp. Carrying log to a hundred bits, in two doubles, took it to 17; the rest
+would need exp carried the same way. Seventeen units is two parts in 1e15 --
+the last two digits of sixteen, where a calculator shows fifteen.
+
+### What it unblocked
+
+scripts/check-userland.sh is at 11 of 11, and the new one is
+src/recon_expr.c -- the calculator's expression grammar, 459 lines, which
+holds seventeen maths functions in a table of function pointers and therefore
+could not compile until they existed. ReconOS can do arithmetic with no glibc
+underneath it.
+
+A sweep of all seventy-nine sources says where the rest stand, and the picture
+is now one word wide: fourteen are blocked on nothing but malloc,
+calloc or free. Three want assert.h, three want errno.h, four want
+dirent.h, and the remainder want Wayland, DRM or xkbcommon, which are Linux
+and always were.
 
 ---

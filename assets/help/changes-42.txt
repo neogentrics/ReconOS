@@ -1,5 +1,3 @@
-Windows snap to the edges. Drag one to the left or right edge for that
-half of the screen, or to the top to fill it.
-
-Alt+Tab works again. It had quietly stopped working when ReconOS began
-drawing its own windows.
+Skins can change the shape of a window, not only its colours: the height
+of a title bar, the thickness of its border, how far its corners are rounded,
+and how big its buttons are.

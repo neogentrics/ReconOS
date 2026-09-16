@@ -1,125 +1,89 @@
-Asked for directly: *"whats next? i would like the filesystem"*, after a night
-in which the answer to *what is on the volume* was nothing. The installer
-wrote a bootloader, a kernel and an empty formatted partition, and the first
-screen said so honestly: 0 entries at the root of the volume.
+Eleven of the twenty-one symbols in the largest group left, and they are the
+eleven that have a system call underneath them already: open, close,
+read, write, lseek, mkdir, opendir, readdir, closedir,
+realpath and sysconf.
 
-include/recon_fs.h has described the layout since v0.1.0 and nothing could
-build it, because nothing in the system could create a directory.
+The other ten -- stat and its two relatives, unlink, rmdir, access,
+chmod, umask, mmap, munmap -- are declared in the headers and
+deliberately not defined, so a caller fails to link naming the symbol. Each
+header says what its absentees are waiting for. That is the stance
+<stdlib.h> took about malloc for as long as there was nothing to build an
+allocator on, and the reason is the same: a stub that answers -1 with a
+plausible errno would have a program ask whether a file exists, be told no,
+create it, and do that every time.
 
-### Ten directories, and the second boot is the requirement
+### Everything here is a translation, and the translation is the whole risk
 
-SYS_MKDIR is the twenty-sixth system call, over a
-rootfs_create_directory(path, mode) built on the reconfs_create that was
-already there. userland/init/layout.c holds the ten paths -- /System with
-Apps, Config, Themes, Icons, Modules and Logs under it, then /Apps, /Users
-and /Temp -- parents before children, mode 0755.
+RECON_O_READ is 1 and O_RDONLY is 0. A wrapper that passed the flags
+through unchanged would open every read-only file for writing and every
+write-only one for reading -- it builds, it passes the first test, and it
+destroys a file on the fourth.
 
-recon_init lays them down on every boot, not only the first. That is the
-requirement rather than a nicety: a first boot that lost power half way and a
-second boot that finds everything already there are the same code path, and
-one boot cannot tell them apart. So the program is asked both questions.
-Installed onto a blank 8 GB disk from a real medium, then booted twice:
+So the suite makes every call twice, once through ReconOS's wrappers and once
+through the host's, on the same files, and requires the same answers. Plus
+three things a comparison cannot see:
 
+- That the flags are really translated, by writing through a read-only
+  descriptor and requiring it to fail. Two libraries that got this wrong the
+  same way would agree with each other.
+- That realpath will not climb out of the root. /System/../../Users is
+  /Users, not something above the root. That is ReconOS's containment rule,
+  not POSIX's, so there is nothing to compare it against.
+- That the descriptor limit matches the kernel's, read out of
+  kernel/include/recon/kernel/process.h while the suite runs.
 
-first boot    the volume: 10 directories, laid out just now
-              storage: 12 entries at the root of the volume
-              65 self-tests passed, 0 failed
+### readdir over a call that answers the whole directory at once
 
-second boot   the volume: 10 directories, all already there
-              storage: 12 entries at the root of the volume
-              65 self-tests passed, 0 failed
+SYS_LIST returns every name in one call and refuses rather than truncating.
+That is the opposite shape from readdir, and it is the better one: a
+directory read in pieces has no guarantee about what a caller sees when it
+changes between two of them, and nothing in the interface can say so.
 
+So opendir reads the lot and readdir walks it. d_type is always
+DT_UNKNOWN, which POSIX allows — and which was checked before being relied
+on: the desktop reads d_name at every one of its sites and d_type at
+none of them.
 
-A reader that is not this kernel -- scripts/reconfs-check.py, against the
-partition lifted out of the image -- says the same twelve names.
+### The stand-in was looser than the thing it stands in for
 
-The list is data and the directory-maker is a function pointer.
-recon_layout_build(make, already_there, &report) knows nothing about system
-calls, so the whole arrangement -- order, refusals, a half-finished previous
-boot, the report it produces -- is checked on the host in a millisecond by
-recon_init_layout_tests, 100 checks, instead of by installing onto a disk.
-The suite also reads include/recon_fs.h and compares the two lists in both
-directions, so a path in the header and not the layout fails, and so does a
-path in the layout and not the header. Mutation-tested three ways; all three
-caught.
+userland/tests/hostsys.c answers the primitives with POSIX so the library can
+run on Linux. It existed for the FILE layer, which only ever asked whether a
+result was negative -- so returning POSIX's -1 was good enough and nobody
+noticed it was not the kernel's contract.
 
-And it carries on past a refusal rather than stopping, naming the first one:
-7 of 10 directories -- /System/Apps refused (-9) is a line somebody can act
-on. 1 refused is not.
+The descriptor layer asks more: it turns that answer into errno. Against the
+old stand-in, a file that was not there reported ENOSYS instead of ENOENT.
+Both failures showed up on the suite's first run.
 
-### Four faults were in the way, and none of them was in the new call
+A stand-in with a looser contract than the real call is the one way a
+stand-in can be worse than none — it lets code pass here that would be wrong
+on a machine. All eight primitives now answer with the kernel's numbers.
 
-The call worked on the first try. Making it work on a machine took the rest of
-the day, and every one of these was invisible to every test in the tree.
+### And the measurement was hiding five functions
 
-A directory took seventy seconds to create. Not a hang -- 69, 74, 69 and 69
-seconds, measured. The same disk image attached as virtio-blk instead of NVMe
-took none at all, which is what said where to look. The NVMe driver polls for a
-completion and yields between looks; the thread it yielded to was the boot
-thread, which by then is running for (;;) power_idle_wait() and sleeps for up
-to a second. The scheduler already knew how to prevent this -- pick_next
-takes an idle thread only as a last resort and idle_over_work counts the
-times that rule is broken -- and none of it applied, because the boot thread
-was never marked as an idle thread. It is now, from the moment it stops doing
-any work. KF-226.
+BG-197, and it is the fourth of a family. measure-libc.py drops symbols
+starting with __, which is right for __stack_chk_fail and wrong for
+__isoc99_sscanf — glibc's spelling of sscanf. Five library functions sat
+behind that filter, and the number was wrong in both directions: errno,
+the ctype table and strtoul are answered and were not counted; sscanf and
+assert are not answered and were never reported.
 
-The root of a volume could not be listed. reconfs_walk_path refuses a
-path with no leaf, rightly; the two readers that should not care each had a
-branch for the leafless case that the walk made unreachable. Nothing had ever
-asked, because recon_init was the first caller in the system's life. KF-227.
+Fixed by translating the spelling rather than widening the filter. The script
+then refused to report anything until all three newly-visible names had a line
+in its table, naming them — the guard added in v0.4.28 doing its job.
 
-Every refusal from a listing reached a program as "the disk failed." The
-mapping function exists and vfs.c already used it twice; the listing had its
-own two-case version. So the screen said *no volume this kernel can read* three
-lines under *10 directories, laid out just now*, and both sentences came from
-the same volume. KF-228.
+### Where it leaves things
 
-And five self-tests passed exactly once per volume. Each creates a file
-with a fixed name and none cleared it first, so the second boot of any
-installed disk reported five failures on a machine with nothing wrong with it.
-KF-229.
+| | before | now |
+|---|---|---|
+| call sites answered | 2,951 of 3,113 | 3,020 of 3,134 |
+| desktop sources that build with no libc | 11 of 79 | 19 of 79 |
 
-### The check that was written to catch that, and could not
+The eight new ones are almost exactly the browser's half of the desktop — the
+HTML parser, the CSS parser, forms, HTTP. Not a coincidence: a parser is
+strings and allocation and very little else.
 
-The last one is worth its own paragraph, because it had been sitting inside
-its own detector for a month.
-
-scripts/install-then-boot-test.sh has a check called *"and they pass again,
-on a volume already written to"*, whose comment says it is *where a test that
-leaves a file behind shows itself*. It was asked of the BIOS boot -- and over
-BIOS the kernel does not find the disk it booted from (KF-192, open), so that
-boot's report reads root : none found, the five tests that need a volume say
-so, and a boot that never touched a volume was counted as a pass. Measured
-rather than reasoned: the BIOS log says root : none found; file calls will
-say so; the UEFI log says root : nvme0n1p3.
-
-The check now boots the target a second time under UEFI, and fails loudly if
-no volume is mounted rather than passing, because the way this went wrong was
-silence. Taking one of the five clears back out turns the run red and names
-files carry a mode, which is how it is known to work. The number moved from
-*59 passed* on a volume-less boot to *65 passed, second boot on this volume*.
-
-### And the screen stopped guessing
-
-say_storage counted newlines. SYS_LIST separates names with NULs and always
-has -- user.h says so where it is declared. Finding no newlines it counted
-zero, and a fallback two lines down turned that into 1. A volume with twelve
-names at its root reported one entry, which is a number that looks like a
-measurement. A count of zero would have been obviously wrong; a count of one is
-plausible, and this screen had only ever been looked at on machines with no
-volume at all. BG-193.
-
-The line above it now says *why* when it cannot answer, instead of concluding:
-no volume this kernel can read is printed only for ENODEV, and every other
-refusal prints its number. And the storage line goes down the serial cable
-alongside the other two, because the one fact that turned out to be wrong was
-the one that existed only in pixels.
-
-### What this version is really about
-
-Nothing above is a feature the user can point at. What changed is that a
-ReconOS machine, installed from media onto a blank disk, now starts twice in a
-row and is the same machine both times. Until today there had never been a
-second boot.
+Sockets is now the largest group left at 44 call sites, then the ten remaining
+file calls at 31, then sscanf at 14.
 
 ---

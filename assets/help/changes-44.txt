@@ -1,2 +1,3 @@
-Skins can be installed. theme install takes a skin file and adds it to
-the list; theme remove takes it away.
+Properties tells you what something is: its name, kind, size, where it
+lives and when it last changed. It had been in the menu and greyed out since
+the menus existed.

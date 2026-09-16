@@ -248,6 +248,44 @@ if [ "$generated_drift" = "1" ]; then
 fi
 echo "the generated files match their sources"
 
+# --- and nowhere says a string may be cut ---
+#
+# Seventeen such places stood in this build. Five of them were not text at all:
+# a keyring entry name, the destination of `move` and `copy`, an icon's stamp
+# key, a redirect that gets followed, and a pinned menu entry -- names
+# something is looked up by, where a cut one names something else.
+#
+# Zero rather than a threshold, and `include/ReconOS.h` made that argument when
+# it introduced recon_text_copy: a build with fourteen warnings in it is a
+# build where the fifteenth is invisible.
+echo
+echo "Checking that nowhere in the desktop says a string may be cut"
+if ! "$REPO_DIR/scripts/check-truncation.sh"; then
+    exit 1
+fi
+
+# --- and every error code can actually be produced ---
+#
+# A code with no caller is documented, listed by `errors`, lookupable -- and
+# nothing in the system can report it, so the entry describes a fault that
+# cannot happen.
+#
+# **This is here because the figure went stale rather than wrong.** Seven codes
+# were wired on 12 September and the board went on calling them work for three
+# days, because "34 of 43 reachable" was counted once by hand and never again.
+# The first run of the replacement found three more: boot checks that showed a
+# code on the splash and never wrote it to the log, so somebody who saw
+# VT-L001 start up could not then find it in `errors log`.
+echo
+echo "Checking that every error code has something that can raise it"
+if ! python3 "$REPO_DIR/scripts/check-errors.py"; then
+    echo
+    echo "Either a code has lost the last site that reports it, or a new one"
+    echo "was added with nothing to produce it. scripts/check-errors.py says"
+    echo "which, and carries the list of codes deliberately without a site."
+    exit 1
+fi
+
 # --- Fifth: the desktop, with no glibc underneath it ---
 #
 # The differential suites prove the C library answers what the host's answers.

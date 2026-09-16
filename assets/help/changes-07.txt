@@ -1,104 +1,71 @@
-Said plainly, because it is the thing this version is about:
+Fourteen call sites, and until v0.4.30 it was in neither half of the coverage
+figure: glibc emits it as __isoc99_sscanf, which sat behind a filter meant
+for compiler internals (BG-197).
 
-> *"The system and the kernel are two separate systems when they should be one
-> and the same relying on each other."*
+What the desktop asks for was measured before any of it was written, by
+reading all fourteen calls: %d with widths, %u %lu %llu, %lx, %63s,
+%n, and literal text around them — MemTotal: %lu kB, * %d EXISTS,
+%4d-%2d-%2d %2d:%2d %n. Those fourteen formats open the suite, verbatim, on
+realistic input.
 
-They were separate in a way that can be stated as a build dependency.
-recon_init — the program a person sees when a ReconOS machine starts — was
-121 KiB of .rodata inside the kernel image, pulled in by .incbin. The
-installer wrote an EFI partition with a loader and a kernel, formatted a System
-volume, and put nothing in it. The ten directories v0.4.26 added were
-empty.
+Implemented is that set plus the rest of the integer and floating conversions,
+* suppression, and the hh h l ll z j modifiers. Scansets and %p are
+not, and a format holding one stops the scan rather than skipping it — so
+a caller gets a short count instead of a field in the wrong variable.
 
-So changing a string on the first-boot screen meant rebuilding and reflashing a
-kernel. Not a figure of speech: on real hardware, a stick, a reboot and a
-firmware menu, to change a sentence in a program.
+### The failure that matters is not the count
 
-### What was missing was the join, not the parts
+It is assigning the right value to the wrong variable. So every case
+declares a block of storage, fills it with a sentinel, runs both libraries on
+identical copies, and compares the whole block — a variable that should not
+have been touched is checked to be untouched.
 
-Almost everything this needed already existed and had never been connected:
+### Two faults in the tools, and neither in the library
 
-| | |
-|---|---|
-| a kernel that runs a program from a path on the volume | user_exec_path, built, and passing a self-test on every boot |
-| a standalone recon_init.elf | built, 126,880 bytes |
-| a filesystem that can be written by the installer | reconfs_mount, reconfs_create, reconfs_write_named — all take a volume |
-| a medium that carries a system | no |
-| an installer that writes one | no |
-| a kernel that looks for one | no |
+BG-198. The mutation harness crashed between mutating and restoring — a
+mutated build printed the sentinel bytes, which are not UTF-8 — and left the
+mutation in the tree. The next run took that as its original and restored it.
+Then rsync --checksum brought the correct source back with an older
+modification time than the object, so make did nothing and the next run
+tested the mutation again.
 
-Three of those are now yes.
+The result was a function that had passed cleanly an hour earlier failing the
+one case its own comment says must work, with diff reporting the source
+identical to the kept copy — true, and useless, because the kept copy was the
+mutated one. A harness that can leave the tree in a state it invented is
+worse than no harness. The restore is now in a finally, forces a rebuild,
+and is verified.
 
-The medium carries /reconos/init.elf — the first file on a ReconOS
-install medium that is neither a loader nor a kernel.
+BG-199. Once the harness worked it caught four of five mutations and missed
+one: an unimplemented conversion being *skipped* rather than stopping. The
+suite tested that with %[a-z], and a version that skipped it would then match
+the leftover a-z] as literals and fail anyway — returning the same 0. The
+test was asserting a number that agrees either way, which is the exact failure
+its own header exists to catch. Fixed with an unknown conversion between
+two numbers, where stopping and skipping write to different variables.
 
-The installer writes it onto the System volume as /System/init.elf. This
-is the first thing the installer has ever written into a ReconFS volume;
-every copy before it was FAT32 to FAT32, because everything before it was what
-firmware reads.
+### And one fault in the library, caught by building it for the machine
 
-And the kernel asks the volume first, falling back to the copy inside
-itself and saying which it used. That line matters more than it looks: the
-whole point is that the screen can now come from somewhere other than the
-kernel, and a boot that does not say where it got its program cannot be used to
-tell whether any of this works.
+posix.c called recon_strlen. On the host that compiles and works —
+prefix.h renames strlen to precisely that — so every suite passed. It only
+fails where there is no renaming, which is the freestanding build.
 
-### Creating on a volume that is not the one you booted from
+scanf.c and posix.c were added to the program on the disk for exactly this:
+it is the only place the library is compiled with no glibc, the kernel's flags
+and -Werror. A library file built only for Linux is a library file that has
+quietly stopped being portable.
 
-rootfs_create_file and rootfs_create_directory did exactly the right three
-moves — walk to the parent, act, rewrite the chain to the root — against
-rootfs(), which is the one volume an installer must never touch.
+### Where it leaves things
 
-So the three moves moved down a layer into reconfs_place_file and
-reconfs_place_directory, which take the volume as an argument, and the two
-rootfs_* entry points became those calls with rootfs() filled in. An
-extraction rather than a rewrite: the bodies are the bodies that were there, so
-the suites that covered them cover them still — 67 self-tests, unchanged, on
-the first boot after the move.
+| | before | now |
+|---|---|---|
+| call sites answered | 3,020 of 3,134 | 3,034 of 3,134 |
+| desktop sources with no libc | 19 of 79 | 20 of 79 |
 
-### The proof, and why it had to be built this way round
+src/recon_cookie.c is the twentieth — it came off the list an hour earlier
+for wanting sscanf, and has one now.
 
-A claim that two things are separate can only be shown by changing one and not
-the other. So:
-
-1. Keep the kernel binary exactly as built.
-2. Change a string in the program and rebuild it.
-3. Build a medium carrying the old kernel and the new program.
-4. Install from it and boot.
-
-
-kernel kept:   402df0f6403460f0
-program built: 666db5e4b023ed04
-
-the system: /System/init.elf, from the volume
-first screen [BUILT-WITHOUT-THE-KERNEL]: 1920 x 1200, 7680 bytes a row
-
-is the kernel on that disk the one we kept?
-  yes -- byte for byte the kernel built before the program changed
-
-
-Yesterday that was impossible by construction.
-
-### And the test asserts it, because the fallback is designed to hide it
-
-scripts/install-then-boot-test.sh gained an eighth check: the system it
-runs came off the volume. Without it the run passes either way — the kernel
-falls back to its built-in copy deliberately and quietly, so an installer that
-stopped writing /System/init.elf would still produce a machine that boots,
-draws a screen and reports 67 self-tests passing, and the file would still have
-printed 7 of 7 forever.
-
-That is the shape KF-229 was: a check sitting on top of the fault it was
-written to catch, unable to fail. Taking the program off the medium turns the
-run red and names the reason — the system: no /System/init.elf (-7), using the
-copy inside the kernel — while every other check still passes, which is also
-the graceful fallback being shown to work.
-
-### What is still in the kernel image
-
-The copy. It is the fallback for a machine that has not been installed onto —
-every blank disk in the verification rig, and any medium built before this
-existed. Taking it out is a separate decision and wants a machine that can be
-recovered without it.
+Sockets is the largest group left at 44 call sites, then the ten remaining file
+calls at 31.
 
 ---

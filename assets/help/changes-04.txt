@@ -1,89 +1,47 @@
-Eleven of the twenty-one symbols in the largest group left, and they are the
-eleven that have a system call underneath them already: open, close,
-read, write, lseek, mkdir, opendir, readdir, closedir,
-realpath and sysconf.
+The checkpoint board asked for *"the seven error codes that have sites"* to be
+wired: B-001, B-002, B-005, D-002, F-001, J-002, L-003.
 
-The other ten -- stat and its two relatives, unlink, rmdir, access,
-chmod, umask, mmap, munmap -- are declared in the headers and
-deliberately not defined, so a caller fails to link naming the symbol. Each
-header says what its absentees are waiting for. That is the stance
-<stdlib.h> took about malloc for as long as there was nothing to build an
-allocator on, and the reason is the same: a stub that answers -1 with a
-plausible errno would have a program ask whether a file exists, be told no,
-create it, and do that every time.
+They were wired already. git log -S puts every one of them in 2b45b53,
+on 12 September, under the commit message *"Wire the seven error codes that had
+sites and no callers"* — and the board went on calling them work for three days
+afterwards, because the figure beside them, *34 of 43 reachable*, was counted
+once by hand and never counted again.
 
-### Everything here is a translation, and the translation is the whole risk
+So the work was not the wiring. The work was the thing that would have said
+so.
 
-RECON_O_READ is 1 and O_RDONLY is 0. A wrapper that passed the flags
-through unchanged would open every read-only file for writing and every
-write-only one for reading -- it builds, it passes the first test, and it
-destroys a file on the fourth.
+### What the measurement found on its first run
 
-So the suite makes every call twice, once through ReconOS's wrappers and once
-through the host's, on the same files, and requires the same answers. Plus
-three things a comparison cannot see:
+scripts/check-errors.py reads every code out of include/recon_errors.def,
+finds every recon_error_raise in src/, and refuses when the two disagree.
+The true figure is 41 of 43, and the two without a site are exactly the two
+that were always meant to be:
 
-- That the flags are really translated, by writing through a read-only
-  descriptor and requiring it to fail. Two libraries that got this wrong the
-  same way would agree with each other.
-- That realpath will not climb out of the root. /System/../../Users is
-  /Users, not something above the root. That is ReconOS's containment rule,
-  not POSIX's, so there is nothing to compare it against.
-- That the descriptor limit matches the kernel's, read out of
-  kernel/include/recon/kernel/process.h while the suite runs.
+| | |
+|---|---|
+| A-006 | the startup checks it reports on do not exist yet |
+| E-005 | uninstalling is written not to fail, so no path could raise it |
 
-### readdir over a call that answers the whole directory at once
+And it found three more (BG-204). The start sequence runs eight checks; two
+of them raise their fault *and* show it on the splash, and three show it only.
+VT-L001, VT-L002 and VT-E001 reached a person's eyes and never reached
+/System/Logs — so somebody who watched a start, saw a code and then typed
+errors log would not find it. All three are FAULTs, which the table defines as
+*reported where it happened*.
 
-SYS_LIST returns every name in one call and refuses rather than truncating.
-That is the opposite shape from readdir, and it is the better one: a
-directory read in pieces has no guarantee about what a caller sees when it
-changes between two of them, and nothing in the interface can say so.
+A code that is shown looks wired from every angle except the log. It is in
+the enumeration, it is in docs/ERRORS.md, errors VT-L001 describes it, and a
+person really does see it. The one question that separates the two cases is
+*can this be found again tomorrow*, and nothing was asking it.
 
-So opendir reads the lot and readdir walks it. d_type is always
-DT_UNKNOWN, which POSIX allows — and which was checked before being relied
-on: the desktop reads d_name at every one of its sites and d_type at
-none of them.
+### Checked in both directions, because that is how the last one went stale
 
-### The stand-in was looser than the thing it stands in for
+An exception list nobody re-reads is the same fault in a new file. So the
+script refuses four more things besides a code with no site: an excused code
+that has since gained one, an excused code that no longer exists, a code raised
+that nothing defines, and a number defined twice. Five mutations, five distinct
+messages, each caught.
 
-userland/tests/hostsys.c answers the primitives with POSIX so the library can
-run on Linux. It existed for the FILE layer, which only ever asked whether a
-result was negative -- so returning POSIX's -1 was good enough and nobody
-noticed it was not the kernel's contract.
-
-The descriptor layer asks more: it turns that answer into errno. Against the
-old stand-in, a file that was not there reported ENOSYS instead of ENOENT.
-Both failures showed up on the suite's first run.
-
-A stand-in with a looser contract than the real call is the one way a
-stand-in can be worse than none — it lets code pass here that would be wrong
-on a machine. All eight primitives now answer with the kernel's numbers.
-
-### And the measurement was hiding five functions
-
-BG-197, and it is the fourth of a family. measure-libc.py drops symbols
-starting with __, which is right for __stack_chk_fail and wrong for
-__isoc99_sscanf — glibc's spelling of sscanf. Five library functions sat
-behind that filter, and the number was wrong in both directions: errno,
-the ctype table and strtoul are answered and were not counted; sscanf and
-assert are not answered and were never reported.
-
-Fixed by translating the spelling rather than widening the filter. The script
-then refused to report anything until all three newly-visible names had a line
-in its table, naming them — the guard added in v0.4.28 doing its job.
-
-### Where it leaves things
-
-| | before | now |
-|---|---|---|
-| call sites answered | 2,951 of 3,113 | 3,020 of 3,134 |
-| desktop sources that build with no libc | 11 of 79 | 19 of 79 |
-
-The eight new ones are almost exactly the browser's half of the desktop — the
-HTML parser, the CSS parser, forms, HTTP. Not a coincidence: a parser is
-strings and allocation and very little else.
-
-Sockets is now the largest group left at 44 call sites, then the ten remaining
-file calls at 31, then sscanf at 14.
+The sixth pass of scripts/check.sh.
 
 ---

@@ -811,8 +811,11 @@ static void remember_failure(const char *path, bool is_app, const char *problem)
     slot->used = true;
     slot->state.loaded = false;
     slot->state.is_app = is_app;
-    snprintf(slot->state.path, sizeof(slot->state.path), "%s", path);
-    snprintf(slot->state.problem, sizeof(slot->state.problem), "%s", problem);
+    /* The same as the successful path a hundred lines down, which has used
+     * `recon_text_copy` since that helper existed. Both are here to be read
+     * in a listing: this slot failed to load, so nothing will open it. */
+    recon_text_copy(slot->state.path, sizeof(slot->state.path), path);
+    recon_text_copy(slot->state.problem, sizeof(slot->state.problem), problem);
 
     /* Named by its file, since its descriptor could not be read. */
     const char *leaf = strrchr(path, '/');

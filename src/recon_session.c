@@ -320,6 +320,11 @@ static int boot_check_icons(enum recon_error_code *problem, char *note,
     int found = recon_fs_list("/", RECON_DIR_SYSTEM_ICONS, entries, 128);
 
     if (found < 0) {
+        /* Raised as well as shown. The splash carries the code past one
+         * glance and no further; a FAULT is "reported where it happened",
+         * and where it happened is here. */
+        recon_error_raisef(NULL, RECON_ERR_L002, "%s: cannot read the folder",
+            RECON_DIR_SYSTEM_ICONS);
         *problem = RECON_ERR_L002;
         recon_text_copy(note, size, "cannot read the folder");
         return -1;
@@ -343,6 +348,8 @@ static int boot_check_appearance(enum recon_error_code *problem, char *note,
     }
 
     if (!found) {
+        recon_error_raisef(NULL, RECON_ERR_L001,
+            "'%s' is not among the %d skins installed", current, count);
         *problem = RECON_ERR_L001;
         snprintf(note, size, "'%s' is not there", current);
     }
@@ -379,6 +386,12 @@ static int boot_check_programs(enum recon_error_code *problem, char *note,
     }
 
     if (refused > 0) {
+        /* The count rather than the names, deliberately: `recon_modules`
+         * has already said which ones and why, each with its own reason,
+         * and repeating them here would put the same fault in the log
+         * twice under two codes. This one is that it happened at all. */
+        recon_error_raisef(NULL, RECON_ERR_E001,
+            "%d of %d would not load", refused, count);
         *problem = RECON_ERR_E001;
         snprintf(note, size, "%d would not load", refused);
     }

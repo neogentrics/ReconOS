@@ -1,71 +1,67 @@
-The first entry in docs/KERNEL-WANTS.md is answered. SYS_MAP with an fd
-of -1 returns a demand-paged anonymous range, and userland/libc/mem_recon.c
-has been sending exactly that call since the allocator was written. Nothing in
-userland/ was rebuilt or relinked for it: the program on the disk already
-linked the allocator, and the call it had always made started working.
+The board said *"a long cell sets a wide column and the row runs off the
+side."* Half of that had already been fixed — columns are scaled down
+together to fit the window, and have been for a while. What was still true was
+worse and less visible: a cell whose text overran its column pushed the pen
+along, so every column after it on that row stopped lining up. The comment
+beside it called that readable, and it is; it is also the table quietly
+stopping being a table half way across.
 
-An installed disk, booted by itself, running a program loaded off its own
-volume, now says:
+Three things change, and a table is a table all the way across now:
 
+- a cell's lines break at the end of its column rather than at the edge of
+  the window
+- a line that breaks inside a cell starts again at that cell's left edge
+- every cell starts at the top of its row, and the row ends at the bottom of
+  whichever cell reached furthest down
 
-  the heap: 64 blocks and 512 KiB written, read back and freed;
-            1536 KiB from the kernel
+### The wrapper that was written and thrown away
 
+The first attempt was a clean little module — recon_wrap, a measuring
+function rather than a font so the host could measure in characters, 836 checks
+against it, and it found two real faults in itself on the first run. One of them
+would have made every row measure as zero lines high: (int)~0U >> 1 is not
+the largest int, it is −1.
 
-recon_init allocates sixty-four blocks, frees every other one and takes them
-again -- so the free lists and the coalescing do work rather than a bump upwards
-through fresh memory -- takes one block large enough to need a second range from
-the kernel, reads every one of them back, and audits the heap. The kernel half
-is in docs/KERNEL-CHANGELOG.md under 0.2.39.
+It was also the wrong shape, and it went in the bin. recon_web.c already
+wraps text — that is what the word loop does — and the paragraph at the top of
+flow says exactly why a second copy is the thing to avoid: *"two copies of a
+word-wrap loop drift, and the drift shows up as a scrollbar that does not reach
+the bottom of the page."* What a cell was missing was never a wrapper. It was a
+right-hand edge.
 
-The first ReconOS program that allocates. What its header used to say is
-worth keeping: *"It allocates nothing. There is no allocator on this kernel and
-that is the first entry in docs/KERNEL-WANTS.md."*
+Recorded because the tests passing is not what makes a piece of code right, and
+836 of them is not an argument for keeping it.
 
-### Three functions nothing in ReconOS calls
+### A column has two widths, and only one was measured
 
-sincos, sqrtf and strtoll appear in no line of this source. The compiler
-writes them. At -O2 and above GCC fuses a sin(x) and a cos(x) of one
-argument into a single sincos, rewrites atoll(s) as strtoll(s, 0, 10) *in
-the caller* — reaching past whatever atoll the library defines — and narrows a
-sqrt whose argument and result are both floats into sqrtf.
+Making cells snap back to their column turned the old misalignment into
+something worse — cells drawn on top of each other, which the first
+photograph showed immediately. Columns were being scaled down proportionally,
+which pays no attention to whether the result still holds a word, and a column
+narrower than a word in it now overlaps its neighbour instead of merely running
+past it.
 
-So a release of the desktop needed three symbols that a debug build did not, and
-the coverage measurement had been reading whichever build happened to be in
-build/. That is BG-203, and it is the third time this library has been
-measured by an instrument sharing a premise with it.
+So a column is measured twice:
 
-The number it changes. v0.4.32 published 3,043 of 3,134 call sites. The
-release build — the one a machine would actually run — says 2,998 of 3,089.
-The measurement now reads the build type out of CMakeCache.txt, prints it with
-the result, and refuses a build that is not a release.
+| | |
+|---|---|
+| the most it wants | its widest whole cell |
+| the least it can be | its widest single word, because there is nowhere to break inside one |
 
-### Two warnings are errors now, and only two
+Scaling moves each column from the first towards the second in proportion to the
+room it has *spare*, and stops at the floor. A column already at its minimum
+gives up nothing. A table whose minimums do not fit gets its minimums and runs
+over the edge — at that point there is nothing left to give, and squeezing
+further would put the overlap back rather than remove it.
 
-recon_libc_math_tests reported sqrtf(0) as 1. The square root was right; the
-suite had no prototype for it, so C assumed it returned int and read a
-floating-point register as an integer.
+### How it was checked
 
-The compiler had said so, twice, in a build with no -Werror — two lines among
-a few thousand. -Werror=implicit-function-declaration and
--Werror=implicit-int are errors now. Not -Werror in general, which is a
-policy change across a tree two sessions are working in; these two can only ever
-mean a wrong answer, and the whole tree compiles with no instance of either.
+By photograph, through scripts/look.sh, against a page served with one column
+far too narrow for its contents — and then against a table that already fits, to
+show the common case takes the path it always did. The first photograph is what
+found the overlap; no test in the tree would have.
 
-### Where it leaves things
-
-| | before | now |
-|---|---|---|
-| call sites answered | 3,043 of 3,134 *(debug build)* | 2,998 of 3,089 *(release)* |
-| symbols outstanding | 40 | 37 |
-| the installed-disk boot test | 8 of 8 | 9 of 9 |
-
-The two call-site figures are not a regression and not comparable: the left one
-counts a build nobody ships. The maths suite runs 3,614,012 checks and the file
-suite 438,496, both clean.
-
-The 91 call sites still missing all need the kernel: 35 for sockets that open
-something, 31 for stat and its relatives, 12 for dlopen, 11 for processes and
-signals, 2 for an environment.
+Still not done, and the row stays on the board saying so: no colspan, no
+rowspan, no nested tables, no borders.
 
 ---

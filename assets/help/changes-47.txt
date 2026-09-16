@@ -1,3 +1,2 @@
-Connections that carry data, with a rule about which programs may open
-one. Screen capture on Print Screen. Installing and removing programs.
-Wallpapers the system draws for itself.
+The registry can be changed from the Control Panel, not only read. Saving
+redraws the system, so a setting takes effect while you watch.
