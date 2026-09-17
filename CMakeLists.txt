@@ -1085,6 +1085,20 @@ add_executable(recon_server_dns_tests
 
 add_test(NAME server_dns COMMAND recon_server_dns_tests)
 
+# Asking the time, and the replies that must not set a clock.
+#
+# A clock is what every expiry in a system is read against, so a reply that is
+# believed without checking is a certificate somebody can un-expire. The check
+# that matters is the echoed 64-bit transmit timestamp -- the same shape as the
+# DNS identifier. Watched failing at 9 of 41 against a parser that takes the
+# server's word, and every one of the nine returned NTP_OK where a refusal
+# belonged.
+add_executable(recon_server_ntp_tests
+    server/ntp.c
+    server/tests/test_ntp.c)
+
+add_test(NAME server_ntp COMMAND recon_server_ntp_tests)
+
 # A ring of recent entries, and the count that stops it lying.
 #
 # A log that drops silently looks complete, reads plausibly, and has lost

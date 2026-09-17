@@ -29,10 +29,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.19.1 |
+| **Version** | 0.20.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 16 September 2026 |
-| **Checks** | 684 across seventeen suites, by `scripts/server-tests.sh` |
+| **Checks** | 725 across eighteen suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -162,6 +162,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_http_concurrent` | 12 | two clients, one of them stuck |
 | `server_auth` | 33 | a guard, and every way of getting past one that is not the token |
 | `server_dns` | 72 | asking for an address, and the answers that must not be believed |
+| `server_ntp` | 41 | asking the time, and the replies that must not set a clock |
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
 | `server_dial` | 38 | three answers, and the two ways of confusing them |
 
@@ -254,6 +255,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.20.0** | **This machine knows how wrong its clock is — and found out its clock cannot say.** An NTP client, the same connected-datagram shape as the resolver, and the supervisor's long-awaited **second service**: adding it changed nothing in the main loop, which is what that shape was built for. It resolves `time.cloudflare.com` with this role's own resolver, which is the first thing here to use one built capability to reach another. **The danger is in believing the reply** — a clock is what every expiry is read against, so the server must echo the exact 64-bit timestamp sent, the same shape as the DNS identifier. Watched failing at 9 of 41 against a parser that takes the server's word, and every one of the nine returned `NTP_OK` where a refusal belonged. Then the line it printed said **round trip 0 ms** to a server thousands of kilometres away, which cannot be true: `SYS_WALLTIME` is declared in nanoseconds and counts whole seconds. The broken number was the one nobody was looking at; the number under test was the one hiding it. VF-021. |
 | **0.19.1** | **Outbound TCP had never worked, and it was two bytes of arithmetic.** Every SYN this machine ever sent carried a wrong TCP checksum, so every correct peer discarded it in silence — no SYN+ACK, not even a RST from a closed port. Found by capturing packets on the virtual NIC instead of reasoning about the code: the IP checksum was right, the TCP one wrong, and **wrong by the same 0x0C0F on every packet**, which is `0x0A00 + 0x020F` — the two halves of this machine's own address. `socket_connect` binds to `IPV4_ANY`, so `tcp_open` summed the pseudo-header over a source of zero while the IP layer wrote the real address into the header on the way out. An accepted connection never had this, which is why inbound always worked and nobody had looked. Fixed and proved on the wire: a closed port now refuses, an open one completes the full handshake, and the host listener logs `ACCEPTED`. A second fault underneath is the kernel session's, reported with its timings — the handshake completes and `connect` still never says so. VF-020. |
 | **0.19.0** | **Merged kernel 0.2.48, and found what it broke.** KF-244 landed as announced: `connect` no longer answers success for a port nothing is listening on, so the standing measurement reads an honest *in flight* instead of a lie — and it is now made with `dial.c`, which was written three versions ago for this exact day and had never been able to run. But the same change made `connect` answer `SYS_EIO` for every **datagram** socket, because `sys_connect` asks a progress function that reads *not a stream* as *did not make it*. Those are different facts. That is the only shape of UDP a program can use, so DNS stopped resolving on the first boot after the merge. Diagnosed against three controls — inbound TCP still served, the kernel's own DHCP still completed, the network came up identically — then fixed, rebuilt, and proved by the same request answering with real addresses again. **All 684 checks passed before and after**, because every one is a host suite and the fault was in the kernel: a merge verified by suites alone would have been called clean. Reported in `docs/SIGNALS.md`, no KF claimed. VF-019. |
 | **0.18.0** | **This machine resolves names.** The audit called DNS blocked on “an unconnected datagram socket”, and that was true of DHCP and of a DNS *server* — but a resolver is a **connected** datagram, which this kernel has supported since the socket layer landed. `kernel/core/socket_file.c` said so in as many words. Measured on the machine before a line was written, then built: `server/dns.c`, 72 checks. **The danger is not in asking, it is in believing.** A compression pointer must point strictly backwards — against a parser that follows them freely the suite does not fail, it **hangs**, which is a denial of service costing one datagram. And a response is only an answer if the identifier, the question, its type and its class all match; against a parser that skips those, four checks come back `DNS_OK` where a refusal belonged, which is off-path cache poisoning working. `GET /api/resolve` is guarded, because an open resolver endpoint is an open resolver. Two faults found after it worked: a trailing-dot name that encoded instead of being refused, and a failure path that reported an `rcode` from the previous request's stack. VF-017, VF-018. |

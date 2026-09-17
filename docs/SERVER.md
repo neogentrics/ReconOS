@@ -44,13 +44,15 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 678 checks across seventeen suites, several connections at once, writes guarded, running on the machine |
+| Web / API server | server | **built** | `server/http/` — 725 checks across eighteen suites, several connections at once, writes guarded, running on the machine |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS **resolver** (client) | server | **built** | `server/dns.c` — 72 checks, **resolving real names on the machine**. A resolver is a *connected* datagram, which this kernel has had all along |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | a *server* must reply to whoever asked, which needs `recvfrom`. The blocked half; see VF-017 for how the entry came to cover both |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
 | DDNS | server | **blocked** | follows DNS |
-| NTP / PTP time sync | server | **blocked** | same; and no user-mode timer |
+| NTP **client** (measuring) | server | **built** | `server/ntp.c` — 41 checks, measuring against `time.cloudflare.com` on the machine, which it resolves itself. Reports the offset; **cannot correct it** |
+| NTP time *setting* | server | **blocked** | nothing can set this clock: `SYS_TIME` and `SYS_WALLTIME` both read and nothing writes. And `SYS_WALLTIME` counts whole seconds — VF-021 |
+| PTP | server | not started | needs hardware timestamping |
 | Reverse proxy | server | **unblocked, not built** | `connect` is fixed (KF-244); `server/dial.c` is the client half |
 | Multi-queue NIC drivers | kernel | **blocked** | virtio-net only |
 | LACP bonding, VLAN, bridging | kernel | not started | firewall role needs it first |
@@ -85,7 +87,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | Parallel naming (`M16` → `M17`) | server | **built** | `server/identity.c` — 34 checks |
 | Peer discovery on first boot | server | **blocked on one thing now** | `connect` is fixed and `dial.c` is ready. What remains: **a program cannot learn its own address**, so nothing knows what range to sweep |
 | Configuration clone onto unlike hardware | server | spec | discovery first |
-| Service supervisor | server | **partial** | `server/service.c` — 37 checks. In-process only: **nothing can start a program**, so this is not process supervision and does not pretend to be |
+| Service supervisor | server | **partial** | `server/service.c` — 37 checks, and **two services** now: the web server and the clock. Adding the second changed nothing in the loop, which is what the shape was for. In-process only: **nothing can start a program**, so this is not process supervision and does not pretend to be |
 | Cron / job scheduler | server | **blocked** | no user-mode timer |
 | Structured REST / RPC management API | server | **partial** | reads and one write: `POST /api/name` renames the machine |
 | Hypervisor daemon | server | not started | needs VT-x from the kernel |

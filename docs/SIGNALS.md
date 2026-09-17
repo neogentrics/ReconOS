@@ -191,6 +191,52 @@ against `errno` by name. Discovery and the reverse proxy need nothing else.
 
 ---
 
+## `SYS_WALLTIME` is declared in nanoseconds and counts whole seconds
+
+Found building an NTP client, which needs two of this machine's timestamps to
+compute a round trip.
+
+**Measured.** Five reads in a row, with twenty thousand yields between each:
+
+```
+clock probe: walltime ns = 1789646397000000000
+clock probe: walltime ns = 1789646397000000000
+clock probe: walltime ns = 1789646397000000000
+clock probe: walltime ns = 1789646397000000000
+clock probe: walltime ns = 1789646397000000000
+```
+
+The low nine digits are zero every time, and over 200000 yields the value moved
+by exactly 1000 ms. The call's signature promises nanoseconds and the clock
+behind it ticks once a second.
+
+### What it costs
+
+An NTP round trip cannot be measured at all: both of this machine's timestamps
+land in the same second, the computed delay is zero, and `round trip 0 ms` to a
+server on the far side of the internet is quantisation wearing the clothes of a
+measurement. The client here refuses to print it for that reason.
+
+The offset survives -- it reads 1170 ms rather than a whole number of seconds,
+because two of its four terms are the *server's* timestamps and those are
+fine-grained -- but it carries about a second of uncertainty from this end, and
+the console line says so rather than implying accuracy it does not have.
+
+It also means any duration this system measures with the wall clock is rounded
+to a second. `SYS_TIME` is monotonic and appears to be finer; everything that
+needs a duration should be using that one, and this entry is partly a note that
+the two calls are not interchangeable in precision either.
+
+### What would fix it
+
+Whatever `SYS_TIME` reads, carried into `SYS_WALLTIME`'s fraction. The epoch
+offset is a constant; the resolution is the part that is missing.
+
+**Nothing on this branch is blocked by it.** The clock service works, reports
+honestly, and gets better for free the day the fraction is real.
+
+---
+
 ## Two smaller things, neither urgent
 
 **`recon.h` publishes two of the kernel's four open flags.** `vfs.h` has

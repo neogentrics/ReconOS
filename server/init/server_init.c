@@ -53,6 +53,7 @@
 #include "../auth.h"
 #include "../dns.h"
 #include "../dial.h"
+#include "../ntp.h"
 #include "../include/recon_server.h"
 #include "../service.h"
 #include "../log.h"
@@ -1021,6 +1022,189 @@ static const struct service WEB_SERVICE = {
 	web_start, web_poll, web_stop, &WEB
 };
 
+/* --- knowing how wrong this machine's clock is ----------------------------
+ *
+ * The supervisor's second service, and the first thing to prove its shape was
+ * worth having: the loop at the bottom of `main` did not change to add it.
+ *
+ * **It measures and does not correct**, because nothing can set this clock.
+ * See `server/ntp.h`. The number is the useful half regardless -- a machine
+ * eleven seconds fast that knows it is a different machine from one that does
+ * not, since every log line, every TTL and every expiry this system will
+ * eventually check is read against that clock.
+ */
+
+/* This machine's clock as a 64-bit NTP timestamp.
+ *
+ * `recon_walltime` is nanoseconds since 1970 and NTP counts from 1900, in
+ * 32.32 fixed point. The fraction is scaled *before* it is shifted; the other
+ * order throws it away and yields offsets that are always a whole number of
+ * seconds and look entirely plausible. */
+static unsigned long long clock_ntp(void)
+{
+	unsigned long long ns = (unsigned long long)recon_walltime();
+	unsigned long long secs = ns / 1000000000ULL;
+	unsigned long long frac = ns % 1000000000ULL;
+
+	return ((secs + NTP_EPOCH_OFFSET) << 32)
+	     | ((frac << 32) / 1000000000ULL);
+}
+
+static struct ntp_client CLOCK_CHECK;
+
+/*
+ * How often to ask.
+ *
+ * Deliberately infrequent. A server that queries a public time source on every
+ * poll is a server that gets a kiss-of-death, which is the packet that exists
+ * precisely for clients like that -- and `ntp.c` refuses to retry through one.
+ * Once every five minutes is far more often than a clock drifts and far less
+ * often than anybody would mind.
+ */
+#define CLOCK_CHECK_EVERY_MS (5 * 60 * 1000)
+
+/*
+ * The time server, by name.
+ *
+ * **Resolved rather than written as an address**, which is what a real machine
+ * does -- and it is the first thing on this system to use one capability to
+ * reach another: the resolver built in 0.18.0 is what makes this reachable.
+ *
+ * It had to be. QEMU's user networking answers DNS on 10.0.2.3 and answers NTP
+ * nowhere, so the first version of this pointed at the gateway and got
+ * silence, which is the correct reply to a question nobody is listening for.
+ */
+#define CLOCK_SERVER_NAME "time.cloudflare.com"
+
+struct clock_service {
+	unsigned long last_ms;
+	int asked_once;
+
+	/* Resolved once and kept. A name already looked up does not need
+	 * looking up every five minutes, and a resolver asked on a schedule
+	 * for an answer nobody is waiting on is a resolver used as a
+	 * heartbeat. Cleared when a query fails, so a machine that has moved
+	 * network finds the server again. */
+	unsigned int address;
+};
+
+static struct clock_service CLOCKWORK;
+
+static int clock_start(void *ctx)
+{
+	struct clock_service *s = (struct clock_service *)ctx;
+
+	s->last_ms = 0;
+	s->asked_once = 0;
+	s->address = 0;
+	return SERVICE_OK;
+}
+
+static int clock_poll(void *ctx)
+{
+	struct clock_service *s = (struct clock_service *)ctx;
+	struct ntp_sample sample;
+	unsigned long now = clock_ms();
+	char line[200];
+	int rc;
+
+	if (s->asked_once && now - s->last_ms < CLOCK_CHECK_EVERY_MS)
+		return SERVICE_OK;
+
+	s->last_ms = now;
+	s->asked_once = 1;
+
+	/* Find the server, if it is not known yet. */
+	if (s->address == 0) {
+		struct dns_result found;
+		unsigned char seed[2];
+		unsigned short id;
+		long got = (long)recon_call6(SYS_RANDOM,
+		                             (u64)(unsigned long)seed,
+		                             sizeof(seed), 0, 0, 0, 0);
+
+		if (got < (long)sizeof(seed)) {
+			say("  the clock: no randomness for a query id\n");
+			return SERVICE_OK;
+		}
+		id = (unsigned short)((seed[0] << 8) | seed[1]);
+
+		rc = dns_resolve(&RESOLVER, CLOCK_SERVER_NAME, id, &found);
+		if (rc != DNS_OK || found.count == 0) {
+			snprintf(line, sizeof(line),
+			         "  the clock: could not find "
+			         CLOCK_SERVER_NAME " (%d)\n", rc);
+			say(line);
+			return SERVICE_OK;
+		}
+
+		s->address = found.addrs[0];
+		CLOCK_CHECK.server = s->address;
+		snprintf(line, sizeof(line),
+		         "  the clock: asking %u.%u.%u.%u (" CLOCK_SERVER_NAME
+		         ")\n",
+		         (s->address >> 24) & 0xFF, (s->address >> 16) & 0xFF,
+		         (s->address >> 8) & 0xFF, s->address & 0xFF);
+		say(line);
+	}
+
+	rc = ntp_query(&CLOCK_CHECK, &sample);
+	if (rc != NTP_OK) {
+		/*
+		 * **Not a service failure.** A time server that does not answer,
+		 * or answers something this refuses, is an ordinary condition
+		 * and not a reason to restart anything. `service.h` counts a
+		 * fault against a restart budget, and a network that is simply
+		 * absent would exhaust it in fifteen minutes.
+		 */
+		snprintf(line, sizeof(line),
+		         "  the clock: no usable answer (%d), still %s\n", rc,
+		         CLOCK_CHECK.have_last ? "on the last sample"
+		                               : "unchecked");
+		say(line);
+		/* Look the name up again next round: a server that stopped
+		 * answering may have moved, and a cached address is the one
+		 * thing this would otherwise never reconsider. */
+		s->address = 0;
+		return SERVICE_OK;
+	}
+
+	/*
+	 * **The round trip is not reported, and that is a finding rather than
+	 * an omission.**
+	 *
+	 * `SYS_WALLTIME` is declared in nanoseconds and counts whole seconds.
+	 * Measured: five reads in a row gave 1789646397000000000, low nine
+	 * digits zero every time. So both of this machine's two timestamps in
+	 * the exchange land on the same second, the computed round trip is
+	 * zero, and printing "round trip 0 ms" to a server on the far side of
+	 * the internet would be reporting quantisation as a measurement.
+	 *
+	 * The offset survives because two of its four terms are the *server's*
+	 * timestamps, which are fine-grained -- which is why it reads 1616 ms
+	 * rather than a whole number of seconds. What it does not survive is
+	 * precision: this machine's two coarse readings put roughly a second
+	 * of uncertainty around it, and the line says so rather than implying
+	 * millisecond accuracy it cannot have.
+	 *
+	 * Filed in `docs/SIGNALS.md`. A finer wall clock makes this useful;
+	 * nothing else has to change.
+	 */
+	snprintf(line, sizeof(line),
+	         "  the clock: %s by about %lld ms (+/- a second, this"
+	         " machine's clock counts whole ones), stratum %d\n",
+	         sample.offset_ms >= 0 ? "behind" : "ahead",
+	         sample.offset_ms >= 0 ? sample.offset_ms : -sample.offset_ms,
+	         sample.stratum);
+	say(line);
+	return SERVICE_OK;
+}
+
+static const struct service CLOCK_SERVICE = {
+	"clock", "measures how far this machine's time is from a time server",
+	clock_start, clock_poll, 0, &CLOCKWORK
+};
+
 /* --- measuring the client side, which nothing has ever exercised ----------- */
 
 /*
@@ -1470,6 +1654,19 @@ int main(void)
 
 	WEB.listener = -1;
 	WEB.site = &site;
+
+	/* The second service. The supervisor was built for more than one and
+	 * has never held more than one; adding this changed nothing in the
+	 * loop at the bottom of `main`, which is what that shape was for. */
+	CLOCK_CHECK.server = 0;		/* resolved by name on the first poll */
+	CLOCK_CHECK.port = 123;
+	CLOCK_CHECK.idle = recon_yield;
+	CLOCK_CHECK.now_ms = clock_ms;
+	CLOCK_CHECK.now_ntp = clock_ntp;
+	CLOCK_CHECK.timeout_ms = 3000;
+
+	if (supervisor_add(&SUPERVISOR, &CLOCK_SERVICE) != SERVICE_OK)
+		say("  the clock: could not be registered\n");
 
 	if (supervisor_add(&SUPERVISOR, &WEB_SERVICE) != SERVICE_OK) {
 		/* The registry refused the one service this role has. Nothing

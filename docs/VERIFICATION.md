@@ -572,3 +572,38 @@ None.
   missing pseudo-header term is possible and nobody did it; the capture took
   four minutes and named the byte. **When something is dropped silently by
   everything downstream, the only witness left is the wire.**
+
+### VF-021 -- a round trip of zero milliseconds to the other side of the internet
+
+- **Found in** the NTP client, 17 September 2026, minutes after it first
+  measured a real offset. **Found by** reading the whole line rather than the
+  number that was being worked on.
+- **What it said** `the clock: behind by 1778 ms, round trip 0 ms, stratum 3`.
+  The offset was the figure under test and it looked right. The round trip
+  beside it was zero, to a server several thousand kilometres away, and **no
+  packet makes that trip in under a millisecond.**
+- **What it was** `SYS_WALLTIME` is declared in nanoseconds and counts whole
+  seconds. Measured directly: five reads gave `1789646397000000000` every time,
+  low nine digits zero, and 200000 yields moved it by exactly 1000 ms.
+- **Why the offset still looked plausible** Two of its four terms are the
+  *server's* timestamps, which are fine-grained, so it reads 1170 ms rather
+  than a whole number of seconds. Only the round trip is computed from this
+  machine's two coarse readings alone, so only the round trip collapsed --
+  **the broken number was the one nobody was looking at, and the number being
+  tested was the one that hid it.**
+- **Why it belongs here** A figure that cannot be true is worth more than a
+  figure that looks right, and this one was sitting beside the figure under
+  test for two boots before it was read. The suite could not have caught it:
+  `test_ntp.c` drives the arithmetic with timestamps it supplies itself, and
+  the arithmetic is correct. The fault is in what the machine's clock can
+  express, which no pure check can see.
+- **What changed** The round trip is not printed. The offset is printed with
+  its real uncertainty -- *about 1170 ms, give or take a second, this machine's
+  clock counts whole ones* -- rather than to a millisecond it cannot support.
+  Reported in `docs/SIGNALS.md`; a finer wall clock makes it useful and nothing
+  else has to change.
+- **And a smaller one beside it**: the first version of this service pointed at
+  QEMU's gateway for NTP and got silence, because slirp answers DNS on 10.0.2.3
+  and answers NTP nowhere. It resolves `time.cloudflare.com` with this role's
+  own resolver now, which is what a real machine does and is the first thing
+  here to use one built capability to reach another.
