@@ -1079,6 +1079,210 @@ static void deliver_one(struct r8169 *r, struct net_device *dev,
 	*frames = dev->rx_packets - f0;
 }
 
+/* --- and the way out, which a network that answers cannot check -------------
+ *
+ * NW-007 closed on the receive side and named this as what it did not cover:
+ * the transmit length is checked by nothing except a far end that replies. That
+ * is a weak instrument in one specific way -- it can only report that
+ * *something* got through. A driver that sent four bytes too many, rang the
+ * doorbell twice, or held on to a buffer for ever would still get a DHCP lease,
+ * because the parts of a frame the far end validates are not the parts a driver
+ * gets wrong.
+ *
+ * Three things are asserted here that a reply cannot distinguish:
+ *
+ *   - the descriptor the driver actually built, field by field;
+ *   - that the doorbell was rung, which is readable because the fake register
+ *     window is ordinary memory that starts at zero and only the driver writes;
+ *   - that the buffer is released exactly when the card says it is finished
+ *     and not before, because a driver that frees early hands the card a page
+ *     the allocator has given to somebody else.
+ */
+static bool transmit_builds_a_descriptor(struct r8169 *r, struct net_device *dev)
+{
+	struct netbuf *b = netbuf_alloc();
+	unsigned i = r->tx_head % TX_RING;
+	paddr_t expect;
+	u32 opts;
+	bool ok = true;
+
+	if (!b) {
+		kputs("  r8169: no buffer to transmit in the test\n");
+		return false;
+	}
+
+	if (!netbuf_put(b, 100)) {
+		kputs("  r8169: no room for a hundred bytes of payload\n");
+		netbuf_free(b);
+		return false;
+	}
+
+	expect = b->page + (paddr_t)(b->data - b->head);
+
+	/* Through `netdev_transmit` rather than straight into the driver, so
+	 * the device layer's own accounting is on the path being tested. */
+	if (!netdev_transmit(dev, b)) {
+		kputs("  r8169: the device refused a hundred-byte frame\n");
+		return false;
+	}
+
+	/* `b` belongs to the driver from here and must not be read again. The
+	 * descriptor is what says what happened to it. */
+	opts = r->tx_desc[i].opts1;
+
+	if ((opts & DESC_LEN_MASK) != 100) {
+		kprintf("  r8169: a 100-byte frame was put on the wire as %u "
+			"bytes\n", (unsigned)(opts & DESC_LEN_MASK));
+		ok = false;
+	}
+
+	if (!(opts & DESC_OWN)) {
+		kputs("  r8169: the frame was left owned by the driver, so "
+		      "the card will never send it\n");
+		ok = false;
+	}
+
+	/* Both, because one descriptor carries the whole frame. A card told a
+	 * frame starts here and does not end here waits for a continuation
+	 * that is never coming. */
+	if ((opts & (DESC_FS | DESC_LS)) != (DESC_FS | DESC_LS)) {
+		kputs("  r8169: the frame was not marked as both the first "
+		      "and the last fragment\n");
+		ok = false;
+	}
+
+	if (r->tx_desc[i].addr != (u64)expect) {
+		kputs("  r8169: the descriptor points somewhere other than "
+		      "the frame\n");
+		ok = false;
+	}
+
+	/* The doorbell. Zero here means the descriptor is correct and the card
+	 * has not been told to look at it -- a frame that sits in the ring
+	 * until something unrelated rings the bell, which on a quiet link is
+	 * for ever. */
+	if (rd8(r, R_TPPOLL) != TPPOLL_NPQ) {
+		kprintf("  r8169: the transmit doorbell reads %02x, so the "
+			"card was never told to look at the ring\n",
+			rd8(r, R_TPPOLL));
+		ok = false;
+	}
+
+	/* Still held. The card has not finished with it, and a buffer freed
+	 * now is a page the allocator may hand to somebody else while the card
+	 * is still reading it. */
+	if (!r->tx_buf[i]) {
+		kputs("  r8169: the frame was released before the card said "
+		      "it was done with it\n");
+		ok = false;
+	}
+
+	if (r->tx_head != r->tx_tail + 1) {
+		kprintf("  r8169: one frame sent left %u in flight\n",
+			r->tx_head - r->tx_tail);
+		ok = false;
+	}
+
+	/* And now the card finishes: ownership comes back, and the next poll
+	 * must release the buffer and move the tail. */
+	r->tx_desc[i].opts1 = opts & ~DESC_OWN;
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+
+	r8169_poll(dev);
+
+	if (r->tx_buf[i]) {
+		kputs("  r8169: the card finished with a frame and the buffer "
+		      "was not given back -- every frame sent would leak a "
+		      "page\n");
+		ok = false;
+	}
+
+	if (r->tx_head != r->tx_tail) {
+		kprintf("  r8169: the card finished and %u frame(s) are still "
+			"counted as in flight\n", r->tx_head - r->tx_tail);
+		ok = false;
+	}
+
+	return ok;
+}
+
+/* A full ring refuses rather than overwrites.
+ *
+ * The descriptor the card is reading right now is the one a wrapped index
+ * would land on, so a driver that does not check is one that replaces a frame
+ * mid-transmission. It must also **free** the frame it refuses: returning
+ * false and keeping the buffer leaks a page per dropped frame, and frames are
+ * dropped exactly when the machine is busiest. */
+static bool a_full_ring_refuses(struct r8169 *r, struct net_device *dev)
+{
+	unsigned sent = 0;
+	unsigned i;
+	u64 refused_before = r->tx_ring_full;
+	bool ok = true;
+
+	for (i = 0; i < TX_RING; i++) {
+		struct netbuf *b = netbuf_alloc();
+
+		if (!b || !netbuf_put(b, 64)) {
+			netbuf_free(b);
+			break;
+		}
+
+		/* Straight into the driver: `netdev_transmit` is not the thing
+		 * under test here and its counters would record a refusal that
+		 * is the point of the exercise. */
+		if (!r8169_transmit(dev, b))
+			break;
+
+		sent++;
+	}
+
+	if (sent != TX_RING) {
+		kprintf("  r8169: the ring took %u frames before refusing, "
+			"and it holds %u\n", sent, TX_RING);
+		ok = false;
+	}
+
+	{
+		struct netbuf *b = netbuf_alloc();
+
+		if (b && netbuf_put(b, 64)) {
+			if (r8169_transmit(dev, b)) {
+				kputs("  r8169: a full ring accepted another "
+				      "frame, overwriting one the card is "
+				      "still reading\n");
+				ok = false;
+			}
+		} else {
+			netbuf_free(b);
+		}
+	}
+
+	if (r->tx_ring_full == refused_before) {
+		kputs("  r8169: a frame was dropped for a full ring and "
+		      "nothing counted it\n");
+		ok = false;
+	}
+
+	/* The card catches up, and everything comes back. */
+	for (i = 0; i < TX_RING; i++)
+		r->tx_desc[i].opts1 &= ~DESC_OWN;
+
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	r8169_poll(dev);
+
+	for (i = 0; i < TX_RING; i++) {
+		if (r->tx_buf[i]) {
+			kprintf("  r8169: descriptor %u was finished with and "
+				"its buffer was not given back\n", i);
+			ok = false;
+			break;
+		}
+	}
+
+	return ok;
+}
+
 bool r8169_self_test(void)
 {
 	struct r8169 *r = &test_card;
@@ -1268,6 +1472,14 @@ bool r8169_self_test(void)
 			break;
 		}
 	}
+
+	/* --- and the way out ------------------------------------------------ */
+
+	if (!transmit_builds_a_descriptor(r, dev))
+		ok = false;
+
+	if (!a_full_ring_refuses(r, dev))
+		ok = false;
 
 	/* The frames this test produced are walked up and dropped now rather
 	 * than left on the queue for whatever runs next. */

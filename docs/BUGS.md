@@ -412,9 +412,22 @@ turned out to be true.
   | e1000 | a jumbo frame accepted | lease ✓ ping ✓ |
 
   **Twelve of the thirteen boot perfectly** — a DHCP lease and a ping answered
-  in about 300 microseconds — while doing the wrong thing. That is the measured
-  statement that these tests cover ground a running machine cannot reach, and
-  it is the reason this entry existed.
+  in about 300 microseconds — while doing the wrong thing.
+
+  **That column means two different things and the difference is worth being
+  exact about**, because stating it as one claim overstates the Realtek's half.
+
+  For the **e1000** rows it is the strong statement: that card *is* the one
+  carrying the boot's traffic, so a broken driver that still gets a lease and a
+  ping is a fault a running machine genuinely cannot show you. Seven of its
+  eight breaks are that.
+
+  For the **r8169** rows it is weaker and more basic: the rig emulates no
+  Realtek part, so that driver is not on the boot path at all. A green boot
+  there does not mean the fault slipped past a running machine — it means no
+  running machine ever touched the code. Which is the reason the test had to
+  exist, but it is not the same evidence and should not be counted as though
+  it were.
 
   A fourteenth break did not compile: removing the error-byte test entirely
   leaves the variable unused and `-Werror=unused-but-set-variable` refuses it.
@@ -436,12 +449,37 @@ turned out to be true.
   and the simulated card here clears it deliberately so the difference is
   testable at all.
 
-  **What this does not cover, so that it is not assumed:** neither driver's
-  *transmit* length is checked by anything except a network that answers, and a
-  simulated card cannot say that the real chip behaves the way the simulation
-  pretends. Register offsets, the reset sequence and the meaning of every bit
-  are proved by booting with the card and nowhere else — which for the Realtek
-  has not happened at all.
+  **The transmit side is covered too**, which it was not when this entry was
+  first closed. Both drivers now assert the descriptor they actually build —
+  length, address, the flags, the doorbell, and who owns the buffer — against
+  the same fake register window. Ten more breaks, ten more caught:
+
+  | driver | break | boot said |
+  |---|---|---|
+  | r8169 | the doorbell never rung | lease ✓ ping ✓ |
+  | r8169 | the buffer freed at send time | lease ✓ ping ✓ |
+  | r8169 | a full ring not checked | lease ✓ ping ✓ |
+  | r8169 | completed buffers never freed | lease ✓ ping ✓ |
+  | r8169 | the sent length four bytes too long | lease ✓ ping ✓ |
+  | e1000 | completion never requested (`RS`) | lease ✓ ping ✓ |
+  | e1000 | the transmit tail off by one | lease ✓ ping ✗ |
+  | e1000 | no check sequence appended (`IFCS`) | lease ✓ ping ✓ |
+  | e1000 | not marked end-of-packet | lease ✗ ping ✗ |
+  | e1000 | a full ring not checked | lease ✓ ping ✓ |
+
+  **The `RS` one is the entry's whole argument in miniature.** Without that bit
+  the card is never asked to report completion, so the status byte is never
+  written, so nothing is ever reclaimed — and the machine gets a DHCP lease,
+  answers pings in 300 microseconds, and leaks a page per frame until it dies
+  hours later with nothing to point at. A far end that replies cannot see it,
+  because the parts of a frame a far end validates are not the parts a driver
+  gets wrong.
+
+  **What is still not covered, so that it is not assumed:** a simulated card
+  cannot say that the real chip behaves the way the simulation pretends.
+  Register offsets, the reset sequence, and the meaning of every bit are proved
+  by booting with the card and nowhere else — which for the Realtek has not
+  happened at all.
 
 ### NW-008 — A hook in the device interface that nothing has ever called
 

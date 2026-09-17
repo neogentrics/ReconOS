@@ -1005,6 +1005,195 @@ static bool tail_stops_at_a_hole(struct e1000 *e, unsigned at, unsigned expect)
 	return false;
 }
 
+/* --- and the way out ------------------------------------------------------
+ *
+ * The same argument as the Realtek's transmit test: a far end that replies can
+ * only report that *something* got through, and the things a driver gets wrong
+ * on the way out are not the things a reply validates.
+ *
+ * One assertion here has no counterpart on the Realtek and is the reason this
+ * function is worth its length. **`TX_CMD_RS`** is what asks the card to write
+ * a status byte back when it is done. Without it the status byte is never
+ * written, `collect_tx` waits for a bit that cannot arrive, and every buffer
+ * ever transmitted is held for ever -- a page leaked per frame, on a path that
+ * otherwise works perfectly. The far end sees every frame. The machine runs
+ * out of memory hours later with nothing to point at.
+ */
+static bool transmit_builds_a_descriptor(struct e1000 *e, struct net_device *dev)
+{
+	struct netbuf *b = netbuf_alloc();
+	unsigned i = e->tx_head % TX_RING;
+	paddr_t expect;
+	bool ok = true;
+
+	if (!b) {
+		kputs("  e1000: no buffer to transmit in the test\n");
+		return false;
+	}
+
+	if (!netbuf_put(b, 100)) {
+		kputs("  e1000: no room for a hundred bytes of payload\n");
+		netbuf_free(b);
+		return false;
+	}
+
+	expect = b->page + (paddr_t)(b->data - b->head);
+
+	if (!netdev_transmit(dev, b)) {
+		kputs("  e1000: the device refused a hundred-byte frame\n");
+		return false;
+	}
+
+	/* `b` is the driver's from here. */
+
+	if (e->tx_desc[i].length != 100) {
+		kprintf("  e1000: a 100-byte frame was put on the wire as %u "
+			"bytes\n", (unsigned)e->tx_desc[i].length);
+		ok = false;
+	}
+
+	if (e->tx_desc[i].addr != (u64)expect) {
+		kputs("  e1000: the descriptor points somewhere other than "
+		      "the frame\n");
+		ok = false;
+	}
+
+	if (!(e->tx_desc[i].cmd & TX_CMD_EOP)) {
+		kputs("  e1000: the frame was not marked end-of-packet, so "
+		      "the card waits for a continuation that never comes\n");
+		ok = false;
+	}
+
+	if (!(e->tx_desc[i].cmd & TX_CMD_IFCS)) {
+		kputs("  e1000: the card was not asked to append a check "
+		      "sequence, so every frame goes out with a missing CRC "
+		      "and the switch discards it\n");
+		ok = false;
+	}
+
+	if (!(e->tx_desc[i].cmd & TX_CMD_RS)) {
+		kputs("  e1000: the card was not asked to report completion -- "
+		      "the status byte is never written, nothing is ever "
+		      "reclaimed, and every frame sent leaks a page\n");
+		ok = false;
+	}
+
+	if (e->tx_desc[i].status & TX_STATUS_DD) {
+		kputs("  e1000: the descriptor was handed over already marked "
+		      "done, so it would be reclaimed before it was sent\n");
+		ok = false;
+	}
+
+	/* The transmit tail is **one past** the last descriptor to send --
+	 * the opposite of the receive tail on the same card in the same
+	 * register block. Asserted because a reader who has just read the
+	 * receive path will assume otherwise, and because getting it wrong by
+	 * one means either a frame that never goes or a descriptor sent
+	 * twice. */
+	if (rr(e, R_TDT) != e->tx_head % TX_RING) {
+		kprintf("  e1000: the transmit tail reads %u and the ring is "
+			"filled to %u -- the card was told the wrong amount "
+			"to send\n",
+			(unsigned)rr(e, R_TDT),
+			(unsigned)(e->tx_head % TX_RING));
+		ok = false;
+	}
+
+	if (!e->tx_buf[i]) {
+		kputs("  e1000: the frame was released before the card said "
+		      "it was done with it\n");
+		ok = false;
+	}
+
+	/* The card finishes. */
+	e->tx_desc[i].status = TX_STATUS_DD;
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+
+	e1000_poll(dev);
+
+	if (e->tx_buf[i]) {
+		kputs("  e1000: the card finished with a frame and the buffer "
+		      "was not given back -- every frame sent would leak a "
+		      "page\n");
+		ok = false;
+	}
+
+	if (e->tx_head != e->tx_tail) {
+		kprintf("  e1000: the card finished and %u frame(s) are still "
+			"counted as in flight\n", e->tx_head - e->tx_tail);
+		ok = false;
+	}
+
+	return ok;
+}
+
+/* A full ring refuses, counts it, and frees what it refused. */
+static bool a_full_ring_refuses(struct e1000 *e, struct net_device *dev)
+{
+	unsigned sent = 0;
+	unsigned i;
+	u64 refused_before = e->tx_ring_full;
+	bool ok = true;
+
+	for (i = 0; i < TX_RING; i++) {
+		struct netbuf *b = netbuf_alloc();
+
+		if (!b || !netbuf_put(b, 64)) {
+			netbuf_free(b);
+			break;
+		}
+
+		if (!e1000_transmit(dev, b))
+			break;
+
+		sent++;
+	}
+
+	if (sent != TX_RING) {
+		kprintf("  e1000: the ring took %u frames before refusing, "
+			"and it holds %u\n", sent, TX_RING);
+		ok = false;
+	}
+
+	{
+		struct netbuf *b = netbuf_alloc();
+
+		if (b && netbuf_put(b, 64)) {
+			if (e1000_transmit(dev, b)) {
+				kputs("  e1000: a full ring accepted another "
+				      "frame, overwriting one the card is "
+				      "still reading\n");
+				ok = false;
+			}
+		} else {
+			netbuf_free(b);
+		}
+	}
+
+	if (e->tx_ring_full == refused_before) {
+		kputs("  e1000: a frame was dropped for a full ring and "
+		      "nothing counted it\n");
+		ok = false;
+	}
+
+	for (i = 0; i < TX_RING; i++)
+		e->tx_desc[i].status = TX_STATUS_DD;
+
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+	e1000_poll(dev);
+
+	for (i = 0; i < TX_RING; i++) {
+		if (e->tx_buf[i]) {
+			kprintf("  e1000: descriptor %u was finished with and "
+				"its buffer was not given back\n", i);
+			ok = false;
+			break;
+		}
+	}
+
+	return ok;
+}
+
 bool e1000_self_test(void)
 {
 	struct e1000 *e = &test_card;
@@ -1185,6 +1374,14 @@ bool e1000_self_test(void)
 		if ((i % 8) == 7)
 			netdev_service();
 	}
+
+	/* --- and the way out ------------------------------------------------ */
+
+	if (!transmit_builds_a_descriptor(e, dev))
+		ok = false;
+
+	if (!a_full_ring_refuses(e, dev))
+		ok = false;
 
 	netdev_service();
 	netdev_forget_last();

@@ -198,10 +198,67 @@ drives the running code, not a copy — and it can be handed a ring with a hole
 punched in it, which is the situation the fault needs and which a self-test
 must not create for real by exhausting the page allocator.
 
-**NW-007 is closed**, and the Open list is down to 12. What is still uncovered
-is named in its entry rather than left implied: neither driver's *transmit*
-length is checked by anything except a network that answers, and a simulated
-card cannot say the real chip matches the simulation.
+**NW-007 is closed**, and the Open list is down to 12.
+
+### The transmit side too, and one correction to the above
+
+When NW-007 was first closed I named the transmit path as what it did not
+cover. It is covered now. Both drivers assert the descriptor they actually
+build — length, address, flags, the doorbell, and who owns the buffer — and ten
+more breaks were introduced and all ten caught:
+
+| driver | break | boot said |
+|---|---|---|
+| r8169 | the doorbell never rung | lease ✓ ping ✓ |
+| r8169 | the buffer freed at send time | lease ✓ ping ✓ |
+| r8169 | a full ring not checked | lease ✓ ping ✓ |
+| r8169 | completed buffers never freed | lease ✓ ping ✓ |
+| r8169 | the sent length four bytes too long | lease ✓ ping ✓ |
+| e1000 | completion never requested (`RS`) | lease ✓ ping ✓ |
+| e1000 | the transmit tail off by one | lease ✓ ping ✗ |
+| e1000 | no check sequence appended (`IFCS`) | lease ✓ ping ✓ |
+| e1000 | not marked end-of-packet | lease ✗ ping ✗ |
+| e1000 | a full ring not checked | lease ✓ ping ✓ |
+
+**The `RS` row is the argument in miniature.** Without that bit the card is
+never asked to report completion, the status byte is never written, nothing is
+reclaimed — and the machine takes a lease, answers pings in 300 microseconds,
+and leaks a page per frame until it dies hours later with nothing to point at.
+
+**And the correction.** I have been reporting that column as one claim and it
+is two, which overstates the Realtek's half:
+
+- For **e1000** rows it is the strong statement. That card is the one carrying
+  the boot's traffic, so a broken driver that still gets a lease and a ping is
+  a fault a running machine genuinely cannot show you.
+- For **r8169** rows it is weaker. The rig emulates no Realtek part, so that
+  driver is not on the boot path at all. A green boot there does not mean the
+  fault slipped past a running machine — it means no running machine ever
+  touched the code. That is *why* the test had to exist, but it is not the same
+  evidence, and counting the two together makes the claim look bigger than it
+  is.
+
+Twenty-three breaks across both drivers now, twenty-three caught.
+
+### NW-005 measured, and it is still yours
+
+I checked whether this branch could close it, and it cannot. The boot summary
+on a machine with the emulated Intel reads:
+
+```
+signalling   : 0 device(s) can raise an interrupt by writing to memory, 0 of them by MSI-X
+```
+
+So QEMU's e1000 offers **neither MSI nor MSI-X**. It is not the device
+`arch/x86_64/msi.c` is waiting for when it says plain MSI "goes in beside the
+first device that needs it" — adding that fallback here would be a branch that
+never runs in the matrix, which is precisely what that file warns against.
+
+What would give this card a real interrupt is **legacy INTx routing**, which
+does not exist: config 0x3C and 0x3D are never read anywhere and nothing maps a
+PCI pin to a line. That is the interrupt layer, so I have left it alone rather
+than reaching into it. Both drivers cope correctly — they leave the mask shut
+and are polled, and they say which is in force.
 
 ### What is unfinished, stated plainly
 
