@@ -102,6 +102,7 @@ happened on that machine.
 | **VT-E003** | fault | **A package could not be read** — The folder is not a package, or its package.txt is missing, or says something the installer does not understand. |
 | **VT-E004** | fault | **An install was rolled back** — The files were placed and the program then refused to load, so everything the install put down has been taken back. Nothing was left behind. |
 | **VT-E005** | fault | **A program could not be removed** — Some of what the install placed could not be deleted. The receipt says what it was. |
+| **VT-E006** | fault | **A program is not what was installed** — A package's receipt records what each of its files should be, and this one no longer is -- or nothing installed it at all. ReconOS will not load it. Installing the package again replaces the file with the one the package was signed for. |
 
 ## F — Network
 

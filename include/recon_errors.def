@@ -174,6 +174,13 @@ RECON_ERROR(E, 005, FAULT,
     "Some of what the install placed could not be deleted. The receipt says "
     "what it was.")
 
+RECON_ERROR(E, 006, FAULT,
+    "A program is not what was installed",
+    "A package's receipt records what each of its files should be, and this "
+    "one no longer is -- or nothing installed it at all. ReconOS will not "
+    "load it. Installing the package again replaces the file with the one "
+    "the package was signed for.")
+
 /* --- F: Network --- */
 
 RECON_ERROR(F, 001, FAULT,

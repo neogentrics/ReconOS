@@ -20,6 +20,7 @@
 #include "recon_error.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
+#include "recon_package.h"
 #include "recon_registry.h"
 #include "recon_users.h"
 
@@ -850,6 +851,77 @@ bool recon_modules_load(const char *reconos_path) {
     if (!recon_fs_resolve("/", reconos_path, host, sizeof(host),
             canonical, sizeof(canonical))) {
         set_error("%s", recon_fs_last_error());
+        return false;
+    }
+
+    /*
+     * --- The gate, and why it is here and not three lines down ---
+     *
+     * A package's signature is checked when it is **installed**. It covers a
+     * digest for every file, so install proves where the files came from at
+     * that moment, and then stops proving anything: nothing since has looked
+     * at the bytes on the disk.
+     *
+     * Everything below this checks the module's *descriptor* -- its ABI, its
+     * widget version -- and every one of those checks is too late, because
+     * **`dlopen` runs a module's initialisers.** A file swapped for another
+     * one has already had its code executed by the time the ABI refuses it.
+     * A gate behind `dlopen` is not a gate.
+     *
+     * So the bytes are weighed first, against what the receipt says they
+     * should be.
+     */
+    char vouched_by[RECON_NAME_MAX];
+    enum recon_package_vouch vouch =
+        recon_package_vouches_for(canonical, vouched_by, sizeof(vouched_by));
+
+    if (vouch != RECON_VOUCH_MATCHES) {
+        switch (vouch) {
+        case RECON_VOUCH_CHANGED:
+            /*
+             * The one this exists to catch: a receipt names the file and the
+             * file is not what it was. Said plainly, and without a way to
+             * proceed -- an override here is the switch somebody leaves off,
+             * which is the rule docs/DESIGN.md has carried since packages
+             * were signed.
+             */
+            set_error("'%s' is not the file '%s' installed. It has changed "
+                "since, and ReconOS will not load it.", canonical, vouched_by);
+            break;
+
+        case RECON_VOUCH_NO_DIGEST:
+            /*
+             * Installed before receipts recorded digests. Not evidence of
+             * anything, and still not loadable -- what makes a module
+             * loadable is something vouching for it, and nothing here does.
+             * The message names the fix rather than the fault.
+             */
+            set_error("'%s' was installed before ReconOS recorded what its "
+                "files should be. Install '%s' again and it will load.",
+                canonical, vouched_by);
+            break;
+
+        case RECON_VOUCH_MISSING:
+            set_error("'%s' is named by '%s' and could not be read",
+                canonical, vouched_by);
+            break;
+
+        case RECON_VOUCH_UNKNOWN:
+        default:
+            /*
+             * No receipt names it. Not tampering -- a file nothing knows
+             * about -- and still refused, for the same reason: loading it
+             * would be running code on the strength of it being in the right
+             * folder, which is the whole of what this gate replaces.
+             */
+            set_error("nothing installed '%s'. ReconOS loads modules that a "
+                "package put there, and no package claims this one.",
+                canonical);
+            break;
+        }
+
+        recon_error_raisef(NULL, RECON_ERR_E006, "%s", g_error);
+        remember_failure(canonical, is_app, g_error);
         return false;
     }
 

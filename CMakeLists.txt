@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.60
+    VERSION 0.4.61
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -1565,6 +1565,89 @@ target_link_libraries(recon_package_install_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 add_test(NAME package-install COMMAND recon_package_install_tests)
+
+
+#
+# The module loader, with a real module in front of it.
+#
+# --- What kept this out of the tree until now ---
+#
+# src/recon_modules.c is 1,514 lines and nothing had ever linked it. Compiled
+# on its own it asks the linker for eighteen symbols, and sixteen are ordinary
+# ReconOS sources. The other two are `_wlr_log` and `recon_appwin_destroy` --
+# one log call and one destructor -- and those two were the whole reason the
+# one place ReconOS runs somebody else's machine code had no suite. Both are
+# stood in for in tests/test_modules.c, and no compositor is linked here.
+#
+# wlroots' *headers* are still needed to compile it, because recon_appwin.h
+# names its types. Headers, not libraries: the same arrangement recon_net_tests
+# uses, and the property worth keeping is that this suite runs headless.
+#
+
+#
+# The module, built twice.
+#
+# Two builds because the tamper test needs a swap that is competent: a valid,
+# loadable shared object that is simply not the one the receipt vouches for.
+# Replacing a module with rubbish would pass with no gate at all, since dlopen
+# refuses rubbish unaided.
+#
+# MODULE rather than SHARED: this is something to be dlopened, never linked
+# against, which is exactly what CMake means by the word.
+#
+add_library(example_module_one MODULE tests/example_module.c)
+target_include_directories(example_module_one PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_definitions(example_module_one PRIVATE EXAMPLE_MODULE_MARK="one")
+set_target_properties(example_module_one PROPERTIES PREFIX "" SUFFIX ".rex")
+
+add_library(example_module_two MODULE tests/example_module.c)
+target_include_directories(example_module_two PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_definitions(example_module_two PRIVATE EXAMPLE_MODULE_MARK="two")
+set_target_properties(example_module_two PROPERTIES PREFIX "" SUFFIX ".rex")
+
+add_executable(recon_modules_tests
+    tests/test_modules.c
+    src/recon_modules.c
+    src/recon_package.c
+    src/recon_manifest.c
+    src/recon_sign.c
+    src/recon_crypt.c
+    src/recon_registry.c
+    src/recon_users.c
+    src/recon_version.c
+    src/recon_fs.c
+    src/recon_error.c)
+
+target_include_directories(recon_modules_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    ${WLR_INCLUDE_DIRS}
+    ${WAYLAND_INCLUDE_DIRS}
+    ${PIXMAN_INCLUDE_DIRS}
+    ${XKB_INCLUDE_DIRS})
+
+target_compile_definitions(recon_modules_tests PRIVATE
+    WLR_USE_UNSTABLE
+    # The same definition the real build makes, so this suite compiles the
+    # file as it ships rather than a variant of it: without it the shipped-
+    # modules path compiles to `return 0` and two functions it is the only
+    # caller of become unused, which is a warning and, worse, code that is
+    # not in the binary being tested.
+    RECONOS_MODULE_DIR="${CMAKE_BINARY_DIR}/modules"
+    EXAMPLE_MODULE_ONE="$<TARGET_FILE:example_module_one>"
+    EXAMPLE_MODULE_TWO="$<TARGET_FILE:example_module_two>")
+
+# The loader itself needs libdl, and -rdynamic so a module can reach back into
+# the program that loaded it -- which is how ReconOS is linked and therefore
+# the arrangement this has to reproduce to mean anything.
+set_target_properties(recon_modules_tests PROPERTIES ENABLE_EXPORTS ON)
+target_link_libraries(recon_modules_tests PRIVATE
+    ${CMAKE_DL_LIBS} ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+add_dependencies(recon_modules_tests example_module_one example_module_two)
+
+add_test(NAME modules COMMAND recon_modules_tests)
 
 
 add_test(NAME malformed-input COMMAND recon_malformed_tests)

@@ -215,6 +215,55 @@ bool recon_package_uninstall(const char *name);
 bool recon_package_verify(const char *name, int *placed, int *missing,
     char *first_missing, size_t size);
 
+/*
+ * What a receipt can say about a file that is on the volume now.
+ *
+ * The three cases want three different sentences in front of somebody, which
+ * is why this is not a bool.
+ */
+enum recon_package_vouch {
+    /* No receipt names this path. Not installed by a package, or its package
+     * has been removed and this was left behind. Not tampering: nothing knows
+     * about it either way. */
+    RECON_VOUCH_UNKNOWN = 0,
+
+    /* A receipt names it and the file hashes to what the receipt says. */
+    RECON_VOUCH_MATCHES,
+
+    /* A receipt names it and the file is not what it was. **This is the one
+     * the whole exercise exists to catch.** */
+    RECON_VOUCH_CHANGED,
+
+    /* A receipt names it and records no digest, which means the package was
+     * installed before receipts carried them. The machine needs that package
+     * reinstalled; it is not evidence of anything either way. */
+    RECON_VOUCH_NO_DIGEST,
+
+    /* A receipt names it and it is not there, or cannot be read. */
+    RECON_VOUCH_MISSING,
+};
+
+/*
+ * Is the file at this path still the file that was installed?
+ *
+ * --- Why this exists ---
+ *
+ * A package's signature is checked at **install**: it covers a digest for
+ * every file, so install proves where the files came from at that moment. Then
+ * it stops proving anything. Nothing since has looked at the bytes on the
+ * disk, and `recon_modules_load` calls `dlopen` on whatever is at the path.
+ *
+ * `dlopen` runs a module's initialisers, so by the time anything downstream
+ * refuses the module, code from that file has already run. A check that means
+ * anything has to happen **before** the file is opened, and this is it.
+ *
+ * `package`, when not NULL, comes back as the name of the receipt that had
+ * something to say -- for a message that can name what is wrong rather than
+ * only that something is.
+ */
+enum recon_package_vouch recon_package_vouches_for(const char *reconos_path,
+    char *package, size_t package_size);
+
 /* What is installed, in the order the receipts were found. */
 int recon_package_count(void);
 bool recon_package_at(int index, struct recon_package_info *out);

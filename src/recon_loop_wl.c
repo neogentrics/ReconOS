@@ -22,12 +22,11 @@
 
 #include <stdlib.h>
 
-#include <wayland-server-core.h>
-
-#include "recon_loop.h"
+#include "recon_loop_wl.h"
 
 /*
- * A loop here is wayland's, unwrapped.
+ * A loop here is wayland's, unwrapped -- `recon_loop_from_wl` is in
+ * `include/recon_loop_wl.h`, and inline, for a reason that header gives.
  *
  * No allocation and no struct of our own: `struct recon_loop *` and
  * `struct wl_event_loop *` are the same pointer, cast at the boundary. The
@@ -35,9 +34,6 @@
  * can fail, on a path where failing means the desktop cannot wait for
  * anything, to store something already in hand.
  */
-struct recon_loop *recon_loop_from_wl(struct wl_event_loop *loop) {
-    return (struct recon_loop *)loop;
-}
 
 /*
  * A timer and a watch, though, do need one: wayland's callbacks have their own

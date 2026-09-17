@@ -616,6 +616,190 @@ static void test_upgrade_takes_only_something_newer(void) {
  * the load. This forces the load to fail at exactly that point and checks that
  * what was there before is back.
  */
+/* --- What a receipt says a file should be -------------------------------
+ *
+ * The receipt used to record paths and nothing else, and that was the hole:
+ * a package's signature is checked at **install**, covers a digest for every
+ * file, and then stops proving anything. Nothing on the disk said what a
+ * module's contents should be, and `recon_modules_load` calls `dlopen` on
+ * whatever is at the path -- which runs the module's initialisers before any
+ * check below it gets a turn.
+ *
+ * So these are about the evidence, not the gate. The gate is in
+ * `src/recon_modules.c` and this suite deliberately does not link it (see the
+ * stand-in above); what it can hold is the thing the gate reads.
+ */
+
+#define RECEIPT RECEIPTS "/Notes.txt"
+
+/* The receipt as text, for the tests that have to look at its shape or put an
+ * older one in its place. Caller frees. */
+static char *receipt_text(void) {
+    size_t size = 0;
+    return recon_fs_read("/", RECEIPT, &size);
+}
+
+static bool receipt_has_a_digest_for(const char *path) {
+    char *text = receipt_text();
+    if (text == NULL) {
+        return false;
+    }
+
+    bool found = false;
+    for (char *line = strtok(text, "\n"); line != NULL;
+            line = strtok(NULL, "\n")) {
+        /*
+         * `<64 hex>  <path>` -- recognised by its length and its tail rather
+         * than by hashing the file again here, which would only be this test
+         * agreeing with itself.
+         */
+        if (strlen(line) == 64 + 2 + strlen(path) &&
+                strcmp(line + 64 + 2, path) == 0) {
+            found = true;
+            break;
+        }
+    }
+    free(text);
+    return found;
+}
+
+static void test_a_receipt_records_what_each_file_should_be(void) {
+    printf("a receipt records a digest beside each path\n");
+
+    make_package(CONTENT, false);
+    sign_it_or_say_so();
+    check(recon_package_install(PKG), "it installs");
+
+    check(receipt_has_a_digest_for(WALLS "/paper.png"),
+        "the wallpaper's line carries its digest");
+    check(receipt_has_a_digest_for("/System/Icons/notes.png"),
+        "and so does the icon's");
+
+    clean_up();
+}
+
+static void test_it_says_whether_a_file_is_still_what_was_installed(void) {
+    printf("vouching for a file that is on the volume now\n");
+
+    make_package(CONTENT, false);
+    sign_it_or_say_so();
+    check(recon_package_install(PKG), "it installs");
+
+    char who[RECON_NAME_MAX];
+
+    same_int(recon_package_vouches_for(WALLS "/paper.png", who, sizeof(who)),
+        RECON_VOUCH_MATCHES, "an untouched file matches");
+    check(strcmp(who, "Notes") == 0, "and the receipt that says so is named");
+
+    /*
+     * The one the whole exercise exists to catch. Same path, same length,
+     * different bytes -- which is what a swapped module looks like, and what
+     * nothing on this disk could previously tell apart from the real one.
+     */
+    write_file(WALLS "/paper.png", "b wallpaper");
+    same_int(recon_package_vouches_for(WALLS "/paper.png", who, sizeof(who)),
+        RECON_VOUCH_CHANGED, "a file whose bytes changed does not");
+    check(strcmp(who, "Notes") == 0, "and it still says which package to ask");
+
+    recon_fs_remove("/", WALLS "/paper.png");
+    same_int(recon_package_vouches_for(WALLS "/paper.png", who, sizeof(who)),
+        RECON_VOUCH_MISSING, "a file a receipt names and is not there");
+
+    /*
+     * Not tampering, and still not a yes: a file no receipt mentions is a
+     * file nothing vouches for.
+     */
+    write_file("/Temp/nobody-put-this-here.rex", "a shared object, allegedly");
+    same_int(recon_package_vouches_for("/Temp/nobody-put-this-here.rex",
+        who, sizeof(who)), RECON_VOUCH_UNKNOWN, "a file nothing installed");
+    check(who[0] == 0, "and no package is named, because none can be");
+    recon_fs_remove("/", "/Temp/nobody-put-this-here.rex");
+
+    same_int(recon_package_vouches_for(NULL, who, sizeof(who)),
+        RECON_VOUCH_UNKNOWN, "and no path at all is the same answer");
+    same_int(recon_package_vouches_for(WALLS "/paper.png", NULL, 0),
+        RECON_VOUCH_MISSING, "asking without somewhere to put the name works");
+
+    clean_up();
+}
+
+static void test_a_receipt_from_before_digests_still_works(void) {
+    printf("a receipt written before digests existed\n");
+
+    make_package(CONTENT, false);
+    sign_it_or_say_so();
+    check(recon_package_install(PKG), "it installs");
+
+    /*
+     * Rewritten in the old shape: bare paths under `files:`, which is every
+     * receipt on every machine that installed anything before today.
+     *
+     * Those machines still have to be able to uninstall, so the reader takes
+     * both shapes. What an old receipt cannot do is vouch for anything, and
+     * the two halves of that are what this checks.
+     */
+    write_file(RECEIPT,
+        "name = Notes\n"
+        "version = 1.0\n"
+        "publisher = Somebody\n"
+        "description = A place to put things\n"
+        "files:\n"
+        WALLS "/paper.png\n"
+        "/System/Icons/notes.png\n");
+
+    char who[RECON_NAME_MAX];
+    same_int(recon_package_vouches_for(WALLS "/paper.png", who, sizeof(who)),
+        RECON_VOUCH_NO_DIGEST, "it vouches for nothing");
+    check(strcmp(who, "Notes") == 0, "but it does say which package to ask");
+
+    int placed = 0;
+    int missing = -1;
+    check(recon_package_verify("Notes", &placed, &missing, NULL, 0),
+        "and it still reads as a receipt");
+    same_int(placed, 2, "naming both its files");
+    same_int(missing, 0, "with none of them missing");
+
+    check(recon_package_uninstall("Notes"), "and it can still be removed");
+    check(!recon_fs_exists("/", WALLS "/paper.png"),
+        "taking the files it named with it");
+
+    clean_up();
+}
+
+static void test_a_path_with_a_space_in_it_is_read_whole(void) {
+    printf("a placed path with a space in it\n");
+
+    /*
+     * The stated reason for putting the digest first at a fixed width. A
+     * reader that split on whitespace would take this path as
+     * `/System/Wallpapers/my` and vouch for nothing -- which is, from the
+     * outside, indistinguishable from a file nobody installed.
+     *
+     * So the digest here is deliberately **wrong**, and the answer that
+     * proves the path was read whole is CHANGED. UNKNOWN would mean the line
+     * was never matched to this file at all, which is the failure being ruled
+     * out.
+     */
+    write_file(WALLS "/my paper.png", "a wallpaper");
+    write_file(RECEIPTS "/Spaced.txt",
+        "name = Spaced\n"
+        "version = 1.0\n"
+        "publisher = Somebody\n"
+        "description = A package with a space in a filename\n"
+        "files:\n"
+        "0000000000000000000000000000000000000000000000000000000000000000  "
+        WALLS "/my paper.png\n");
+
+    char who[RECON_NAME_MAX];
+    same_int(recon_package_vouches_for(WALLS "/my paper.png",
+        who, sizeof(who)), RECON_VOUCH_CHANGED,
+        "the whole path is matched, space and all");
+    check(strcmp(who, "Spaced") == 0, "by the receipt that names it");
+
+    recon_fs_remove("/", RECEIPTS "/Spaced.txt");
+    recon_fs_remove("/", WALLS "/my paper.png");
+}
+
 static void test_a_failed_upgrade_puts_the_old_one_back(void) {
     printf("an upgrade that fails leaves the working version in place\n");
 
@@ -718,6 +902,10 @@ int main(void) {
     test_verify_counts_and_names_what_is_missing();
     test_upgrade_takes_only_something_newer();
     test_a_failed_upgrade_puts_the_old_one_back();
+    test_a_receipt_records_what_each_file_should_be();
+    test_it_says_whether_a_file_is_still_what_was_installed();
+    test_a_receipt_from_before_digests_still_works();
+    test_a_path_with_a_space_in_it_is_read_whole();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -2749,8 +2749,16 @@ looks has needed one yet.
 and a bootloader, and all three have a Control Panel page saying so.
 
 **Relay is a name, not a language.** Modules are native code loaded by
-`dlopen` behind an ABI check, which is a real gate; the language and its
-interpreter do not exist.
+`dlopen`; the language and its interpreter do not exist.
+
+This used to say the ABI check behind that `dlopen` "is a real gate", and it
+was not. **`dlopen` runs a module's initialisers**, so a check after the call
+is a check on code that has already executed. As of v0.4.61 there is a real
+gate, and it is in front: a receipt records a digest for every file a package
+placed, and a module whose bytes are not what was installed -- or that no
+receipt names at all -- is refused before it is opened. The ABI check is still
+there and still useful; what it is not is the thing that stops a swapped
+module.
 
 ### On the skin system
 

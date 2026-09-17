@@ -30,6 +30,7 @@
 
 #include "recon_error.h"
 #include "recon_firewall.h"
+#include "recon_loop_wl.h"
 #include "recon_net.h"
 #include "recon_tls.h"
 #include "recon_registry.h"
@@ -346,7 +347,14 @@ const char *recon_net_machine_name(void) {
 /* --- Reaching --- */
 
 struct recon_loop *recon_net_loop(void) {
-    return g_loop;
+    /*
+     * Through `recon_loop_from_wl` rather than returned as-is. The two are
+     * the same pointer, so this compiles to nothing -- but written as a bare
+     * return it was a `struct wl_event_loop *` handed out through a
+     * declaration that says `struct recon_loop *`, and the compiler said so.
+     * The cast belongs in the one file that owns it.
+     */
+    return recon_loop_from_wl(g_loop);
 }
 
 enum recon_net_result recon_net_resolve(const char *host, char *out,

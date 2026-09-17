@@ -9,12 +9,7 @@
 
 #include "recon_server.h"
 #include "recon_ui.h"
-#include "recon_loop.h"
-
-/* The wayland half of the loop seam declares this; it is not in
- * recon_loop.h, because nothing above the seam may know a
- * wl_event_loop exists. */
-struct recon_loop *recon_loop_from_wl(struct wl_event_loop *loop);
+#include "recon_loop_wl.h"
 #include "recon_server_facts.h"
 
 struct recon_shell *recon_server_shell(struct recon_server *server) {

@@ -11,6 +11,7 @@
 #include <strings.h>
 
 #include "ReconOS.h"
+#include "recon_crypt.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
@@ -41,11 +42,46 @@ bool recon_package_installed(const char *name) {
 }
 
 /*
+ * What a file on the volume hashes to, as hex.
+ *
+ * `recon_manifest.c` has one of these for files *inside a package*; this is
+ * the same question asked of a file that has already been placed. They are not
+ * worth sharing: that one joins a package directory to a name, this one takes
+ * a path, and a shared version would take both and use one.
+ *
+ * False when the file cannot be read, which at install time means it was
+ * placed and then vanished -- worth failing on rather than recording a digest
+ * of nothing.
+ */
+static bool digest_of_placed(const char *reconos_path, char *out) {
+    size_t size = 0;
+    char *bytes = recon_fs_read("/", reconos_path, &size);
+
+    if (bytes == NULL) {
+        return false;
+    }
+
+    uint8_t digest[RECON_SHA256_SIZE];
+
+    recon_sha256(bytes, size, digest);
+    free(bytes);
+    recon_to_hex(digest, sizeof(digest), out);
+    return true;
+}
+
+/*
  * Write the receipt.
  *
  * The description first, then the placed files one per line under a marker.
  * One file rather than two, because a receipt split across two files is a
  * receipt that can be half deleted.
+ *
+ * **A file line carries its digest**, as `<64 hex>  <path>`. That is what lets
+ * anything later ask whether the file at that path is still the file that was
+ * installed -- the signature checked at install proves where the files came
+ * from and stops proving anything the moment the install finishes.
+ *
+ * Digest first, fixed width, so a path with a space in it still parses.
  */
 static bool write_receipt(const struct manifest *manifest,
         const char placed[PLACED_MAX][RECON_PATH_MAX], int count,
@@ -68,8 +104,28 @@ static bool write_receipt(const struct manifest *manifest,
     }
     used = (size_t)n;
 
+    /*
+     * Each file as `<64 hex>  <path>`.
+     *
+     * The digest is taken here, once, rather than at each of the three places
+     * that fill `placed[]`: by now every one of them is on the volume, which
+     * is the only state in which the question has an answer.
+     *
+     * A file that cannot be read gets a bare path, the old shape. That is not
+     * a silent downgrade -- it means the install placed something and it went
+     * away between then and now, and what the receipt can honestly say is
+     * where it was meant to be. The loader refuses a module with no digest,
+     * so nothing is trusted on the strength of a line that says less.
+     */
     for (int i = 0; i < count && used < sizeof(text); i++) {
-        n = snprintf(text + used, sizeof(text) - used, "%s\n", placed[i]);
+        char hex[RECON_SHA256_SIZE * 2 + 1];
+
+        if (digest_of_placed(placed[i], hex)) {
+            n = snprintf(text + used, sizeof(text) - used, "%s  %s\n",
+                hex, placed[i]);
+        } else {
+            n = snprintf(text + used, sizeof(text) - used, "%s\n", placed[i]);
+        }
         if (n < 0) {
             break;
         }
@@ -106,8 +162,30 @@ static bool write_receipt(const struct manifest *manifest,
 }
 
 /* Read a receipt's description, and optionally the files it names. */
+/*
+ * Whether a receipt's file line begins with a digest.
+ *
+ * Sixty-four hex characters and two spaces. Checked rather than assumed
+ * because both shapes are in the wild: every receipt written before v0.4.61
+ * is a bare path, and those machines still have to be able to uninstall.
+ */
+static bool looks_like_a_digest_line(const char *line) {
+    size_t n = RECON_SHA256_SIZE * 2;
+
+    for (size_t i = 0; i < n; i++) {
+        char c = line[i];
+
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return line[n] == ' ' && line[n + 1] == ' ' && line[n + 2] != '\0';
+}
+
 static bool read_receipt(const char *name, struct recon_package_info *info,
         char placed[PLACED_MAX][RECON_PATH_MAX], int *count,
+        char digests[PLACED_MAX][RECON_SHA256_SIZE * 2 + 1],
         char wrote[SETTINGS_MAX][128], int *wrote_count) {
     char path[RECON_PATH_MAX];
     receipt_path(name, path, sizeof(path));
@@ -163,8 +241,29 @@ static bool read_receipt(const char *name, struct recon_package_info *info,
         }
 
         if (in_files) {
+            /*
+             * `<64 hex>  <path>`, or a bare path from a receipt written
+             * before receipts carried digests.
+             *
+             * Recognised by shape rather than by a version marker in the
+             * file: the shape is unambiguous -- a ReconOS path begins with a
+             * slash and cannot be sixty-four hex characters followed by two
+             * spaces -- and a version number is a thing that can disagree
+             * with the format it claims to describe.
+             */
+            const char *file = line;
+            char hex[RECON_SHA256_SIZE * 2 + 1] = { 0 };
+
+            if (looks_like_a_digest_line(line)) {
+                memcpy(hex, line, RECON_SHA256_SIZE * 2);
+                file = line + RECON_SHA256_SIZE * 2 + 2;
+            }
+
+            if (digests != NULL && count != NULL && *count < PLACED_MAX) {
+                snprintf(digests[*count], RECON_SHA256_SIZE * 2 + 1, "%s", hex);
+            }
             if (placed != NULL && count != NULL && *count < PLACED_MAX) {
-                snprintf(placed[*count], RECON_PATH_MAX, "%s", line);
+                snprintf(placed[*count], RECON_PATH_MAX, "%s", file);
                 (*count)++;
             }
             continue;
@@ -518,7 +617,7 @@ bool recon_package_upgrade(const char *path) {
      * about to be replaced. */
     char old_files[PLACED_MAX][RECON_PATH_MAX];
     int old_count = 0;
-    if (!read_receipt(incoming.name, NULL, old_files, &old_count, NULL, NULL)) {
+    if (!read_receipt(incoming.name, NULL, old_files, &old_count, NULL, NULL, NULL)) {
         return false;
     }
 
@@ -652,7 +751,7 @@ bool recon_package_verify(const char *name, int *placed, int *missing,
 
     char files[PLACED_MAX][RECON_PATH_MAX];
     int count = 0;
-    if (!read_receipt(name, NULL, files, &count, NULL, NULL)) {
+    if (!read_receipt(name, NULL, files, &count, NULL, NULL, NULL)) {
         return false;
     }
 
@@ -690,7 +789,7 @@ bool recon_package_uninstall(const char *name) {
     int count = 0;
     char wrote[SETTINGS_MAX][128];
     int wrote_count = 0;
-    if (!read_receipt(name, NULL, placed, &count, wrote, &wrote_count)) {
+    if (!read_receipt(name, NULL, placed, &count, NULL, wrote, &wrote_count)) {
         /*
          * Not VT-E005, though it was for one draft.
          *
@@ -787,6 +886,76 @@ static int list_receipts(char names[][64], int max) {
     return count;
 }
 
+enum recon_package_vouch recon_package_vouches_for(const char *reconos_path,
+        char *package, size_t package_size) {
+    if (package != NULL && package_size > 0) {
+        package[0] = '\0';
+    }
+    if (reconos_path == NULL || *reconos_path == '\0') {
+        return RECON_VOUCH_UNKNOWN;
+    }
+
+    /*
+     * Every receipt, because a path does not say which package placed it and
+     * the receipts are the only index there is. There are as many of them as
+     * there are installed packages, which is a number this system keeps small
+     * on purpose.
+     */
+    int packages = recon_package_count();
+
+    for (int i = 0; i < packages; i++) {
+        struct recon_package_info info;
+
+        if (!recon_package_at(i, &info)) {
+            continue;
+        }
+
+        static char placed[PLACED_MAX][RECON_PATH_MAX];
+        static char digests[PLACED_MAX][RECON_SHA256_SIZE * 2 + 1];
+        int count = 0;
+
+        if (!read_receipt(info.name, NULL, placed, &count, digests,
+                NULL, NULL)) {
+            continue;
+        }
+
+        for (int f = 0; f < count; f++) {
+            if (strcmp(placed[f], reconos_path) != 0) {
+                continue;
+            }
+
+            if (package != NULL && package_size > 0) {
+                snprintf(package, package_size, "%s", info.name);
+            }
+
+            if (digests[f][0] == '\0') {
+                return RECON_VOUCH_NO_DIGEST;
+            }
+
+            char now[RECON_SHA256_SIZE * 2 + 1];
+
+            if (!digest_of_placed(reconos_path, now)) {
+                return RECON_VOUCH_MISSING;
+            }
+
+            /*
+             * A plain comparison, not a constant-time one, and that is
+             * deliberate rather than an oversight. Both sides are public:
+             * the receipt is a file anybody with the disk can read, and the
+             * digest of a file is computable by anybody holding it. There is
+             * no secret here for a timing difference to leak.
+             *
+             * `recon_equal_constant_time` is for the keyring, where one side
+             * is a secret.
+             */
+            return strcmp(now, digests[f]) == 0
+                ? RECON_VOUCH_MATCHES : RECON_VOUCH_CHANGED;
+        }
+    }
+
+    return RECON_VOUCH_UNKNOWN;
+}
+
 int recon_package_count(void) {
     char names[64][64];
     return list_receipts(names, 64);
@@ -798,5 +967,5 @@ bool recon_package_at(int index, struct recon_package_info *out) {
     if (index < 0 || index >= count) {
         return false;
     }
-    return read_receipt(names[index], out, NULL, NULL, NULL, NULL);
+    return read_receipt(names[index], out, NULL, NULL, NULL, NULL, NULL);
 }
