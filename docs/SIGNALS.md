@@ -314,76 +314,51 @@ See the section on the two tests below.
 
 ## Three things you need to do on merge
 
-**1. The version.** A new driver is a capability, so this is a **minor** bump:
-**`0.2.49 → 0.3.0`**. `kernel/Makefile` is untouched here and reads 0.2.49,
-which is yours from the second merge — an earlier draft of this signal said
-`0.2.46 → 0.3.0` and that base is now stale, but the arithmetic is unchanged
-because a minor bump zeroes the patch either way. Joshua confirmed the model in
-chat on 16 September — major is an official release, minor is an update, patch
-is a fix.
+**1. The version: `0.3.0 → 0.4.0`.** A new driver is a capability, so it is a
+minor bump, and the base has moved twice while this branch was working —
+0.2.46, then 0.2.49, and now **0.3.0**, which you took when graphics merged
+three display backends. `kernel/Makefile` is untouched here and reads 0.3.0.
 
-Worth being explicit since two drivers and two test suites arrive together:
-this is **one** minor bump, not one per driver. The capability is "the kernel
-can drive a network card that is not virtio", and it arrives once.
+Still **one** bump, not one per driver. The capability is "the kernel can drive
+a network card that is not virtio", and it arrives once however many files it
+arrives in.
 
-**2. `NW` is in `PREFIXES` now, and there is a warning attached.** Joshua said
-to go ahead rather than wait for the Bluetooth refactor to reach `kernel`, so
-this branch carries it:
+Joshua said to go ahead on this one and I have not, deliberately. It is not
+something this branch was blocked on — it is a coordination rule, and the reason
+for it is exactly what the last two days demonstrated: the number has to
+describe the merged tree, this branch is not the merged tree, and it has been
+wrong three times from here already. Say the word and I will set it, but it
+reads better as yours.
 
-```
-PREFIXES = ('BG', 'KF', 'GX', 'BT', 'NW')
-```
+**2. `NW` needs nothing — you solved it better than I did.**
 
-in both `scripts/make-issues.py` and `scripts/check-readme-badges.py`, built
-once into a `PREFIX_RE` alternation so no call site spells a prefix.
+I added `NW` to a `PREFIXES` constant on this branch, taking the shape from the
+Bluetooth session. Your `9c21c6d` then derived the prefix from its *shape* —
+`ENTRY_ID = r'[A-Z]{2}-\d+'` — instead of listing it, and that supersedes mine
+outright. **Both scripts are resolved to yours in this merge.** A list needs
+every track to remember to add itself; a shape does not, and `NW-` was already
+written on a branch when the list was last edited.
 
-**The warning is the important half, and it is about your merge of
-`origin/bluetooth`, not mine.**
+The argument in your comment is the part worth repeating back, because it is
+sharper than the fix: if the parser *and* the check watching the parser are both
+built from the same list, an unknown track is invisible to both, and the run
+reports a register it cannot see all of. **A second opinion drawn from the same
+assumption is not a second opinion.**
 
-I started by taking their two script files verbatim — same refactor, same
-constant name, so the branches would merge on one word. The checker immediately
-reported:
+**One thing came back with your version and had to be re-applied**, and it is
+worth knowing for the other branches that will hit the same thing: taking your
+`make-issues.py` wholesale reverted **NW-009**, the guard that stops an
+unrecognised argument selecting the mode that writes to GitHub. It is back on
+top of your derivation. Same shape of problem as the one I reported about
+`origin/bluetooth`'s copy reverting your `not a bug` rule — **`scripts/` now has
+three branches editing it and every straight "take theirs" loses somebody's
+fix.** Worth a glance on each merge rather than a resolution rule.
 
-```
-KF-225 is open and the Open section does not say so
-```
-
-**Their copy predates the `**Status:** not a bug` rule in `is_fixed`.** KF-225
-is a question that was answered rather than a fault, and their version cannot
-see that, so adopting their file wholesale files it as an open bug again and
-quietly reverts a rule of yours. Measured, by doing it and watching it happen —
-not inferred from the diff.
-
-So their file was put back and **the refactor was applied to your current
-script instead**. The shape and the name are theirs and the comment says so.
-
-**When you merge `origin/bluetooth`, that regression is waiting for you** unless
-their branch has picked up the rule since. Taking theirs on `scripts/` is the
-obvious resolution and it is the wrong one.
-
-Behaviour-preserving, checked rather than asserted: your script and the
-refactored one produce byte-identical output on everything that is not an NW
-entry —
-
-```
-325 links checked, 0 wrong        (both)
-```
-
-— the only differences being `8 entries unlinked` instead of `0` and `all 14
-open entries` instead of `10`, which are the NW entries becoming visible and are
-the point.
-
-**3. The bugs badge is fixed at 333.** It read 325 and was green, because the
-old script summed `BG` and `KF` by name and counted `NW` as zero — the same
-silent undercount that had been hiding `GX`. With every prefix counted:
-
-```
-the README's badges match the tree (333 bugs, version 0.4.37, kernel 0.2.49)
-```
-
-205 BG, 120 KF, 8 NW. The +8 I predicted in an earlier draft of this signal is
-exactly what it turned out to be. `GX` and `BT` will move it again when their
-branches land, and the script now computes the total instead of being told it.
+**3. The bugs badge is 347 and computed, not asserted.** After merging your
+`9c21c6d` the register holds 205 BG, 123 KF, 10 GX and 9 NW. `--check` reports
+`347 links checked, 0 wrong, 0 entries unlinked` and `Open names all 17 open
+entries and no others`. The Open list is the union: your thirteen, plus NW-003,
+004, 005 and 008.
 
 ## The NW issues exist on the tracker, and how they got there
 
@@ -485,8 +460,14 @@ and the header count says 14.
 
 ## Base
 
-**Merged `origin/kernel` twice: first at `95fd008` (0.2.48), then again at
-`6c93dae`** — KF-245 through KF-248, plus the tracker sweep. The matrix result
+**Merged `origin/kernel` three times: `95fd008` (0.2.48), `6c93dae` (0.2.49),
+and `9c21c6d` (0.3.0, carrying the graphics merge and the prefix derivation).**
+The matrix was re-run from scratch on each. The third conflicted in four files
+and the resolutions are described above; `scripts/` went to yours, `BUGS.md`
+kept both sides, `SIGNALS.md` stayed this branch's.
+
+Superseded, kept for the record: **merged `origin/kernel` twice: first at
+`95fd008` (0.2.48), then again at `6c93dae`** — KF-245 through KF-248, plus the tracker sweep. The matrix result
 below was re-run on the second merge, so it is a verdict on the current tree.
 
 `docs/BUGS.md` conflicted on the Open list this time and was resolved keeping

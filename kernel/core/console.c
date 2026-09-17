@@ -104,6 +104,19 @@ void kputs(const char *s)
 
 	raw_puts(s);
 	spin_unlock_irq(&console_lock, flags);
+
+	/* **After the unlock, and that is the whole reason this is a separate
+	 * call rather than something `kputc` does.**
+	 *
+	 * On a screen that has to be told to present, showing what was just
+	 * drawn means talking to a device -- which can fail, and a failure
+	 * prints, and printing takes the lock this line has just released.
+	 * Inside the lock it would be a processor waiting for itself, which is
+	 * the same fault the comment above `raw_puts` describes.
+	 *
+	 * Once per burst rather than once per character, because a burst is a
+	 * line and a line is one rectangle. */
+	fbcon_present();
 }
 
 /* Unsigned integer in any base from 2 to 16. Written into the caller's buffer
@@ -417,6 +430,9 @@ void kprintf(const char *fmt, ...)
 	va_end(ap);
 
 	spin_unlock_irq(&console_lock, flags);
+
+	/* Outside the lock, for the reason given in kputs. */
+	fbcon_present();
 }
 
 /* For the fault reporter. Same reasoning as kputs_unlocked(): a fault can be

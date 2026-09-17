@@ -48,27 +48,37 @@ def read(path):
                    newline="").read()
 
 
-# The same list as `scripts/make-issues.py`, kept in the same shape and for the
-# same reason. See the note there about where it came from.
-PREFIXES = ("BG", "KF", "GX", "BT", "NW")
-
-
 def bug_counts():
     """How many entries the register actually holds, by prefix.
 
-    Every prefix it carries, not a named two. Summing `BG` and `KF` by name was
-    the quiet failure: a track whose prefix nobody had added counted as zero
-    while this script reported itself green. Any heading shaped like an entry is
-    counted under its own key, so an unregistered prefix shows up as a mismatch
-    rather than as nothing at all.
+    **Every prefix, discovered from the file — not a list.**
+
+    That sentence was already the comment here on 17 September 2026, and the
+    line under it read::
+
+        heads = re.findall(r"^### (BG|KF|GX)-\\d+", ...)
+
+    which is precisely a list of the prefixes that existed when it was
+    written. The comment described the property the code was supposed to have
+    and the code did not have it, so the file asserted its own correctness and
+    nothing checked the claim.
+
+    It was about to cost something real twice over: the `network` branch
+    carries eight `NW-` entries and `bluetooth` carries `BT-`, and on merge
+    both would have been counted as **zero** — a badge that goes green while
+    undercounting the register, which is the exact failure this script exists
+    to prevent. The network session spotted it from their side and said so in
+    their signals; it is fixed here rather than by adding two more names.
+
+    Two letters and a dash, taken from the register itself. A new track adds
+    entries and this counts them, with nothing to remember.
     """
     heads = re.findall(r"^### ([A-Z]{2})-\d+", read("docs/BUGS.md"), re.M)
-    counts = dict((p, 0) for p in PREFIXES)
 
-    for h in heads:
-        counts[h] = counts.get(h, 0) + 1
-
-    return counts
+    out = {}
+    for p in heads:
+        out[p] = out.get(p, 0) + 1
+    return out
 
 
 def suite_count():
@@ -120,10 +130,10 @@ def main():
     if not m:
         problems.append("no bug-count badge found; has the README changed shape?")
     elif int(m.group(1)) != total:
-        breakdown = ", ".join("%d %s" % (n, p)
-                              for p, n in sorted(bugs.items()) if n)
         problems.append("bugs badge says %s, the register holds %d (%s)"
-                        % (m.group(1), total, breakdown))
+                        % (m.group(1), total,
+                           " + ".join("%d %s" % (bugs[p], p)
+                                      for p in sorted(bugs) if bugs[p])))
         fixed = re.sub(r"(bugs_recorded-)\d+(-)", r"\g<1>%d\g<2>" % total, fixed)
 
     # --- the version, in both badges -----------------------------------

@@ -26,6 +26,7 @@
 #include <recon/kernel/pci.h>
 #include <recon/kernel/xhci.h>
 #include <recon/kernel/virtio.h>
+#include <recon/kernel/virtio_gpu.h>
 #include <recon/kernel/net.h>
 #include <recon/kernel/console.h>
 
@@ -82,6 +83,12 @@ void arch_storage_probe(void)
 		 * here carries no meaning and adding a third costs a
 		 * line. */
 		if (virtio_blk_attach(&v))
+			continue;
+
+		/* A screen is the third kind, added when the display layer
+		 * gained a second backend. Declining quietly for anything that
+		 * is not one, exactly as the two above do. */
+		if (virtio_gpu_attach(&v))
 			continue;
 
 		virtio_net_attach(&v);

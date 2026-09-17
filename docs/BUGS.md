@@ -109,7 +109,7 @@ Features, patches and releases are tracked the same way: see
 
 ---
 
-## Two prefixes, and why
+## Three prefixes, and why
 
 `BG-` is the desktop's. **`KF-` is the kernel's** -- a kernel *fault*, and not
 `KB-`, because this kernel prints KB for kilobytes in the very summaries these
@@ -172,12 +172,30 @@ therefore **not added here** — it goes in one place, once that refactor reache
 this branch, and adding it the old way in the meantime would create exactly the
 five-line conflict the refactor exists to remove. `docs/SIGNALS.md` carries the
 one-line instruction and the badge arithmetic that goes with it.
+### A third prefix, 15 September 2026
+
+**`GX-` is the graphics track's** -- a fourth session, working on `graphics`,
+whose subject is the display layer and the drivers under it.
+
+`GX` rather than `DP` or `VD` because `D` already opens too many things in this
+tree -- the display summary, `/dev/`, the device tree -- and a prefix is only
+worth having if it cannot be misread at a glance. `GX` is not a word, which is
+the point: nothing else in the register or the sources looks like it.
+
+Taken before the first fault was recorded rather than when one was needed. The
+lesson of the two renumberings above is not about which numbers were chosen, it
+is that **a prefix claimed after the work has started is claimed against a
+register somebody else has already written into.** `GX-001` was reserved on the
+branch's first day, with `BG-` and `KF-` checked on every branch first.
+
+The server role is expected to take one of its own. It has not posted one here
+yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ---
 
 ## Open
 
-14, and each entry says why. They are listed because a register that only
+17, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -196,6 +214,9 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-008** — `enable_interrupts` is declared and documented in `net_device_ops` and called by nothing
+- **KF-249** — Plug in a USB keyboard and the machine can never idle again
+- **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
+- **KF-251** — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
 
 ---
 
@@ -568,6 +589,669 @@ turned out to be true.
   first one patched the wrong function and produced a green run that proved
   nothing. A check that cannot fail looks exactly like one that passes, and it
   looks that way twice.
+### GX-010 — The attach path of both hardware backends had no test, and the first test written for it could not fail
+
+[#506](https://github.com/neogentrics/ReconOS/issues/506)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by noticing that everything
+  proved about the two real-hardware backends was proved about
+  `*_display_identify`, and that nothing had ever called `*_display_attach`.
+
+  Both are wired like this:
+
+  ```c
+  m = intel_display_identify(d->vendor, d->device, d->class_code, d->subclass);
+  ```
+
+  Four fields of a `struct pci_device`, in an order nothing checked. Swapping
+  the last two, or reading the subsystem id in place of the device id, leaves
+  every recognition test passing — they call `identify` directly and never go
+  through this line — while the driver claims the wrong hardware or none.
+
+  `intel_display.c` had been committed, run through the full matrix twice, and
+  signalled as tested with the attach path never once executed on any machine
+  in it.
+
+- **And the first test written for it was itself a check that could not fail.**
+  It fed `attach` an unknown Intel display at class 3, subclass 0, and asserted
+  it was refused and counted. With the two arguments deliberately swapped in
+  `attach`, the run still said:
+
+  ```
+    graphics it knows  : pass
+  ```
+
+  because the device was unknown *either way*: class 3 subclass 0 and class 0
+  subclass 3 both fail to match a table entry, so both take the same decline
+  branch. The test exercised the line and could not see what the line did.
+
+  **That is GX-008 recurring inside the fix for GX-008** — written by somebody
+  who had just recorded the lesson, in the test written to apply it. It is put
+  in the register for that reason rather than for the defect, which is nil:
+  knowing that a check must be able to fail does not tell you whether *this*
+  check can, and only breaking it on purpose answers that.
+
+- **Was** two gaps, one inside the other: no coverage of the attach entry point
+  at all, and then coverage that did not discriminate.
+
+- **Cost** nothing. The wiring is correct in both drivers and always has been.
+  Recorded because the code was shipped and signalled as tested while a whole
+  entry point had never run, and because the second half is the more useful
+  half.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Each self-test now drives `attach`
+  twice:
+
+  1. An unknown device of the right vendor and class, which must be refused
+     **and counted** — the counter moving is what says the decline path ran
+     rather than the function returning early somewhere else.
+  2. **A device the table does know, presented at class 0 subclass 3** — the
+     reverse of a display. Read correctly it is not a display and is refused;
+     read with the two swapped it becomes the laptop's own graphics, or the
+     desktop's own card, and is claimed.
+
+  Only the refusing half can be driven from a self-test: a device that is
+  *accepted* goes into the display table, and a test that registers an imaginary
+  screen has changed the machine it was asked about.
+
+- **Shown to fail before being believed**, which is the entire point of the
+  entry. With the two arguments swapped in both drivers:
+
+  ```
+  intel-display: attach claimed a device whose class and subclass are the
+                 reverse of a display, so it is reading the two the wrong way round
+    graphics it knows  : FAIL
+  amd-display:   attach claimed a device whose class and subclass are the
+                 reverse of a display, so it is reading the two the wrong way round
+    the graphics cards it knows : FAIL
+  ```
+
+---
+
+### GX-009 — The boot report named one display on a machine with two, and contradicted itself two lines later
+
+[#507](https://github.com/neogentrics/ReconOS/issues/507)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by reading a boot report
+  that had been printed several times already without anyone looking at it
+  closely. QEMU given `-device virtio-gpu-pci` and no `-vga none` presents a
+  Bochs adapter *and* a virtio-gpu, and the kernel drives both:
+
+  ```
+    display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+    suspend      : 3 device(s) declared, and these cannot come back yet:
+                   virtio-gpu, bochs-display, input
+  ```
+
+  The display summary names one adapter. The suspend summary, two lines below,
+  names both — because `suspend_declare` is called per driver and had been
+  right the whole time.
+
+- **Was** `display_print_summary` described `primary` and returned. That is a
+  complete description of a machine with one display adapter, and it was never
+  anything else for as long as this kernel had one backend that could attach
+  once.
+
+  It is now four backends and a table of four, and **the machine this was
+  written on has two adapters**: a Radeon RX 6600 on the bus and Raphael
+  graphics in the processor package, both answering PCI class 030000. On that
+  machine the report would have named one GPU and been silent about the other,
+  while the suspend line listed both.
+
+- **Cost** nothing yet, and the entry is about the shape rather than the damage:
+  **a summary that describes the primary of a set is correct exactly while the
+  set has one member**, and nothing about its output says which case you are
+  looking at. The contradiction with the suspend line is what makes it findable
+  at all — two summaries generated from the same table disagreeing about how
+  many devices are in it.
+
+  It is the same species as GX-002, which was one driver's private state indexed
+  by a display's position in a table it did not own: both are code that is
+  correct while every entry is the same kind of thing, and both were written
+  when that was true.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Every display in the table is
+  reported. The primary keeps its line and the rest follow it, marked as not the
+  one being drawn on, and each says whether it is in a mode:
+
+  ```
+    display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+    also         : bochs-display, found and not in any mode
+  ```
+
+  On a machine with one adapter the output is unchanged, which is why this was
+  invisible in the first place.
+
+- **And the table was raised from two to four.** Two was exactly full on the
+  desktop before anything was plugged in, so a virtual machine on it with a
+  virtio-gpu would have been refused a slot by a kernel that had found every
+  adapter correctly. Sized from a machine rather than from a guess about how
+  many screens a computer has.
+
+- **Shown on a machine that really has two**, which is the matrix path added for
+  GX-002 and had been booting since — it was printing the single-adapter answer
+  the whole time and nothing asked it to print more.
+
+---
+
+### GX-008 — The vendor check in both hardware tables had no test that could fail
+
+[#508](https://github.com/neogentrics/ReconOS/issues/508)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by sabotaging a check that
+  had just been written and watching the test pass anyway.
+
+  The AMD backend's recognition rule is three parts: the vendor, the class, and
+  the identifier. Deleting the first of them:
+
+  ```c
+  /* SABOTAGE: vendor check removed */
+  ```
+
+  and the boot said:
+
+  ```
+  amd-display: 13 model(s) known, recognition and refusal both checked
+    the graphics cards it knows : pass
+  ```
+
+  The same sabotage on `core/intel_display.c` also passed. **Both drivers'
+  vendor checks were untestable, and one of them had already been committed and
+  run through the full matrix.**
+
+- **Was** the refusal cases were chosen to be *real devices*, which is normally
+  the right instinct and here quietly defeated the test. Every real cross-vendor
+  identifier collision that exists is refused by the **class** check before the
+  vendor is ever looked at:
+
+  | identifier | is | and also | refused by |
+  |---|---|---|---|
+  | `164e` | AMD Raphael | Broadcom NetXtreme II (14e4) | class — it is a network card |
+  | `73bf` | AMD Navi 21 | National Instruments FlexRay (1093) | class |
+  | `1916` | Intel Skylake GT2 | Dini Group accelerator (17df) | class |
+
+  So the table exercised the class rule three times over and the vendor rule
+  not once. Every case in it was answered before the vendor mattered.
+
+  **There is no real collision that would do the job**, and that is why the hole
+  was easy to make: display-class hardware comes from few enough vendors that no
+  cross-vendor identifier collision is *also* a display on both sides.
+
+- **Cost** nothing yet — but the Intel half had been committed, matrix-verified
+  and signalled as tested. The claim in `docs/SIGNALS.md` that recognition *and
+  refusal* were both checked was true of the class rule and false of the vendor
+  rule, and nothing in the output distinguished them.
+
+  Worth the entry for the shape rather than the damage: **a test written from
+  real examples can be strictly weaker than one written from the rule**, because
+  reality supplies the cases it happens to contain rather than the ones that
+  discriminate. GX-003 was a check that could not fail because it measured the
+  wrong side of a device; this is a check that could not fail because every
+  input to it was decided earlier.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Each table gained one case that only
+  the vendor rule can refuse — another vendor's id, carrying this driver's
+  device number, at display class — and each is **labelled in the source as
+  constructed rather than found**, with the reason, so that nobody later reads
+  it as a device somebody met.
+
+- **Shown to fail before being believed.** With the vendor check removed again,
+  both now say so by name:
+
+  ```
+  intel-display: 1002:1916 [3/0] was claimed -- AMD's vendor id carrying
+                 Intel's Skylake number at display class
+  amd-display:   8086:73ff [3/0] was claimed -- Intel's vendor id carrying
+                 the desktop card's number at display class
+    graphics it knows  : FAIL
+    the graphics cards it knows : FAIL
+  ```
+
+- **One factual error was fixed on the way.** The FlexRay controller sharing
+  `73bf` was recorded as vendor `10b5`; it is `1093`, National Instruments.
+  Corrected against `pci.ids` rather than left, because a comment citing
+  evidence is only worth what the citation is worth.
+
+---
+
+### GX-007 — A shape check that vetoed real hardware, protected nothing, and reported one number when it refused
+
+[#509](https://github.com/neogentrics/ReconOS/issues/509)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by writing the second
+  real-hardware backend and reading the two side by side.
+
+- **Was** `intel_display_attach` refused any adapter whose first base address
+  register was smaller than sixteen megabytes:
+
+  ```c
+  if (!d->bar[GEN9_MMIO_BAR] || d->bar_is_io[GEN9_MMIO_BAR] ||
+      d->bar_size[GEN9_MMIO_BAR] < GEN9_MMIO_SIZE) {
+          kprintf("intel-display: %s has a %u MB register window where "
+                  "Gen9 has 16, so this is not the device this driver knows\n", ...);
+          return false;
+  }
+  ```
+
+  Three things wrong with it, and the first is the one that would have cost a
+  day:
+
+  1. **It vetoes on an assumption that has never been checked against the
+     hardware it is about.** The 16 MB figure came from a specification. The one
+     Gen9 machine this project owns has no serial port, so a wrong veto there
+     reports "not the device this driver knows" onto a panel and stops.
+
+  2. **The shape of a display adapter's BARs is a fact about a silicon family,
+     not about display adapters.** Read off this project's own desktop, RDNA2
+     puts its register file in a **512 KB fifth BAR**, behind a 256 MB aperture
+     onto video memory with a 2 MB doorbell between them:
+
+     ```
+     1002:73ff  Radeon RX 6600      0xFC00000000  256 MB      aperture
+                                    0x00F6B00000    2 MB      doorbell
+     1002:164e  Raphael             0xFC20000000  256 MB      aperture
+                                    0xFC30000000    2 MB      doorbell
+                                    0x00F6A00000  512 KB      registers
+     ```
+
+     A rule phrased "the first BAR, sixteen megabytes" is true of one family and
+     false of the other. There was never a reason to believe it held for the
+     real Gemini Lake either.
+
+  3. **Nothing in either driver reads a register**, so the veto guarded
+     nothing. It could only ever lose a machine.
+
+  And when it refused, it printed the one number it had judged — so the evidence
+  produced by the failure was insufficient to correct the assumption that caused
+  it. A dead end that cannot be diagnosed from its own output.
+
+- **Cost** nothing observed, and it could not have been: the hardware it would
+  have refused has not been booted yet. Recorded because it was **shipped** —
+  committed, matrix-green, and signalled — and because the fault is the kind a
+  verification matrix cannot catch, since the matrix contains no machine of
+  either family.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. `display_print_bars` prints a
+  device's base address registers as they were found, both backends call it on
+  attach, and neither refuses on the layout. The veto belongs with the first
+  register access — which is where being wrong about it would finally matter,
+  and which does not exist yet in either driver.
+
+  The observation is kept: Intel still says when the first window is not the
+  16 MB it expected, and says in the same breath that it is driving the device
+  anyway and that the expectation is unverified. **A surprise worth recording
+  is not the same as a reason to stop**, and the two had been the same line.
+
+- **What it turns the first real boot into.** A measurement. Booting either
+  machine now prints the layout the driver actually found, which is the only way
+  an assumption written from a specification ever gets corrected — and it is the
+  same reason `scripts/read-intel-display.sh` exists.
+
+---
+
+### GX-006 — A display that can be read and not set failed its own self-test, three ways
+
+[#510](https://github.com/neogentrics/ReconOS/issues/510)
+
+- **Found in** kernel 0.2.46, on 16 September 2026, **before the driver that
+  would have hit it existed.** The Intel Gen9 backend was going to be the first
+  display in this kernel that can report a mode and cannot change one — the
+  panel is lit by firmware and there is no modesetting for it yet — so the
+  question "does the display layer cope with that shape" was asked by making the
+  Bochs adapter into that shape on purpose and booting it:
+
+  ```c
+  static const struct display_ops bochs_ops = {
+          .set_mode = 0,          /* EXPERIMENT */
+  };
+  ```
+
+  Not shipped, not committed, and the answer came back in one boot:
+
+  ```
+  display: bochs-display cannot be told what mode to be in      x9
+  display: bochs-display would not take any of the 9 sizes this driver
+           knows -- it has 256 MB
+    display      : bochs-display, 0x0, pitch 0, RGBA
+  display: an oversized mode was refused and not counted as refused
+    a mode of our own  : FAIL
+  ```
+
+- **Was** three separate faults, all with the same root: every part of the
+  display layer assumed that a display which exists can be told a mode, because
+  both backends that existed could be.
+
+  1. **`display_set_mode` returned false without counting a refusal.**
+     `modes_refused` is the number of times a mode was asked for and not
+     established, and "there is no way to ask" is one of those. The self-test
+     checks that an oversized mode is *counted* as refused, so it failed on a
+     kernel behaving perfectly. This is GX-004 arriving from the opposite
+     direction: that one was a refusal counted in the wrong place, this one is a
+     refusal not counted at all.
+
+  2. **The mode ladder ran anyway and then blamed the hardware.** Nine sizes
+     asked for, nine identical lines, and a summary reading *"would not take any
+     of the 9 sizes this driver knows -- it has 256 MB"*. The memory was not the
+     reason and the adapter refused nothing; it was never asked. A diagnostic
+     that names the wrong cause is worse than none, because somebody will act on
+     it — and on the machine this was written for, that somebody would be
+     looking at a 4 GB laptop wondering why 256 MB was not enough.
+
+  3. **The summary printed `0x0, pitch 0, RGBA` for a display in no mode at
+     all.** That reads like a mode somebody chose. RGBA is not even a guess: it
+     is what the format enum happens to be at zero.
+
+- **Cost** nothing, and that is the point of the entry rather than a reason to
+  skip it. It was found by asking what the *next* backend would do to the
+  interface before writing it, which cost one boot — against finding it on a
+  laptop with no serial port, where the only instrument is a camera pointed at
+  the panel (KF-214).
+
+- **Fixed in** kernel 0.2.46 on `graphics`:
+
+  1. `display_set_mode` counts a display that cannot be told as a refusal, and
+     says so **once** rather than on every rung of the ladder.
+  2. `display_init` does not run the ladder on a backend with no `set_mode`. If
+     firmware left a mode it keeps it and says so; if firmware left none it says
+     the machine has an adapter and no screen, which is the honest outcome and a
+     different one from having no adapter.
+  3. `display_print_summary` says `found and not in any mode` rather than
+     inventing a mode of zero.
+
+- **Shown to fail before being believed**, and the experiment above *is* that
+  demonstration — it was run before the fix, produced the three failures, and
+  after the fix the same experiment produces:
+
+  ```
+  display: bochs-display cannot be told a mode and firmware left none, so
+           this machine has an adapter and no screen
+    display      : bochs-display, found and not in any mode
+    a mode of our own  : pass
+  ```
+
+  The experiment was then reverted, and both real backends re-checked: Bochs,
+  virtio-gpu and a machine with no display at all all still pass.
+
+- **What it says about the interface.** Three backends, three different answers,
+  and none of the differences was predicted:
+
+  | | `set_mode` | `preferred_mode` | `flush` |
+  |---|---|---|---|
+  | bochs | yes | no | no |
+  | virtio-gpu | yes | yes | **yes** |
+  | intel Gen9 | **no** | later | no |
+
+  `display_ops` was Bochs's shape. It is now a shape that has been made to
+  disagree with itself twice, which is the whole reason the second and third
+  backends were written in that order.
+
+---
+
+### GX-003 — Every display self-test passed against a completely black screen
+
+[#511](https://github.com/neogentrics/ReconOS/issues/511)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by the first boot that drove
+  a virtio-gpu — and *not* by any assertion in the kernel, all of which reported
+  pass. It was found by asking QEMU for a screendump and counting the pixels.
+
+  Two boots of the same binary, one per backend:
+
+  ```
+  bochs-display   33,177,600 non-black pixels
+  virtio-gpu               0 non-black pixels
+  ```
+
+  and on that second boot the kernel said:
+
+  ```
+    a mode of our own  : pass
+    a screen to draw on : pass
+    framebuffer: a program mapped 5120x2880, pitch 20480, and both markers
+                 are on the screen
+    a C program: compiled from C, loaded, and its pixels are on the screen
+  ```
+
+- **Was** every check on the display path verified its own writes. `fbcon`
+  stored characters and the tests read the framebuffer back; the framebuffer
+  self-test wrote two markers through a user mapping and read them back; the
+  paint program drew and the kernel read that back too.
+
+  On an adapter whose framebuffer is a scanned-out PCI aperture, that memory
+  **is** the screen, so a read-back that finds the right pixels has found them
+  on the glass. On virtio-gpu those pages are ordinary guest RAM that the host
+  cannot see until it is sent `TRANSFER_TO_HOST_2D` and `RESOURCE_FLUSH`. The
+  read-back returns what was just written either way.
+
+  So the assertions were not weak. **They were measuring the wrong side of the
+  device**, and had been correct for as long as there was one kind of device.
+
+- **Cost** nothing yet, because it was found on the first boot of the backend
+  that can exhibit it. Recorded at full length anyway: the shape is the
+  expensive part, and it is the shape this project keeps finding — KF-141 is a
+  driver believing its own request instead of the hardware's answer, KF-187 is a
+  sweep that skipped everything and reported green. This is the same fault in
+  the checking rather than in the code, which is worse, because it is what would
+  have hidden the other two.
+
+- **Fixed in** kernel 0.2.41 on the `graphics` branch, in three parts, and only
+  the third is a test:
+
+  1. `display_ops` gained `flush`, and `fbcon` and `/dev/fb0`'s `write` call it,
+     so the pixels genuinely reach the host.
+  2. `user_framebuffer_test` no longer claims "both markers are on the screen"
+     on a display that has to be told. It says what it actually established —
+     that the markers are in the pixels the program was given — and names where
+     the rest is checked.
+  3. `scripts/screen-has-pixels.py`, which drives QEMU's monitor, takes a
+     screendump and counts non-black pixels. Four matrix paths use it: both
+     backends on x86_64 and virtio-gpu on aarch64, plus the Bochs adapter, so
+     that a rig reporting pixels on only one backend is known to be a rig with
+     something else wrong with it.
+
+- **Shown to fail before being believed.** With `gpu_flush` stubbed to
+  `return true` without sending anything, the screendump check reports nought
+  non-black pixels and `a present that lands : FAIL`, on a kernel whose every
+  other self-test still passes. Restored, both go green. A check that cannot
+  fail looks exactly like one that passes.
+
+---
+
+### GX-001 — A program that maps the screen and exits gives the screen to the page allocator
+
+[#512](https://github.com/neogentrics/ReconOS/issues/512)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by writing the second
+  display backend and then asking what `addrspace_release_page` would do with
+  its framebuffer.
+
+- **Was** the address space tears down by walking page tables, so at that moment
+  all it holds is a physical address. The rule it applied was:
+
+  ```c
+  /* Memory the allocator never handed out is not memory it can take back. */
+  if (!pmm_owns(pa))
+          return;
+  ```
+
+  which is the fix for KF-209 and is a complete, correct answer **for a
+  framebuffer that is a PCI aperture** — memory above RAM that the allocator has
+  never heard of.
+
+  virtio-gpu's framebuffer is `pmm_alloc_pages`. It is main memory, the
+  allocator did hand it out, `pmm_owns` answers true, and the page is freed. The
+  first program to map `/dev/fb0` and exit hands the live screen back to be
+  allocated to whatever asks next.
+
+- **Why it is the same bug as KF-209 seen from the other side.** That entry
+  records x86_64 silently freeing an aperture into the allocator while aarch64
+  panicked on the identical code. The guard added then encodes *a framebuffer is
+  never allocator memory* — true of every display this kernel had. A second
+  backend makes it false, and the guard then reads as permission.
+
+- **Cost** nothing observed. **Said plainly rather than dressed up:** no boot in
+  the matrix currently tears down an address space that holds the framebuffer —
+  instrumenting `addrspace_release_page` across a full virtio-gpu boot shows
+  four calls, none of them a screen page. So this is a demonstrated defect in a
+  path that is not yet reached, not a fault anybody has been bitten by, and the
+  entry says so because the alternative is a register that overstates itself.
+
+  It is recorded as a bug rather than a note because it was *demonstrated*
+  rather than reasoned about — see the test below, which fails without the fix.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_owns_page` answers whether
+  a physical page is part of the screen in force right now, and
+  `addrspace_release_page` asks it before asking the allocator. Asked of the
+  display because the display is the only thing that knows which pages are
+  pixels *now*: a range recorded when the mapping was made would go stale the
+  next time the mode changed.
+
+- **Shown to fail before being believed**, and this is what makes it a bug
+  rather than a worry. `release_keeps_the_screen` builds two address spaces that
+  differ in exactly one thing — which physical page is mapped at the same
+  address — and destroys both. Their page tables are identical in shape, so that
+  cost cancels and what is left is the one page:
+
+  ```
+  with the guard     screen space gave back 4 pages, ordinary space gave back 5
+  without the guard  screen space gave back 5 pages, ordinary space gave back 5
+                     -- the screen is being freed with it
+  ```
+
+  The control half matters as much as the subject: a run where *neither* page
+  came back would also show a difference of zero and would mean the test had
+  stopped measuring anything. On the Bochs adapter the test says the framebuffer
+  is an aperture and that the teardown never had a decision to make, rather than
+  passing for a reason unrelated to its name.
+
+- **The general form is not fixed and is deliberately not fixed here.** The real
+  rule is that pages obtained through `file_ops.map` belong to the file and
+  never to the address space. `/dev/fb0` is the only file in this kernel with a
+  `map` operation, so a display-shaped question is complete today and will stop
+  being complete the day there is a second one. Raised in `docs/SIGNALS.md` for
+  the kernel session rather than settled by the session that happened to trip
+  over it.
+
+---
+
+### GX-004 — An oversized mode was refused and not counted as refused
+
+[#513](https://github.com/neogentrics/ReconOS/issues/513)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by `display_self_test`
+  itself, on the first boot where the primary display was not a Bochs adapter:
+
+  ```
+  virtio-gpu: 16384x16384 wants 1024 MB and this driver will spend 64
+  display: an oversized mode was refused and not counted as refused
+    a mode of our own  : FAIL
+  ```
+
+  A correct refusal, correctly printed, reported as a failure.
+
+- **Was** `modes_set` and `modes_refused` are declared in `core/display.c` and
+  were incremented inside `bochs_set_mode` — the driver, not the layer. That is
+  invisible while one backend exists, because the only path that can refuse a
+  mode is the one maintaining the counters.
+
+  `display_self_test` asks whether an oversized mode was *counted* as refused,
+  which is the right question: a driver that returns false without recording it
+  is a driver whose summary line quietly stops meaning anything. Asked of a
+  machine driven by anything else, every refusal was invisible and the check
+  failed on a kernel behaving perfectly.
+
+- **Cost** one confusing red line, immediately. Worth recording because of what
+  it is an instance of: **a counter that only one implementation of an interface
+  maintains is a counter about that implementation, however much its name and
+  its home suggest otherwise.** The summary said "1 mode(s) set, 0 refused" on a
+  boot that had just refused three.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_set_mode` counts, once, for
+  every backend; the five increments inside `bochs_set_mode` are gone. Verified
+  on both backends: the counts now move on virtio-gpu, and the Bochs path
+  reports what it always did.
+
+---
+
+### GX-005 — A 1280x800 screen driven at 5120x2880, because nothing could ask it
+
+[#514](https://github.com/neogentrics/ReconOS/issues/514)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by reading two lines of the
+  same boot next to each other:
+
+  ```
+  virtio-gpu: the host offers 1 enabled scanout(s), the first is 1280x800
+    display      : virtio-gpu, 5120x2880, pitch 20480, BGRA
+  ```
+
+  The device said what its screen was and the kernel chose something else.
+
+- **Was** `display_init` picks a mode from `MODE_LADDER`, largest first, taking
+  the first that fits in the adapter's memory. That is the best answer available
+  from hardware that cannot describe its own panel, which the Bochs adapter
+  cannot: it has a memory size and a set of mode registers, and nothing that
+  says what is plugged into it.
+
+  So the ladder was never wrong. **It was answering the only question the
+  interface could ask**, and went on answering it after a device arrived that
+  could answer a better one. `display_ops` had nowhere to put the reply.
+
+- **Cost** on the matrix, four times the pixels the display was showing and
+  **fifty-four megabytes** of main memory to hold them — 58 MB for 5120x2880
+  against 4 MB for the screen that actually existed. On a machine with a real
+  panel it is worse than wasteful: it is a mode the monitor has to scale or
+  refuse.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_ops` gained
+  `preferred_mode`, null on hardware that cannot be asked, and `display_init`
+  asks before it guesses. A device that answers and is then refused falls
+  through to the ladder rather than leaving the machine dark — knowing what it
+  wants and not getting it is a reason to try something else, not to stop.
+
+  ```
+  display: virtio-gpu reports its screen is 1280x800, and that is the mode it is in
+  ```
+
+  The Bochs path is unchanged and still lands on 7680x4320 with 256 MB of
+  adapter memory, which is correct: nothing can ask it anything.
+
+---
+
+### GX-002 — One driver's private state, addressed by another driver's position in a table
+
+[#515](https://github.com/neogentrics/ReconOS/issues/515)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, while writing the second
+  display backend — by the second backend needing somewhere to keep its own
+  device pointer and finding the shelf already occupied.
+
+- **Was** `core/display.c` kept two static arrays side by side, `displays[]` and
+  `adapters[]`, and reached the second through the first's index:
+
+  ```c
+  struct bochs *b = &adapters[d - displays];
+  ```
+
+  That is exactly right while every entry in `displays[]` is a Bochs adapter,
+  and it is the shape a single-backend interface grows into naturally — nothing
+  about it looks wrong. The moment one entry is not, the expression addresses
+  another driver's device: a virtio-gpu in slot 0 and a Bochs adapter in slot 1
+  would have had the Bochs driver write mode registers through `adapters[1]`
+  while the display it was handed was the one in slot 0.
+
+- **Cost** nothing, because it was found by the change that would have triggered
+  it rather than after. Recorded because a latent fault that a second
+  implementation walks straight into is the whole reason a second implementation
+  was written first, before real hardware.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `struct display` carries
+  `ops_private`, and every backend enters the table through `display_register`
+  rather than writing into it. The Bochs driver's storage is still static — a
+  driver allocating at attach time on a path that runs before the heap is a
+  different problem and was not solved here — what changed is how it is found.
+
+---
 
 ### BG-105 — A register that says nothing until the port is already running
 
@@ -7526,6 +8210,188 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-251 — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
+
+[#518](https://github.com/neogentrics/ReconOS/issues/518)
+
+- **Found:** 17 September 2026, by the **server session**, building an NTP
+  client — which needs two of this machine's timestamps to compute a round
+  trip. Measured rather than reasoned about: five reads with twenty thousand
+  yields between each.
+
+  ```
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  ```
+
+  The low nine digits are zero every time, and over 200,000 yields the value
+  moved by exactly 1000 ms.
+
+- **What it is.** `sys_walltime` returns `time_wall_ns`, which prefers
+  `arch_wall_ns` — and on x86_64 that reads the CMOS RTC, whose finest field is
+  **seconds**. So the number is a whole second multiplied by a billion. The
+  signature promises nanoseconds and the clock behind it has never had them.
+
+- **What it costs, in their words and they are right.** An NTP round trip
+  cannot be measured at all: both local timestamps land in the same second, the
+  delay computes to zero, and `round trip 0 ms` to a server across the internet
+  is *quantisation wearing the clothes of a measurement*. Their client refuses
+  to print it, which is the correct response to a number that would be a lie.
+
+  It is wider than NTP. **Any** duration measured with the wall clock is rounded
+  to a second, and nothing in the interface says so.
+
+- **The mechanism to fix it already exists in the same function.** When
+  `arch_wall_ns` returns zero — a machine with no CMOS — `time_wall_ns` falls
+  back to the time the firmware gave once, plus the monotonic counter since.
+  That path has exactly the resolution the interface promises. **The coarse
+  clock is preferred over the fine one whenever a coarse clock is present.**
+
+- **The fix, and the part that needs care.** Latch the CMOS reading against the
+  monotonic counter once and serve `latched + (monotonic now − monotonic then)`.
+  That makes *differences* correct immediately, which is what the round trip
+  needs.
+
+  The absolute offset keeps up to a second of error, because latching at an
+  arbitrary moment says nothing about where in the second it happened. Chasing
+  the edge at boot would cost up to a second of every boot. The cheap answer is
+  to keep sampling the seconds field and **snap the phase the first time it
+  changes** — that observation *is* the edge, it costs two port reads, and it
+  self-corrects within a second of the first sample. It must only ever move the
+  clock forward: a wall clock that goes backwards is a worse fault than the one
+  being fixed.
+
+- **Nothing on the server branch is blocked by it** — they said so, their clock
+  service reports honestly, and the console line states the uncertainty rather
+  than implying accuracy it does not have.
+
+- **Status:** open. Measured by another session, cause confirmed here in
+  `arch/x86_64/time.c`, fix designed and deliberately not rushed in beside a
+  merge and a matrix run.
+
+### KF-250 — The network stack failed once, on the installed-disk boot, and has not failed since
+
+[#516](https://github.com/neogentrics/ReconOS/issues/516)
+
+- **Found:** 17 September 2026, matrix 67, on one path of twenty-eight:
+
+  ```
+    installs from media, and the disk boots     FAILED
+      and its own tests pass, with a volume under them  FAILED
+            the network stack  : FAIL
+      1 of 9 failed
+  ```
+
+  Every other step of that path passed either side of it — the install, the
+  loader on the target, the disk booting on its own, BIOS boot, seven
+  partitions found, and 73 checks passing on the second boot of the same
+  volume.
+
+- **What is known, which is less than it looks.** `net_self_test` runs eight
+  sub-tests and a packet round trip, and **each prints its own diagnostic**.
+  None of them reached the log: `verify-kernel.sh` reports a failed path with
+  `head -16`, and the failure was further down than that. So the register
+  records *the network stack* and not which part of it, which is the same
+  compression KF-238 and KF-246 were about, one level up.
+
+- **Not reproduced, and the attempts are the entry:**
+
+  | what was run | result |
+  |---|---|
+  | the same path alone | 9 of 9 |
+  | the same path, twice, six CPU spinners running | 9 of 9, both |
+  | twelve plain kernel boots, six at a time | no failure |
+
+  **The load I reproduced was the wrong load, and that is worth saying rather
+  than filing this as flaky.** A matrix run is four sub-scripts booting guests
+  that format and write disk images, alongside the main sequence. Spinning CPUs
+  is not that: the contention that matters here may be disk, and a test about
+  a network stack failing under disk contention would be a real fault about
+  timing, not a tired machine.
+
+- **Two readings, and nothing yet separates them.** Either a sub-test has a
+  deadline that a loaded machine misses — the shape KF-201 had, and KF-205, and
+  KF-235 — or something in the stack genuinely fails about one boot in many. The
+  first is a fault in a test; the second is a fault in the kernel. They are not
+  close, and one observation cannot choose.
+
+- **What would settle it**, in order of cost: raise the reporter's `head -16` so
+  a failed path carries its own diagnostics — that alone turns the next
+  occurrence into an answer instead of another entry like this one. Then, if it
+  recurs, the sub-test that failed names itself.
+
+- **Status:** open, seen once, unreproduced in fifteen further boots. Recorded
+  rather than dismissed because *rare* and *absent* look identical from one
+  green run, and this project has KF-232 and KF-237 already sitting in exactly
+  this state.
+
+### KF-249 — Plug in a USB keyboard and the machine can never idle again
+
+[#517](https://github.com/neogentrics/ReconOS/issues/517)
+
+- **Found:** 17 September 2026, booting a machine with USB input attached to
+  check that lifting the boot decoders out of `usb_hid.c` had broken nothing.
+  It had not. This was already there.
+
+  ```
+  $ qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+        -device qemu-xhci -device usb-kbd -device usb-mouse \
+        -kernel kernel/build/x86_64/reconos-kernel.elf
+
+    power: 11 wakeup(s) in 204 ms, against 20 a fixed tick would have cost
+    power: the tick was suspended and cost no fewer wakeups, which means it
+           did not stay suspended
+    a tick that stops  : FAIL
+  ```
+
+- **What it is.** `usb_hid.c`'s poller queues an interrupt transfer, asks
+  whether it completed, and when nothing has arrived sleeps **4 ms** and asks
+  again. The comment says why it sleeps rather than yields, and that reasoning
+  is right as far as it goes. But a thread that wakes every 4 ms is a machine
+  that wakes every 4 ms, so the tickless idle this kernel went to some trouble
+  to build is switched off by the presence of a keyboard.
+
+  The measurement is the entry: 11 wakeups where a fully suspended tick would
+  be a handful and a fixed 100 Hz tick would be 20. The idle path is working —
+  it halved the wakeups — and then the poller put most of them back.
+
+- **An interrupt endpoint is called that because it interrupts.** The xHCI
+  driver reads its event ring by polling it, so every transfer on every device
+  is discovered by somebody asking. The fix is to let the controller raise an
+  interrupt and have the poller wait on that instead of on a timer — which is
+  the same machinery KF-248 wants for per-endpoint completions, and is the
+  reason these two should be built together rather than one after the other.
+
+- **The cost is a laptop's battery**, on the one machine this project is
+  actually aimed at. The Gateway is a fanless Celeron; waking 250 times a
+  second to ask a keyboard whether anything happened is exactly the thing
+  tickless idle exists to avoid.
+
+- **Why nothing caught it, and this is the part that matters.** The kernel's
+  own `power_idle_self_test` detects it perfectly, prints the numbers, and fails
+  — it needed no new instrument at all. **No path in the matrix attaches a USB
+  input device.** `grep -c 'usb-kbd\|usb-mouse' scripts/*.sh` finds nothing, so
+  twenty-eight boots all report `a tick that stops : pass` about machines that
+  have no keyboard, which is the one kind of machine nobody uses.
+
+  A check that runs on every path and is never given the input that breaks it
+  is a check that cannot fail, and it looks exactly like one that passes.
+
+- **The path is deliberately not added yet, and that is a choice worth
+  recording.** Adding it turns the matrix red immediately and blocks every
+  session's pushes on a fault none of them introduced. So the configuration is
+  written down here with the command that reproduces it, and the matrix path
+  goes in **with** the fix rather than before it — the only case in this
+  project where a missing test is left missing on purpose, and it is on the
+  condition that it is not left that way quietly.
+
+- **Status:** open. Measured, reproducible in one command, and not a
+  regression: the same boot on `6c93dae`, the commit before the graphics merge,
+  fails identically.
 
 ### KF-248 — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 

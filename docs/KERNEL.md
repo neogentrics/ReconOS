@@ -110,17 +110,29 @@ mistake this section used to invite.
 What the kernel does not have, and what the desktop would need before it could
 run on this kernel rather than on Linux:
 
-| Missing | Size of the gap |
+**This table was written on 9 September 2026 and most of it stopped being true
+within the week.** It is corrected here rather than deleted, because the row
+that matters is the one still open and it is easier to believe a list that has
+been kept than a list that has been replaced.
+
+Every line below was **measured on 17 September 2026**, not recalled — the
+syscall count from `scripts/check-syscall-numbers.py`, the rest from the tree.
+
+| Was missing | Where it stands |
 |---|---|
 | ~~**Per-process address spaces**~~ | **Built, 9 September 2026.** Each process has page tables of its own and the scheduler switches them; the kernel half is shared by copying the top-level entries rather than the tables beneath. Demand paging, stack growth, zero-page sharing and copy-on-write on top |
-| **Process creation and ELF loading** | user code is a blob passed as a pointer. The *bootloader* parses ELF; the kernel does not |
-| **Memory syscalls** | there is no way for a program to *ask* for memory. What an `mmap` would be built on now exists: a region is reserved and its pages appear when touched |
-| **File syscalls, and a namespace** | ReconFS and FAT32 are kernel-internal. No `open`, no paths, no VFS |
-| **A framebuffer driver** | the smallest of these — address, pitch and format already arrive in the boot info, and nothing yet reads them |
-| **Input** | none at all. PS/2 for virtual machines, USB HID for real ones, which needs checkpoint 11b |
-| **IPC and shared memory** | a display server is the first program that cannot be written without them |
+| ~~**Memory syscalls**~~ | **Built.** `SYS_MAP` with a descriptor of −1 reserves a region and its pages appear when touched, which is the spelling `KERNEL-WANTS.md` asked for and the one every other system uses |
+| ~~**File syscalls, and a namespace**~~ | **Built.** `open`, `close`, `read`, `seek`, `create`, `mkdir`, `list` and `pipe`, over a VFS |
+| ~~**A framebuffer driver**~~ | **Built, and then some.** `/dev/fb0` is mappable, and there are now four backends behind it — the EFI framebuffer, virtio-gpu, Intel Gen9 and AMD RDNA2 — with `SYS_PRESENT` for the ones that must be told to show what was drawn |
+| ~~**Input**~~ | **Built.** PS/2 for virtual machines and USB HID for real ones, sharing one boot-protocol decoder in `core/hid_boot.c` |
+| **IPC and shared memory** | **Half.** `pipe.c` and `shm.c` exist and a pipe has a system call; shared memory has no way for a program to ask for it |
+| **Process creation and ELF loading** | **Still the wall, and the only row here that has not moved.** `core/elf.c` loads one, and **no system call creates a process** — there is no `fork`, no `exec`, no `spawn`. A program can be started by the kernel and cannot start another |
 
-There are five system calls today: `exit`, `write`, `getpid`, `time`, `yield`.
+There are **33** system calls today, not the five this section used to claim.
+
+**So the gap is one row, not seven**, and naming it precisely is worth more
+than the six that closed: the desktop cannot run here until a program can
+start another program.
 
 So **the desktop remaining a Linux program is the correct state, not a delay.**
 Joining the two halves is its own phase with its own list, and treating it as

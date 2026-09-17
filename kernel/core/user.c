@@ -20,6 +20,7 @@
 #include <recon/kernel/time.h>
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/display.h>
 #include <recon/kernel/elf.h>
 #include <recon/kernel/kstring.h>
 
@@ -624,6 +625,92 @@ static i64 sys_screen(u64 buf, u64 len, u64 a2, u64 a3, u64 a4, u64 a5)
 	return (i64)copy;
 }
 
+/* Show what has been drawn. See SYS_PRESENT in user.h for why it exists and
+ * why it takes each of its arguments.
+ *
+ * Every refusal below is a decision that was argued before it was written, and
+ * each one is the *narrow* answer rather than the convenient one: a descriptor
+ * that is not the framebuffer is EBADF rather than ignored, a rectangle off the
+ * edge is EINVAL rather than clamped, and a zero-sized one is EINVAL rather
+ * than quietly meaning the whole screen.
+ */
+static i64 sys_present(u64 fd, u64 x, u64 y, u64 w, u64 h, u64 a5)
+{
+	struct process *p = caller();
+	struct file *f;
+	struct fb_info info;
+	int err;
+	bool shown;
+
+	(void)a5;
+
+	if (!p)
+		return SYS_EPERM;
+
+	f = fd_get(p, (int)fd);
+	if (!f)
+		return SYS_EBADF;
+
+	/* **The descriptor must be the framebuffer, not merely mappable.**
+	 *
+	 * Comparing the operations table is how `file_is_socket` answers the
+	 * same kind of question, and it is the only identity a file has here.
+	 * Accepting anything with a `map` operation would let a program present
+	 * a rectangle of somebody else's device. */
+	if (f->ops != &fb_file_ops) {
+		file_release(f);
+		refusals++;
+		return SYS_EBADF;
+	}
+
+	file_release(f);
+
+	err = fbdev_describe(&info);
+	if (err != SYS_OK)
+		return err;
+
+	/* Zero is refused rather than taken to mean the whole screen.
+	 *
+	 * An uninitialised `w` is zero, so a sentinel here would hand the most
+	 * expensive call in this interface to the program that forgot to fill
+	 * one in -- and tell it that it succeeded. A caller wanting everything
+	 * passes what SYS_SCREEN reported, which it has already had to call for
+	 * the pitch. */
+	if (w == 0 || h == 0) {
+		refusals++;
+		return SYS_EINVAL;
+	}
+
+	/* Off the edge is refused rather than clamped, which is SYS_MAP's rule
+	 * and is here for the same reason: a program told its request succeeded,
+	 * having silently had it shrunk, believes something about the screen
+	 * that is not true.
+	 *
+	 * Written as subtractions so that a width near the top of the range
+	 * cannot wrap past the end and compare as comfortably inside. */
+	if (x >= info.width || y >= info.height ||
+	    w > (u64)info.width - x || h > (u64)info.height - y) {
+		refusals++;
+		return SYS_EINVAL;
+	}
+
+	/* **A backend with no flush succeeds.**
+	 *
+	 * `display_flush` already answers true when the primary has no flush
+	 * operation, because the pixels are on the screen and that is what the
+	 * caller asked about. This call inherits that rather than restating it:
+	 * a program that had to tell "shown" from "nothing to do" would carry a
+	 * branch that is wrong on one of the three backends here. */
+	shown = display_flush((u32)x, (u32)y, (u32)w, (u32)h);
+
+	if (!shown) {
+		refusals++;
+		return SYS_EIO;
+	}
+
+	return SYS_OK;
+}
+
 static i64 sys_getpid(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 {
 	struct thread *t = sched_current();
@@ -1112,6 +1199,7 @@ const struct personality personality_recon = {
 		[SYS_LISTEN]   = sys_listen,
 		[SYS_ACCEPT]   = sys_accept,
 		[SYS_CONNECT]  = sys_connect,
+		[SYS_PRESENT]  = sys_present,
 	},
 };
 
@@ -1645,6 +1733,18 @@ bool user_c_program_test(void)
 		{ 64, "the screen's numbers do not describe a screen" },
 		{ 65, "a pixel did not read back -- the mapping is not the"
 		      " screen, or pitch was not honoured" },
+
+		/* SYS_PRESENT. Four codes rather than one, because a call that
+		 * refuses everything and a call that refuses nothing both fail
+		 * a single combined check and need opposite fixes. */
+		{ 66, "SYS_PRESENT refused an honest whole-screen present" },
+		{ 67, "SYS_PRESENT accepted a descriptor that is not the"
+		      " framebuffer -- it is checking that the file is open"
+		      " rather than what it is" },
+		{ 68, "SYS_PRESENT accepted a zero-sized rectangle, so an"
+		      " uninitialised width reaches it as a request" },
+		{ 69, "SYS_PRESENT accepted a rectangle off the edge of the"
+		      " screen rather than refusing it" },
 	};
 
 	u64 exits_before  = exits;
@@ -1971,8 +2071,46 @@ bool user_framebuffer_test(void)
 		return false;
 	}
 
+	/* **What "on the screen" is worth, and it is not the same on every
+	 * machine.**
+	 *
+	 * The two reads above are of the memory the program was handed. On an
+	 * adapter whose framebuffer is a scanned-out aperture that memory *is*
+	 * the screen, so reading it back is a real check. On a display whose
+	 * pixels are guest RAM copied to the host on request, it is a read-back
+	 * of what was just written -- it cannot fail, and it passed on a
+	 * completely black screen for as long as nobody looked (GX-003).
+	 *
+	 * So the claim is cut to what was actually established, and the machines
+	 * where more is needed say so. The part that cannot be checked from
+	 * inside the kernel at all -- whether the host is showing these pixels
+	 * -- is checked from outside it, by the screendump in
+	 * scripts/verify-kernel.sh. */
+	if (!display_needs_flush()) {
+		kprintf("  framebuffer: a program mapped %ux%u, pitch %u, and both "
+			"markers are on the screen\n",
+			info.width, info.height, info.pitch);
+		return true;
+	}
+
+	/* Presented on the program's behalf, because nothing else will.
+	 *
+	 * A mapping is the kernel getting out of the way, and on this kind of
+	 * display getting out of the way means the pixels are never seen. There
+	 * is no system call a program can make to say "present", and adding one
+	 * changes an interface two other sessions own -- so the kernel presents
+	 * for it here, which makes the test honest and does nothing whatever for
+	 * a real program. That gap is the open question in docs/SIGNALS.md. */
+	if (!display_flush(0, 0, info.width, info.height)) {
+		kputs("  framebuffer: the markers were written and the display "
+			      "refused to present them\n");
+		return false;
+	}
+
 	kprintf("  framebuffer: a program mapped %ux%u, pitch %u, and both "
-		"markers are on the screen\n",
+		"markers are in the pixels it was given -- this screen has to be "
+		"told to show them, so whether they are visible is checked from "
+		"outside the kernel\n",
 		info.width, info.height, info.pitch);
 	return true;
 }

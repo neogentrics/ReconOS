@@ -41,6 +41,7 @@
  */
 
 #include <recon/kernel/boot.h>
+#include <recon/kernel/display.h>
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/fbdev.h>
 #include <recon/kernel/kstring.h>
@@ -121,6 +122,27 @@ static i64 fb_write(struct file *f, const void *in, u64 len)
 		len = left;
 
 	kmemcpy((u8 *)phys_to_virt(fb->base) + f->pos, in, (size_t)len);
+
+	/* **And then tell the screen, where the screen has to be told.**
+	 *
+	 * On an adapter that scans out an aperture this is a branch and a
+	 * return: the bytes were on the glass the moment they were copied. On
+	 * virtio-gpu the copy went into ordinary memory and nothing has seen
+	 * it, so a `write` that stopped at the line above would return the full
+	 * byte count, having drawn nothing, for ever.
+	 *
+	 * The rectangle is computed from the byte range rather than being the
+	 * whole screen: a program writing one row should not cost a transfer of
+	 * the entire panel. Whole rows rather than a tighter box, because a
+	 * write is a run of bytes and a run of bytes that crosses a row boundary
+	 * is not a rectangle. */
+	if (display_needs_flush() && fb->pitch) {
+		u32 first = (u32)(f->pos / fb->pitch);
+		u32 last  = (u32)((f->pos + len - 1) / fb->pitch);
+
+		display_flush(0, first, fb->width, last - first + 1);
+	}
+
 	f->pos += len;
 	return (i64)len;
 }
