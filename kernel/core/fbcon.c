@@ -29,8 +29,10 @@
  */
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/display.h>
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/kstring.h>
+#include <recon/kernel/lock.h>
 #include <recon/kernel/vm.h>
 
 #include <recon_font.h>
@@ -157,6 +159,60 @@ static void put_pixel(u32 x, u32 y, u32 colour)
 	*p = colour;
 }
 
+/* What has been drawn and not yet presented.
+ *
+ * **Only meaningful on a display that has to be told**, which the Bochs adapter
+ * does not -- there the cost of keeping this is two comparisons per filled
+ * rectangle and the rectangle is never used. That is the right trade against
+ * the alternative, which is the console knowing which kind of screen it has.
+ *
+ * Its own lock rather than the console's. `fbcon_present` runs *outside* the
+ * console lock deliberately -- presenting talks to a device and may print about
+ * it, and printing takes that lock -- so the rectangle is handed between the
+ * two without one, and needs something of its own to be handed safely.
+ */
+static struct spinlock damage_lock;
+static struct {
+	u32 x0, y0, x1, y1;	/* half-open: x1 and y1 are one past the edge */
+	bool any;
+} damage;
+
+static void mark_damage(u32 x, u32 y, u32 w, u32 h)
+{
+	u64 flags;
+
+	if (!w || !h)
+		return;
+
+	flags = spin_lock_irq(&damage_lock);
+
+	if (!damage.any) {
+		damage.x0 = x;
+		damage.y0 = y;
+		damage.x1 = x + w;
+		damage.y1 = y + h;
+		damage.any = true;
+	} else {
+		/* Merged into one rectangle rather than kept as a list.
+		 *
+		 * A list would present less area, and the area is not what
+		 * costs here: each rectangle is two synchronous commands to the
+		 * device, so two rectangles cost twice what one covering both
+		 * does. A console prints in rows, so the union of a burst is
+		 * close to the burst's own bounding box anyway. */
+		if (x < damage.x0)
+			damage.x0 = x;
+		if (y < damage.y0)
+			damage.y0 = y;
+		if (x + w > damage.x1)
+			damage.x1 = x + w;
+		if (y + h > damage.y1)
+			damage.y1 = y + h;
+	}
+
+	spin_unlock_irq(&damage_lock, flags);
+}
+
 static void fill(u32 x0, u32 y0, u32 w, u32 h, u32 colour)
 {
 	u32 x, y;
@@ -164,6 +220,14 @@ static void fill(u32 x0, u32 y0, u32 w, u32 h, u32 colour)
 	for (y = 0; y < h; y++)
 		for (x = 0; x < w; x++)
 			put_pixel(x0 + x, y0 + y, colour);
+
+	/* Marked here rather than in `put_pixel` because every pixel this
+	 * console draws goes through a fill first: `draw_glyph` paints the whole
+	 * cell before it paints the glyph, so the cell is already marked by the
+	 * time the strokes go down inside it. Marking per pixel would be correct
+	 * and would take the damage lock a hundred million times on an 8K
+	 * clear. */
+	mark_damage(x0, y0, w, h);
 }
 
 /* One character, at a character cell. Anything outside the font draws as a
@@ -364,6 +428,64 @@ const struct framebuffer *fbcon_framebuffer(void)
 	 * format nobody named. Handing out a description that failed those is
 	 * handing out a framebuffer nothing should draw into. */
 	return fb.ready ? &fb.screen : 0;
+}
+
+/* Put whatever has been drawn since the last call onto the screen.
+ *
+ * **Nothing at all on a display that scans itself out**, which is the case this
+ * is written not to slow down: `display_flush` answers true immediately when
+ * there is no flush operation, so the whole of this on a Bochs machine is a
+ * test of one bool and a return.
+ *
+ * Called from the console after it releases its lock, once per burst of output
+ * rather than once per character. A character is a cell and a cell is two
+ * commands to the device, so per-character presenting would put a synchronous
+ * round trip between every letter of every line -- correct, and slow enough to
+ * change what the boot looks like.
+ *
+ * **Must not be called with the console lock held.** Presenting can fail, and a
+ * failure prints, and printing takes that lock.
+ */
+void fbcon_present(void)
+{
+	u64 flags;
+	u32 x, y, w, h;
+	static bool presenting;
+
+	if (!fb.ready)
+		return;
+
+	flags = spin_lock_irq(&damage_lock);
+
+	/* **Re-entrancy, and it is not hypothetical.** A refused present prints
+	 * a line saying so; that line goes through the console, which calls
+	 * this function again on its way out, which presents the damage that
+	 * line just made, which can be refused in exactly the same way. The
+	 * guard is inside the lock because two processors can reach it. */
+	if (presenting || !damage.any) {
+		spin_unlock_irq(&damage_lock, flags);
+		return;
+	}
+
+	x = damage.x0;
+	y = damage.y0;
+	w = damage.x1 - damage.x0;
+	h = damage.y1 - damage.y0;
+
+	/* Cleared before the flush rather than after it. A character drawn
+	 * while the flush is in flight must be seen as new damage and presented
+	 * by the next call -- cleared afterwards, it would be marked, then
+	 * wiped unpresented, and that character would never appear. */
+	damage.any = false;
+	presenting = true;
+
+	spin_unlock_irq(&damage_lock, flags);
+
+	display_flush(x, y, w, h);
+
+	flags = spin_lock_irq(&damage_lock);
+	presenting = false;
+	spin_unlock_irq(&damage_lock, flags);
 }
 
 bool fbcon_active(void)

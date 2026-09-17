@@ -229,6 +229,33 @@ check_for() {
 	check "$@"
 }
 
+# Whether anything is actually on the screen, asked of QEMU rather than of the
+# kernel.
+#
+# Every other display assertion here reads a line the kernel printed, and the
+# kernel's own view of its framebuffer is exactly what cannot be trusted on a
+# display whose pixels are guest memory: it wrote them, it read them back, they
+# were there, and the host had never been told to look (GX-003).
+#
+# `scripts/screen-has-pixels.py` drives QEMU's monitor and counts non-black
+# pixels in a screendump. It adds its own -serial, -monitor and -display, so the
+# command passed in must not carry them.
+check_screen() {
+	local name=$1; shift
+	local log="$WORK/$(echo "$name" | tr ' /' '__').screen.log"
+
+	printf '%-46s' "$name"
+
+	if python3 "$ROOT/scripts/screen-has-pixels.py" --marker "first screen" \
+			--min-pixels 1000 -- "$@" >"$log" 2>&1; then
+		echo "ok -- $(tail -n 1 "$log")"
+	else
+		echo "FAILED -- $log"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$name")
+	fi
+}
+
 # --- every processor, on both architectures ---------------------------------
 #
 # Asserted by the *count*, not by the machine booting. A kernel that starts none
@@ -789,6 +816,109 @@ check_for "both markers are on the screen" \
 	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
 		-device VGA,vgamem_mb=256 -kernel "$X64_ELF"
 
+# --- the second display backend ---------------------------------------------
+#
+# virtio-gpu, and these paths exist because one backend cannot show whether an
+# interface abstracts anything.
+#
+# `display_ops` was shaped entirely by the Bochs adapter, whose framebuffer is a
+# PCI aperture being scanned out continuously -- so a store is a pixel appearing
+# and every consumer in the kernel was written on that assumption. virtio-gpu
+# keeps its pixels in guest RAM the host cannot see until it is told, which made
+# the assumption visible by breaking it.
+#
+# `-vga none` matters and is not tidiness: QEMU puts a Bochs adapter on the bus
+# by default, so without it the kernel finds that one, drives it perfectly, and
+# this path tests the backend it was meant to replace.
+check_for "virtio-gpu" \
+	"  PVH, virtio-gpu" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-vga none -device virtio-gpu-pci -kernel "$X64_ELF"
+
+# That the mode came from the *device* rather than from a ladder of guesses.
+#
+# The Bochs adapter cannot be asked what its panel is, so `display_init` picks
+# the largest size the adapter's memory can hold. That was the only answer
+# available until a device could give a better one -- and then it went on being
+# used, driving a host reporting 1280x800 at 5120x2880 and spending sixty
+# megabytes to do it (GX-005). Asserted on the size, because "a mode was set" is
+# satisfied by the wrong one.
+check_for "reports its screen is 1280x800, and that is the mode it is in" \
+	"  PVH, virtio-gpu takes the host's size" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-vga none -device virtio-gpu-pci -kernel "$X64_ELF"
+
+# **And whether any of it is actually on the glass.**
+#
+# This is the one check in the matrix that the kernel cannot perform on itself,
+# and the reason it exists is GX-003: on the first boot that drove a virtio-gpu,
+# `a mode of our own`, `a screen to draw on` and `a C program ... its pixels are
+# on the screen` all reported pass against a screen that was entirely black.
+# Every one of them read the framebuffer back through the kernel's own eyes, and
+# on this device those pages are ordinary memory -- so the read-back returned
+# what had just been written whether or not the host had ever seen it.
+#
+# A check that cannot fail looks exactly like one that passes. This one asks
+# QEMU instead, and it has been shown to fail: with the driver's flush stubbed
+# to report success without sending anything, it reports nought non-black pixels
+# on a kernel whose own self-tests all pass.
+check_screen "  PVH, virtio-gpu really shows pixels" \
+	qemu-system-x86_64 -m 1024M -vga none -device virtio-gpu-pci \
+		-kernel "$X64_ELF"
+
+# The same assertion for the adapter that was always here, so that the check
+# above is known to be measuring the display rather than the device: a rig that
+# reports pixels only on the new backend is a rig with something else wrong
+# with it.
+check_screen "  PVH, the Bochs adapter really shows pixels" \
+	qemu-system-x86_64 -m 1024M -device VGA,vgamem_mb=256 \
+		-kernel "$X64_ELF"
+
+# The table that recognises real graphics hardware, checked on a machine that
+# has none.
+#
+# `core/intel_display.c` cannot be exercised against a Gen9 here -- QEMU
+# emulates no Intel display engine -- so what runs in this matrix is the
+# recognition: the ids it must claim, and the ids it must refuse. The refusals
+# are the half worth asserting. Among them is the Gemini Lake host bridge, which
+# sits in the same package as the graphics and in the same numbering.
+#
+# **Asserted on the count, not on the word pass.** The self-test returns true
+# after checking nothing if the table is empty, exactly as a mode sweep that
+# skips every shape reports green (KF-187). Eighteen models is the claim.
+check_for "18 model(s) known, recognition and refusal both checked" \
+	"  PVH, the graphics it can recognise" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
+# And the AMD table, which is the one written against hardware in the room.
+#
+# 1002:73ff and 1002:164e are the two adapters in this project's desktop -- a
+# Radeon RX 6600 on the bus and Raphael graphics in the processor package --
+# read off that machine rather than recalled. The refusals include the USB
+# controllers AMD puts on its own graphics cards, and a case that only the
+# vendor rule can catch, which had to be constructed because every real
+# identifier collision is refused by the class check first (GX-008).
+check_for "13 model(s) known, recognition and refusal both checked" \
+	"  PVH, the graphics cards it can recognise" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
+# Two display adapters in one machine, and the report naming both.
+#
+# QEMU with `-device virtio-gpu-pci` and no `-vga none` gives a Bochs adapter
+# *and* a virtio-gpu, which is the arrangement GX-002's parallel private-state
+# array would have mis-addressed -- and it is the shape of this project's own
+# desktop, which has a Radeon RX 6600 on the bus and Raphael graphics in the
+# processor package.
+#
+# Asserted on the second adapter's line rather than on the boot succeeding: the
+# summary named only the primary for as long as nobody looked, while the suspend
+# line two rows below listed both (GX-009). A boot with one adapter satisfies
+# every other question this rig asks.
+check_for "also         : bochs-display" \
+	"  PVH, two display adapters at once" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-device virtio-gpu-pci -kernel "$X64_ELF"
+
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had
@@ -947,6 +1077,44 @@ check_for "both markers are on the screen" \
 	"  device tree, a program draws on the screen" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M -nographic \
 		-no-reboot -device bochs-display -kernel "$ARM_IMG"
+
+# virtio-gpu on the other architecture, over PCI.
+#
+# The same driver, unchanged, on a machine with a different page size story, a
+# different interrupt controller and a framebuffer allocated from a different
+# part of the map. A display driver that works on one architecture has shown
+# that it works on one architecture.
+check_for "virtio-gpu" \
+	"  device tree, virtio-gpu over PCI" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M -nographic \
+		-no-reboot -device virtio-gpu-pci -kernel "$ARM_IMG"
+
+# And over the memory-mapped transport, which is the point of having two.
+#
+# The virtio transport table exists so that a driver does not know whether its
+# device was found on a bus or listed by firmware. virtio-blk and virtio-net
+# have always been driven both ways; this is the display saying the same thing.
+#
+# `force-legacy=false` is required and is not a workaround: QEMU's `virt`
+# machine presents memory-mapped virtio as version 1 by default, which is the
+# pre-1.0 register layout this kernel deliberately does not implement -- it says
+# so by name on every such boot rather than failing quietly. Asking for the
+# modern layout is asking for the device this driver actually supports.
+check_for "virtio-gpu" \
+	"  device tree, virtio-gpu, memory-mapped" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M -nographic \
+		-no-reboot -global virtio-mmio.force-legacy=false \
+		-device virtio-gpu-device -kernel "$ARM_IMG"
+
+# That the pixels reach the glass on this architecture too.
+#
+# Worth its own path for the same reason the bochs-display one above it is: the
+# aarch64 framebuffer is allocated from a different region, and this is the
+# architecture where KF-209 failed loudly while x86_64 reported success doing
+# the identical wrong thing.
+check_screen "  device tree, virtio-gpu really shows pixels" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M \
+		-device virtio-gpu-pci -kernel "$ARM_IMG"
 
 check_for sata0 "  device tree, AHCI" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \

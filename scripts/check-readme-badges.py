@@ -50,8 +50,12 @@ def read(path):
 
 def bug_counts():
     """How many entries the register actually holds, by prefix."""
-    heads = re.findall(r"^### (BG|KF)-\d+", read("docs/BUGS.md"), re.M)
-    return {"BG": heads.count("BG"), "KF": heads.count("KF")}
+    # **Every prefix, not a list of the ones that existed when this was
+    # written.** `GX-` was added on 15 September 2026 and this function would
+    # have gone on reporting a total that silently excluded it -- which is the
+    # exact failure the file's own opening paragraph is about.
+    heads = re.findall(r"^### (BG|KF|GX)-\d+", read("docs/BUGS.md"), re.M)
+    return {p: heads.count(p) for p in ("BG", "KF", "GX")}
 
 
 def suite_count():
@@ -95,7 +99,7 @@ def main():
     fixed = readme
 
     bugs = bug_counts()
-    total = bugs["BG"] + bugs["KF"]
+    total = sum(bugs.values())
     dv = desktop_version()
 
     # --- the bug count -------------------------------------------------
@@ -103,8 +107,10 @@ def main():
     if not m:
         problems.append("no bug-count badge found; has the README changed shape?")
     elif int(m.group(1)) != total:
-        problems.append("bugs badge says %s, the register holds %d (%d BG + %d KF)"
-                        % (m.group(1), total, bugs["BG"], bugs["KF"]))
+        problems.append("bugs badge says %s, the register holds %d (%s)"
+                        % (m.group(1), total,
+                           " + ".join("%d %s" % (bugs[p], p)
+                                      for p in sorted(bugs) if bugs[p])))
         fixed = re.sub(r"(bugs_recorded-)\d+(-)", r"\g<1>%d\g<2>" % total, fixed)
 
     # --- the version, in both badges -----------------------------------
