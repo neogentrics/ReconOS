@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-8, and each entry says why. They are listed because a register that only
+10, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -170,7 +170,9 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-150** — About one boot in sixty, a user program does not finish, and nothing says why
 - **KF-154** — The page allocator scans, and a terabyte is a billion pages
 - **KF-192** — The kernel boots from a disk over BIOS and then cannot see it
-- **KF-187** — Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
+- **KF-232** — Three timers did not fire, once, on one path of twenty-eight
+- **KF-237** — A power cut inside a rename left no valid superblock, once
+- **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 
 ---
 
@@ -7628,6 +7630,8 @@ and `slice mmc0 2 20480 53247`.
 
 ### KF-221 - The AML parser stopped at the first conditional, thirty-seven bytes into a real machine's namespace
 
+[#483](https://github.com/neogentrics/ReconOS/issues/483)
+
 - **Found:** 14 September 2026, on the Gateway:
   `aml : 0 names, 0 devices, 0 methods stepped over` and
   `aml : stopped at byte 37 on opcode a0 -- the namespace is partial`.
@@ -7666,6 +7670,8 @@ reason from a full stop into a number.
 reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
 
 ### KF-222 - The boot log went to the machine's internal disk while the stick it booted from sat beside it
+
+[#484](https://github.com/neogentrics/ReconOS/issues/484)
 
 - **Found:** 14 September 2026, on the Gateway:
   `boot log : 14586 bytes to MMC0P1:\RECONOS-BOOT.TXT`. MMC0P1 is the laptop's
@@ -7726,6 +7732,8 @@ written down here rather than done quietly.
 
 ### KF-223 - Root ports were asked what was plugged into them before they had power
 
+[#485](https://github.com/neogentrics/ReconOS/issues/485)
+
 - **Found:** 14 September 2026, on the Gateway:
   `xhci : 16 slots, 16 ports, 576 scratchpad pages, 0 connected, 0 addressed`.
   Sixteen ports, nothing on any of them, on a machine that had just booted from
@@ -7772,7 +7780,192 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-248 — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
+
+[#505](https://github.com/neogentrics/ReconOS/issues/505)
+
+- **Found:** 16 September 2026, working out how to give `struct usb_device` the
+  second IN endpoint the Bluetooth session asked for. The change they asked for
+  is a field; this is what is underneath it.
+
+- **What the Bluetooth session found, which is real and is the smaller half.**
+  `read_interface` keeps **one** IN endpoint. An adapter's interface 0 offers
+  three -- an interrupt IN for HCI events, a bulk IN for ACL data, and a bulk
+  OUT -- and the loop takes the interrupt one, then **overwrites it** when the
+  bulk IN arrives later in the same descriptor. The comment says this is
+  deliberate, and for a card reader offering both it is: *"so a device offering
+  both still looks like the storage device it is."* Right for storage, and it
+  silently discards the endpoint every HCI command completion arrives on.
+
+- **What is underneath it.** `route_completion` files a transfer event by
+  **slot** -- by device -- into one `have_completion` / `completion_bytes` /
+  `completion_ok` trio per device. The event TRB carries the endpoint ID and the
+  router ignores it.
+
+  That is correct today by accident: every device this kernel drives has at most
+  one transfer outstanding. Storage runs command, data and status strictly one
+  at a time under `transfer_lock`; HID has an IN endpoint and nothing else. So
+  no two endpoints have ever been in flight on one device.
+
+  **A Bluetooth adapter is exactly the device that breaks it** -- an interrupt
+  IN sits permanently queued for events while ACL data moves on the bulk
+  endpoints. The event completion lands in the same slot the bulk waiter reads,
+  and that waiter takes it as its own: `*transferred = length -
+  completion_bytes`, computed from another endpoint's residue. **A wrong byte
+  count reported as success**, which is the failure the parked-completion
+  comment was written to prevent, one level down from where it was applied.
+
+- **So adding a second IN field and stopping there produces a driver that
+  reports another endpoint's answer as its own.** The field is not the fix; it
+  is the thing that makes the fix necessary.
+
+- **The shape, again.** `struct usb_device` holds one IN endpoint because the
+  one device it was written for needed one. *An interface with one
+  implementation cannot tell its requirements from its accidents* -- the same
+  sentence as `display_ops` before virtio-gpu existed, and it was true here for
+  as long as USB had only disks and keyboards on it.
+
+- **The fix, and why it is not being done today.** Endpoints become a small
+  array carrying address, packet size, type, interval, its own ring **and its
+  own parked completion**, looked up by DCI -- which is how the hardware indexes
+  them, and the reason `route_completion` can file correctly with no new
+  bookkeeping. Callers stop asking for *in* or *out* and ask for a pipe.
+
+  Deliberately **not** landed beside KF-246. USB storage is the one subsystem
+  that just started working on the Gateway, and the next boot of that machine
+  exists to read KF-246's diagnostic and settle whether multi-block reads fail
+  generally. Refactoring the driver underneath that boot would mean reading the
+  answer through a driver that changed in the same breath.
+
+- **Status:** open. Designed, not built. Blocks the Bluetooth session, which has
+  been told the shape rather than the field so nothing is built against a
+  structure that is about to change.
+
+### KF-247 — Twenty-one bugs were fixed and none of them reached the track record
+
+[#486](https://github.com/neogentrics/ReconOS/issues/486)
+
+- **Found:** 16 September 2026, filing KF-245 and KF-246. The script printed
+  `302 entries, 353 issues already there`. The register has **323**.
+
+- **What it was.** `make-issues.py` splits the register on a heading whose
+  separator is an em dash, an en dash or `--`. Every entry from **KF-221**
+  onward was typed with a single `-`, so the filer did not see any of them:
+  not skipped with a warning, not counted as unparsed, not mentioned. Twenty-one
+  entries, covering the whole USB enumeration chain (KF-238 to KF-243), the
+  timer work, the AML parser and both of today's fixes.
+
+  So the GitHub issue list -- which exists because Joshua asked for a visible
+  track record, *"not just random commits"* -- has been missing the most
+  active three weeks of kernel work, and every run said it was up to date.
+
+- **This is the same fault as before KF-200**, when fourteen `--` entries were
+  invisible to a parser that demanded an em dash. That was fixed by widening
+  the pattern, and widening the pattern is what let it happen again: the next
+  spelling nobody anticipated vanishes exactly as quietly.
+
+- **Why nothing caught it, which is the part worth keeping.** The filer
+  reported the number **its own parser had produced**. `302 entries` was a true
+  statement about the parser and a false one about the file, and no green run
+  could have contradicted it -- the count and the thing being counted came from
+  the same place. Identical in shape to KF-187, where a boot that skipped five
+  self-tests and a boot that passed them printed the same total.
+
+  And the evidence was inside the one file the whole time: `check_open` splits
+  on `^### (BG|KF)-` with **no separator at all**, so it has always seen 323.
+  Two functions in the same script have disagreed about what an entry is for as
+  long as both have existed, and neither could see the other.
+
+- **Fixed** in two parts, and the second is the one that matters. The pattern
+  now accepts a bare `-` -- and both halves of the script take it from one
+  named constant, so they cannot drift apart again. Then `parse` counts the
+  headings a **second way**, with a deliberately looser pattern, and **refuses
+  the run** when the two counts differ, naming every entry it could not read.
+
+  Refuses rather than warns: a warning inside a run that prints three hundred
+  lines is a warning nobody reads.
+
+- **Verified by breaking it.** With the bare `-` removed from the pattern
+  again, the script stops and names all twenty-one. A check that has never been
+  seen to fail looks exactly like one that passes.
+
+- **Status:** fixed, and the twenty-one entries are filed and closed.
+
+### KF-246 - Six ways a disk request can fail, one word for all of them
+
+[#487](https://github.com/neogentrics/ReconOS/issues/487)
+
+- **Found:** 16 September 2026, reading for the cause of
+  `block: could not read the last 32 blocks of usb0: the hardware did not
+  answer` -- which has failed on every Gateway boot since the stick first
+  appeared as a disk.
+
+- **What it was.** `command()` in `usb_storage.c` returns -1 from **six**
+  places and the caller turns every one into `BLOCK_ERR_TIMEOUT`. So one
+  sentence covered: the command wrapper not accepted; accepted short; the data
+  phase never completing; the status wrapper never arriving; arriving with the
+  wrong signature; and arriving carrying another command's tag.
+
+  **Those are not variations of one fault.** A failed command phase means the
+  endpoint is wedged and the read is uninteresting. A failed data phase means
+  the device accepted a READ(10) it could not satisfy. A failed *status* phase
+  means the data already moved and only the acknowledgement was lost -- a
+  request that arguably worked.
+
+- **And nothing reported the LBA, the count, or how many bytes moved.** `moved`
+  is captured at every step and discarded on failure, though a short transfer
+  and a silent one are different facts.
+
+- **It misled.** The message names "the last 32 blocks", so the obvious reading
+  is a problem at the end of a 14.4 GB disk -- a truncated LBA, sign extension,
+  a 32-bit limit. The LBA is 30,277,600, which fits in 32 bits, and the CDB is
+  correct. The other reading is that **any multi-block read fails** and the
+  partition scan only ever succeeded because it reads one block at a time. One
+  boot with this entry's output tells the two apart; reasoning could not.
+
+- **Fixed:** each exit records which phase and how far it got, and the caller
+  prints that beside the block count and LBA it already knows. Same shape as
+  KF-238 and KF-242 -- a number or a word compressed to the point of
+  uselessness, un-compressed.
+
+- **Status:** fixed, kernel 0.2.49. The underlying read failure is still open
+  and is now diagnosable in one boot.
+
+### KF-245 - The boot menu clears the whole screen to change one digit
+
+[#488](https://github.com/neogentrics/ReconOS/issues/488)
+
+- **Found:** 16 September 2026, by Joshua watching the Gateway's boot menu and
+  asking whether the flashing was normal. It was not.
+
+- **What it was.** `gfx_menu_draw` opens with
+  `fill(0, 0, width, height, paper)` -- it clears the entire framebuffer and
+  redraws every element -- and the countdown called it **once a second** to
+  change one digit. Over an uncached framebuffer that clear is slow enough to
+  see, so the panel blinked black between the wipe and the redraw, on every
+  tick, on the one screen a person looks at while deciding what to boot.
+
+- **Its own comment argued for it**, and the argument was sound: *drawn in full
+  each time rather than patched, because a partial redraw that gets its
+  arithmetic wrong leaves the previous frame's text underneath the new one.*
+  True -- and applied too widely. That hazard is about the **layout** changing;
+  the countdown changes a **digit**.
+
+- **Fixed** with `gfx_menu_countdown`, which answers the objection rather than
+  ignoring it: it computes no layout of its own but uses the one `gfx_menu_draw`
+  recorded, and clears the full width of the content block so no digit of a
+  longer number survives a shorter one. The stale comment is corrected in place
+  rather than deleted -- it now says which case each path is for.
+
+- **Nothing could have caught this but a person looking at it.** It is invisible
+  on a serial console, invisible in a screendump, and every self-test passes on
+  a menu that flashes.
+
+- **Status:** fixed, loader 0.2.49.
+
 ### KF-244 - Connect reports success while the handshake is still in flight
+
+[#489](https://github.com/neogentrics/ReconOS/issues/489)
 
 - **Asked for** by the server session, 16 September 2026, and they were right
   to call it the highest-value fix available: it is the whole client half of
@@ -7808,6 +8001,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.48.
 
 ### KF-243 - The scratchpad pointer array is also scratchpad buffer zero
+
+[#490](https://github.com/neogentrics/ReconOS/issues/490)
 
 - **Found:** 16 September 2026, on the Gateway, by the diagnostic added one
   boot earlier:
@@ -7858,6 +8053,8 @@ boot log.
 
 ### KF-242 - A failed command cannot say whether it was refused or ignored
 
+[#491](https://github.com/neogentrics/ReconOS/issues/491)
+
 - **Found:** 15 September 2026, by reading for the cause of
   `xhci: port 7 would not give up a slot` -- the last USB fault standing after
   KF-238 to KF-241.
@@ -7897,6 +8094,8 @@ boot log.
   and is now diagnosable in one boot instead of none.
 
 ### KF-241 - A disk that arrives late is never read
+
+[#492](https://github.com/neogentrics/ReconOS/issues/492)
 
 - **Found:** 15 September 2026, on the Gateway, in the boot after KF-240:
 
@@ -7944,6 +8143,8 @@ boot log.
 
 ### KF-240 - A device is addressed before it is allowed to answer
 
+[#493](https://github.com/neogentrics/ReconOS/issues/493)
+
 - **Found:** 15 September 2026, the moment KF-239 let a root port reach the
   enabled state: `xhci: port 6 would not take an address (completion code 4)`.
 
@@ -7976,6 +8177,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-239 - The port reset disables the port it has just enabled
+
+[#494](https://github.com/neogentrics/ReconOS/issues/494)
 
 - **Found:** 15 September 2026, by printing the raw port registers on the
   Gateway -- three snapshots in one boot, against Linux reading the same
@@ -8027,6 +8230,8 @@ boot log.
 
 ### KF-238 - The USB summary counts enabled ports and calls them connected
 
+[#495](https://github.com/neogentrics/ReconOS/issues/495)
+
 - **Found:** 15 September 2026, while failing to explain KF-239.
 
 - **What it was.** One line:
@@ -8055,6 +8260,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
+
+[#496](https://github.com/neogentrics/ReconOS/issues/496)
 
 - **Found:** 15 September 2026, matrix 57, one round of six:
 
@@ -8099,6 +8306,8 @@ boot log.
 
 ### KF-236 - Every PCI address is printed in a form nobody can look up
 
+[#497](https://github.com/neogentrics/ReconOS/issues/497)
+
 - **Found:** 15 September 2026, by holding the Gateway's boot report beside
   `lspci` on the same machine, minutes apart, over SSH.
 
@@ -8132,6 +8341,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.41.
 
 ### KF-235 - The check that the tick arrives at the rate the kernel assumes cannot fail
+
+[#498](https://github.com/neogentrics/ReconOS/issues/498)
 
 - **Found:** 15 September 2026, by reading `time_self_test` while looking for
   KF-232's mechanism. Not by a failure: this check has never failed and cannot.
@@ -8183,6 +8394,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.40.
 
 ### KF-234 - A timer is due before the instant it was asked for
+
+[#499](https://github.com/neogentrics/ReconOS/issues/499)
 
 - **Found:** 15 September 2026, by reading `timer_start` while looking for
   KF-232's mechanism -- and it turned out to *be* KF-232's mechanism, or half
@@ -8282,6 +8495,8 @@ boot log.
 
 ### KF-233 - Recovery is offered on every boot, except the boots that go wrong
 
+[#500](https://github.com/neogentrics/ReconOS/issues/500)
+
 - **Found:** 14 September 2026, by reading the loader after Joshua reported that
   the Gateway's menu "only shows Recon OS. It doesn't even show Recon OS
   recovery." Whether this is what that machine hit is **not yet known** -- see
@@ -8367,6 +8582,8 @@ boot log.
 - **Status:** fixed, loader 0.2.38. The Gateway's menu is still unexplained.
 
 ### KF-232 - Three timers did not fire, once, on one path of twenty-eight
+
+[#501](https://github.com/neogentrics/ReconOS/issues/501)
 
 - **Renumbered on the merge**, from KF-227. Both sessions reached
   KF-225 on 14 September without being able to see the other's
@@ -8563,6 +8780,8 @@ and this entry was two bugs wearing one number.
 
 ### KF-231 - kprintf reads the width on a number and throws it away
 
+[#502](https://github.com/neogentrics/ReconOS/issues/502)
+
 - **Renumbered on the merge**, from KF-226. Both sessions reached
   KF-225 on 14 September without being able to see the other's
   register. The rule applied was that what is already on the shared
@@ -8639,6 +8858,8 @@ and this entry was two bugs wearing one number.
   own commit; see the note on KF-230.)
 
 ### KF-230 - The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen
+
+[#503](https://github.com/neogentrics/ReconOS/issues/503)
 
 - **Renumbered on the merge**, from KF-225. Both sessions reached
   KF-225 on 14 September without being able to see the other's
@@ -8717,6 +8938,8 @@ and this entry was two bugs wearing one number.
 
 ### KF-224 - The machine reported six gigabytes of memory and has four
 
+[#504](https://github.com/neogentrics/ReconOS/issues/504)
+
 - **Found:** 14 September 2026, by a C program drawing it on the laptop's panel:
   `memory  6.0 GiB, 3.8 GiB free`. The firmware's own setup says
   `Total Memory 4096 MB`, and `Max TOLUD [2 GB]` -- so that machine's RAM sits
@@ -8783,6 +9006,11 @@ saved.
 draws it last on purpose; printing more text after it would paint over the
 program instead, which is the same fight from the other side. That one belongs in
 `KERNEL-WANTS.md`, where it already is.
+
+- **Status:** not a bug. Recorded because the question was asked and the answer
+  is worth not re-deriving -- but nothing here is broken, so it does not belong
+  in the Open list. Said in a Status line rather than only in the heading,
+  because the heading is prose and the checker reads Status lines.
 
 ### KF-226 — The boot thread never stopped being work, so every drive completion waited for a timer
 
@@ -8885,6 +9113,8 @@ program instead, which is the same fight from the other side. That one belongs i
 - **Fixed in** kernel 0.2.33. The shared mapping, like its two neighbours.
 
 ### KF-229 — Five self-tests pass exactly once per volume, inside the check written to catch that
+
+[#464](https://github.com/neogentrics/ReconOS/issues/464)
 
 > **It was six, and the sixth was written the same day.** The kernel session
 > added a directory self-test creating `/selftest-dir` and
