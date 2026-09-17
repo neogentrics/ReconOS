@@ -91,6 +91,11 @@ void gfx_menu_draw(unsigned count, const char *const *labels,
 		   unsigned selected, unsigned seconds, BOOLEAN paused);
 void gfx_report(BOOLEAN used);
 
+/* Repaints the countdown row alone. Redrawing the whole menu to change one
+ * digit made it flash once a second on a real panel (KF-245). */
+void gfx_menu_countdown(unsigned count, const char *const *labels,
+			unsigned seconds);
+
 /* How many entries the menu will hold. Shared so the graphical renderer can
  * size a screen against it without a second, drifting number. */
 #define MENU_MAX 8

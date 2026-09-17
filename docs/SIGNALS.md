@@ -309,10 +309,16 @@ See the section on the two tests below.
 ## Three things you need to do on merge
 
 **1. The version.** A new driver is a capability, so this is a **minor** bump:
-`0.2.46 → 0.3.0`. I have not touched `kernel/Makefile`. Joshua confirmed the
-model in chat on 16 September — major is an official release, minor is an
-update, patch is a fix — which is the rule already written above this file's
-signal section.
+**`0.2.49 → 0.3.0`**. `kernel/Makefile` is untouched here and reads 0.2.49,
+which is yours from the second merge — an earlier draft of this signal said
+`0.2.46 → 0.3.0` and that base is now stale, but the arithmetic is unchanged
+because a minor bump zeroes the patch either way. Joshua confirmed the model in
+chat on 16 September — major is an official release, minor is an update, patch
+is a fix.
+
+Worth being explicit since two drivers and two test suites arrive together:
+this is **one** minor bump, not one per driver. The capability is "the kernel
+can drive a network card that is not virtio", and it arrives once.
 
 **2. `NW` needs adding to `PREFIXES`, in one place, in two scripts.** It is
 **deliberately not added on this branch.** The Bluetooth session lifted the
@@ -337,22 +343,35 @@ sum.
 Verified against a simulated post-refactor checker (the script with `NW` taught
 to it): my entries produce **no new complaints**.
 
-## One thing that is not mine
+## The four register complaints — yours, and now gone
 
-`python scripts/make-issues.py --check` reports four problems on this branch:
+An earlier version of this signal flagged four `make-issues.py --check`
+problems as pre-existing rather than mine:
 
 ```
-KF-237 is open and the Open section does not say so
-KF-232 is open and the Open section does not say so
-KF-225 is open and the Open section does not say so
-KF-187 is named as open and its own entry says otherwise
+KF-237 / KF-232 / KF-225 open and the Open section does not say so
+KF-187 named as open and its own entry says otherwise
 ```
 
-All four are **byte-identical on `origin/kernel` at 71a4a5a before any change
-of mine** — checked by running the script against `git show HEAD:docs/BUGS.md`.
-Flagged so they are not read as arriving with this merge.
+**KF-247 fixed all four**, and this branch has merged that. The checker is
+clean on both sides now: `Open names all 10 open entries and no others` as the
+script stands, and `all 14 open entries and no others` when `NW` is taught to
+it. The extra four are mine — NW-003, NW-004, NW-005, NW-008.
+
+Resolving the Open list in this merge: **yours won on the KF set.** KF-187 came
+out because your sweep resolved it, and KF-232, KF-237 and KF-248 went in
+because they are yours to list. I added only the four NW lines. 10 + 4 = 14,
+and the header count says 14.
 
 ## Base
+
+**Merged `origin/kernel` twice: first at `95fd008` (0.2.48), then again at
+`6c93dae`** — KF-245 through KF-248, plus the tracker sweep. The matrix result
+below was re-run on the second merge, so it is a verdict on the current tree.
+
+`docs/BUGS.md` conflicted on the Open list this time and was resolved keeping
+both sides, as described above. `docs/SIGNALS.md` conflicted again for the
+same structural reason as before and was resolved to this branch's copy again.
 
 **Merged `origin/kernel` at `95fd008` (kernel 0.2.48).** KF-243, KF-244 and
 KF-242 are in this tree and the matrix run below was made against the merged
