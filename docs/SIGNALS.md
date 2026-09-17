@@ -121,8 +121,8 @@ as the warning was.
 `include/recon_loop.h` is the seam, with two implementations: a plain one that
 makes no system call, and a wayland one that wraps the compositor's. Six files
 and 8,155 lines came off the compositor with it — session, task manager,
-photos, player, clock, audio. **62 of 85 desktop sources now build with no libc
-under them**, up from 58.
+photos, player, clock, audio. **64 of 85 desktop sources now build with no libc
+under them**.
 
 **It needs nothing new from the kernel.** The plain implementation takes the
 time as an argument rather than reading a clock, and `SYS_TIME` is already
@@ -162,5 +162,5 @@ For completeness, so nothing here reads as a queue:
   25 other sources. That is mine.
 - Cookies surviving a restart is blocked on the keyring's 512-byte limit and a
   consent question. Also mine.
-- 62 of 85 desktop sources compile with no libc under them
+- 64 of 85 desktop sources compile with no libc under them
   (`./scripts/check-userland.sh`).
