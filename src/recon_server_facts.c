@@ -11,6 +11,42 @@
 #include "recon_ui.h"
 #include "recon_loop_wl.h"
 #include "recon_server_facts.h"
+#include "recon_clients.h"
+
+/*
+ * --- The windows the shell does not own ---
+ *
+ * A copy, front to back, rather than an iterator. `include/recon_clients.h`
+ * gives the argument in full; the short version is that minimizing a window
+ * sends it to the back of this list and focuses the next one, so a walk that
+ * reads each window's successor after the body has run follows whatever the
+ * body just did to the ordering. BG-210 is that fault, and this is the shape
+ * that cannot have it.
+ */
+int recon_clients(struct recon_server *server, struct recon_toplevel **out,
+        int max) {
+    if (server == NULL || out == NULL || max <= 0) {
+        return 0;
+    }
+
+    int count = 0;
+    struct recon_toplevel *toplevel;
+
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (count >= max) {
+            break;
+        }
+        out[count++] = toplevel;
+    }
+    return count;
+}
+
+int recon_client_count(struct recon_server *server) {
+    if (server == NULL) {
+        return 0;
+    }
+    return (int)wl_list_length(&server->toplevels);
+}
 
 struct recon_shell *recon_server_shell(struct recon_server *server) {
     return server != NULL ? server->shell : NULL;

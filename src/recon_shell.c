@@ -22,7 +22,8 @@
 #include <strings.h> /* strcasecmp */
 
 
-#include "recon_server.h"
+#include "recon_clients.h"
+#include "recon_server_facts.h"
 #include "recon_shell.h"
 #include "recon_appicon.h"
 #include "recon_appwin.h"
@@ -2983,9 +2984,11 @@ static void draw_taskbar(struct recon_shell *shell) {
     available -= CLOCK_WIDTH;
 
     int window_count = 0;
-    struct recon_toplevel *counted;
-    wl_list_for_each(counted, &shell->server->toplevels, link) {
-        if (recon_toplevel_desktop(counted) == shell->current_desktop) {
+    struct recon_toplevel *clients[RECON_CLIENTS_MAX];
+    int client_count = recon_clients(shell->server, clients, RECON_CLIENTS_MAX);
+
+    for (int i = 0; i < client_count; i++) {
+        if (recon_toplevel_desktop(clients[i]) == shell->current_desktop) {
             window_count++;
         }
     }
@@ -3060,8 +3063,18 @@ static void draw_taskbar(struct recon_shell *shell) {
         x += button_width + TASKBAR_PADDING;
     }
 
-    struct recon_toplevel *toplevel;
-    wl_list_for_each(toplevel, &shell->server->toplevels, link) {
+    /*
+     * The only caller that does not mind a cap: it stops at the edge of the
+     * screen two conditions down, which comes long before any plausible
+     * number of windows.
+     */
+    struct recon_toplevel *buttoned[RECON_CLIENTS_MAX];
+    int buttoned_count = recon_clients(shell->server, buttoned,
+        RECON_CLIENTS_MAX);
+
+    for (int i = 0; i < buttoned_count; i++) {
+        struct recon_toplevel *toplevel = buttoned[i];
+
         if (shell->button_count >= max_buttons) {
             break;
         }
@@ -5169,10 +5182,12 @@ void recon_shell_set_desktop(struct recon_shell *shell, int desktop) {
             recon_appwin_desktop(shell->apps[i]) == desktop);
     }
 
-    struct recon_toplevel *toplevel;
-    wl_list_for_each(toplevel, &shell->server->toplevels, link) {
-        recon_toplevel_set_desktop_showing(toplevel,
-            recon_toplevel_desktop(toplevel) == desktop);
+    struct recon_toplevel *clients[RECON_CLIENTS_MAX];
+    int client_count = recon_clients(shell->server, clients, RECON_CLIENTS_MAX);
+
+    for (int i = 0; i < client_count; i++) {
+        recon_toplevel_set_desktop_showing(clients[i],
+            recon_toplevel_desktop(clients[i]) == desktop);
     }
 
     /*
@@ -5574,10 +5589,13 @@ static void set_desktop_count(struct recon_shell *shell, bool many) {
             recon_appwin_set_slide(shell->apps[i],
                 from > 0 ? shell->screen_width : -shell->screen_width, 0);
         }
-        struct recon_toplevel *toplevel;
-        wl_list_for_each(toplevel, &shell->server->toplevels, link) {
-            if (recon_toplevel_desktop(toplevel) != 0) {
-                recon_toplevel_set_desktop(toplevel, 0);
+        struct recon_toplevel *clients[RECON_CLIENTS_MAX];
+        int client_count = recon_clients(shell->server, clients,
+            RECON_CLIENTS_MAX);
+
+        for (int i = 0; i < client_count; i++) {
+            if (recon_toplevel_desktop(clients[i]) != 0) {
+                recon_toplevel_set_desktop(clients[i], 0);
             }
         }
 
@@ -5889,10 +5907,25 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
                     recon_appwin_minimize(shell->apps[i]);
                 }
             }
-            struct recon_toplevel *toplevel;
-            wl_list_for_each(toplevel, &shell->server->toplevels, link) {
-                if (!recon_toplevel_is_minimized(toplevel)) {
-                    recon_toplevel_minimize(toplevel);
+            /*
+             * The copy earns itself here, and this is BG-210.
+             *
+             * `recon_toplevel_minimize` sends the window to the *back* of the
+             * compositor's list and focuses the next one still visible. A
+             * walk that reads a window's successor after the body has run
+             * therefore read the list head, and stopped -- so "minimize all
+             * windows" minimized exactly one client, while the loop above it
+             * minimized every built-in window correctly. Which is the worst
+             * shape a bug of this kind can have: it looks like client windows
+             * are the thing that does not work.
+             */
+            struct recon_toplevel *clients[RECON_CLIENTS_MAX];
+            int client_count = recon_clients(shell->server, clients,
+                RECON_CLIENTS_MAX);
+
+            for (int i = 0; i < client_count; i++) {
+                if (!recon_toplevel_is_minimized(clients[i])) {
+                    recon_toplevel_minimize(clients[i]);
                 }
             }
             set_focused_app(shell, -1);

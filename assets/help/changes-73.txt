@@ -1,6 +1,2 @@
-Gradients. A skin can ask for a surface to fade from one colour to
-another, which is what the Beacon skin needed to look like the era it is
-reaching for.
-
-A startup screen, with the Recon Towers mark and a count of what the
-system found as it came up.
+Skins can be installed. theme install takes a skin file and adds it to
+the list; theme remove takes it away.

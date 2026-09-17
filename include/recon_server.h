@@ -25,6 +25,8 @@
 
 /* The few things an application asks of the server, which are declared
  * where an application can reach them without reaching wayland. */
+#include "recon_clients.h"
+#include "recon_inject.h"
 #include "recon_server_facts.h"
 
 #include <wayland-server-core.h>
@@ -254,12 +256,6 @@ struct recon_toplevel {
     bool wants_server_decoration;
 };
 
-/* Implemented in main.c, used by the shell. */
-void recon_focus_toplevel(struct recon_toplevel *toplevel);
-void recon_spawn(struct recon_server *server, const char *command);
-
-/* The control layer, or NULL when ReconOS is running without one. */
-struct recon_control *recon_server_control(struct recon_server *server);
 void recon_quit(struct recon_server *server);
 
 /*
@@ -299,64 +295,18 @@ void recon_damage_all(struct recon_server *server);
  */
 int recon_background_luminance_at(struct recon_server *server, int x, int y);
 
-/* --- Synthetic input --- */
+/* --- Synthetic input is in include/recon_inject.h, included above --- */
 
 /*
- * Feed the system input as though it came from a mouse or keyboard.
+ * --- What a client window is, is not here ---
  *
- * This exists because a desktop cannot be tested by reasoning about it. Every
- * "the button does nothing" report needs a way to press that button and watch
- * what happens, and asking a person to click while somebody else reads the
- * code is not that. These go through exactly the same entry points as real
- * input -- not a shortcut around them -- so what they exercise is what a user
- * exercises.
+ * Everything the shell may do to a `recon_toplevel` moved to
+ * `include/recon_clients.h`, which names no wayland type and is included
+ * above. This header keeps the *definition* of the struct, because the
+ * compositor is what fills it in.
  *
- * Reached from the control socket via the `ui` command.
+ * That split is what took `src/recon_shell.c` -- 7,231 lines with not one
+ * mention of wayland in them -- off this header.
  */
-void recon_inject_pointer(struct recon_server *server, int x, int y);
-void recon_inject_button(struct recon_server *server, uint32_t button, bool pressed);
-void recon_inject_key(struct recon_server *server, uint32_t sym, uint32_t modifiers);
-
-/*
- * Turn the wheel where the pointer is.
- *
- * Positive is down, matching what the shell's own handler takes. Here for the
- * same reason the other three are: a path nothing can drive from outside is a
- * path that stops working without anybody noticing, which is exactly what had
- * happened to the Control Panel's lists.
- */
-void recon_inject_scroll(struct recon_server *server, double delta);
-
-/* Where the pointer is, so a test can check what it is about to click. */
-void recon_pointer_position(struct recon_server *server, int *x, int *y);
-
-/* Window state for client windows. Built-in windows have their own. */
-void recon_toplevel_minimize(struct recon_toplevel *toplevel);
-void recon_toplevel_restore(struct recon_toplevel *toplevel);
-void recon_toplevel_toggle_maximized(struct recon_toplevel *toplevel);
-void recon_toplevel_close(struct recon_toplevel *toplevel);
-bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel);
-
-/* A client window's desktop, kept the same way a built-in window's is. Its
- * surface is not the shell's to draw, but its place in the scene is the
- * shell's to switch off, which is all a desktop needs. */
-void recon_toplevel_set_desktop(struct recon_toplevel *toplevel, int desktop);
-int recon_toplevel_desktop(struct recon_toplevel *toplevel);
-void recon_toplevel_set_desktop_showing(struct recon_toplevel *toplevel,
-    bool showing);
-const char *recon_toplevel_title(struct recon_toplevel *toplevel);
-
-/*
- * What the client calls itself: "org.gnome.Calculator", "foot".
- *
- * Empty rather than NULL when a client has not said, so a caller can pass it
- * straight on without asking. It is what recon_appicon turns into a picture,
- * and it is the only thing a Wayland client offers that identifies the
- * program rather than the window -- a title changes with the document.
- */
-const char *recon_toplevel_app_id(struct recon_toplevel *toplevel);
-bool recon_toplevel_is_focused(struct recon_toplevel *toplevel);
-/* The process behind a client window, or 0 if it cannot be determined. */
-int recon_toplevel_pid(struct recon_toplevel *toplevel);
 
 #endif

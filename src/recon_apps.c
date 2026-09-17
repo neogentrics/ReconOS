@@ -8,13 +8,13 @@
 #include <string.h>
 #include <time.h>
 
-#include <wayland-server-core.h>
 
 #include "recon_apps.h"
 #include "recon_error.h"
 #include "recon_appwin.h"
 #include "recon_procinfo.h"
-#include "recon_server.h"
+#include "recon_clients.h"
+#include "recon_server_facts.h"
 #include "recon_shell.h"
 
 #define APPS_MAX 64
@@ -174,7 +174,7 @@ int recon_apps_refresh(void) {
      * not removed when closed -- an application that is not running is not in
      * the table, which is the same rule a client follows.
      */
-    struct recon_shell *shell = g_server->shell;
+    struct recon_shell *shell = recon_server_shell(g_server);
     int builtin = recon_shell_app_count(shell);
     for (int i = 0; i < builtin; i++) {
         struct recon_appwin *win = recon_shell_app_at(shell, i);
@@ -194,9 +194,13 @@ int recon_apps_refresh(void) {
         }
     }
 
-    struct recon_toplevel *toplevel;
-    wl_list_for_each(toplevel, &g_server->toplevels, link) {
+    struct recon_toplevel *clients[RECON_CLIENTS_MAX];
+    int client_count = recon_clients(g_server, clients, RECON_CLIENTS_MAX);
+
+    for (int i = 0; i < client_count; i++) {
+        struct recon_toplevel *toplevel = clients[i];
         struct app_entry *entry = entry_for_toplevel(toplevel);
+
         if (entry == NULL) {
             recon_apps_add_client(toplevel);
             entry = entry_for_toplevel(toplevel);

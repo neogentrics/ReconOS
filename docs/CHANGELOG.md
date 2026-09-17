@@ -9,6 +9,129 @@ way for the two to disagree.
 
 ---
 
+## v0.4.62 — seven thousand lines held by one include
+
+**67 of 67 desktop sources build with no libc under them**, up from 64. What
+does not build freestanding went from 23,549 lines to 12,363 — and eleven
+thousand of that came off in a single header split.
+
+`scripts/port-blockers.sh` prints what stops each source and how many lines it
+holds, and its advice is to look for *a small marker count beside a large line
+count*. Its run at v0.4.61 had a row that could not be read any other way:
+
+```
+recon_shell.c   7231 lines   0 markers   wayland-server-core.h
+```
+
+The largest file in the desktop, **not one mention of wayland in it**, held by
+a single `#include "recon_server.h"`. `recon_cmd.c` was the same shape at
+3,626 lines and `recon_apps.c` at 375.
+
+### Fifty-five calls and not one field access
+
+What crosses that include is a real interface, which is why this is a header
+rather than a deletion — but it is an interface the shell only ever *calls*.
+Measured before anything was written: fifteen functions, fifty-five calls, two
+types named, and **zero reads of a field on either of them.**
+
+Thirty-two of those calls were already covered by
+`include/recon_server_facts.h`, which v0.4.46 created for this exact shape. The
+rest are a different subject, and now have a header of their own:
+`include/recon_clients.h`, *the windows the shell does not own*.
+
+That asymmetry is why `struct recon_toplevel` stays opaque. A built-in window
+is the shell's to take apart. A client's window is somebody else's, the shell
+cannot draw a pixel of it, and a header that showed the fields would be
+inviting it to do something it must not.
+
+### Two more headers, for the same reason
+
+`include/recon_inject.h` — synthetic input, the four functions a test harness
+uses to pretend to be a mouse and a keyboard. Pretending to be a mouse is not
+a wayland idea; a position is two integers.
+
+And then `recon_cmd.c`'s blocker changed rather than disappearing: it included
+`<linux/input-event-codes.h>` for **two constants**. Once the compositor's
+header was off it, those two numbers were the only thing left holding 3,626
+lines. `recon_inject.h` writes them down itself, and `src/main.c` — the one
+file that sees both these and Linux's — holds a `_Static_assert` on each, so a
+disagreement is a build failure rather than a right-click that does nothing.
+
+### The seam found a bug, which is the point of drawing one
+
+**BG-210 — "Show Desktop" minimized exactly one client window.**
+
+Replacing `wl_list_for_each` meant asking what shape the replacement had to be,
+and that made a question unavoidable: does anything in these loop bodies *move*
+a window within the compositor's list? It does.
+`recon_toplevel_minimize` sends the window to the back and focuses the next one
+still visible. `wl_list_for_each` reads a window's successor **after** the body
+has run — so the walk read the successor of a window that was now last, found
+the list head, and stopped.
+
+The loop immediately above it minimizes every built-in window correctly,
+because it is a plain indexed loop over an array. So from the outside the fault
+looks like **client windows are the thing that does not minimize**, which is
+the worst shape a bug of this kind can have: it points away from itself. And it
+needs two clients to show at all, which is presumably how it survived.
+
+So `recon_clients()` hands out a **copy**, taken before anything happens. Not a
+matter of taste: a copy cannot be steered by what the body does.
+
+### And then it was run, twice
+
+A claim about the semantics of somebody else's linked list is a claim reached
+by reading, and this project settles those by asking the machine.
+`scripts/show-desktop-check.sh` starts a live headless desktop, gives it two
+real `decor_client` windows, chooses the menu entry through the control socket
+and reads `windows` back:
+
+| the walk | what happened |
+| --- | --- |
+| `wl_list_for_each`, put back and rebuilt | `One` running, `Two` minimized |
+| `recon_clients` | both minimized |
+
+The first row is the one that matters. The fix working shows the code works
+now; only the old walk, run, shows there was ever a bug.
+
+### The crash standing behind it
+
+**BG-211 — shutting down with any client window open was a use-after-free.**
+
+Every one of those runs ended in a segfault, with the old walk and the new one
+alike — so it was not the change being tested. It had gone unseen because
+`scripts/look.sh` had never had a client window to close.
+
+`main.c` called `wl_display_destroy_clients()` **second to last**, after the
+shell, the keyring, the users, the network, the theme, the fonts, the registry
+and the filesystem had all been finished. That call does not merely free
+memory: it unmaps every client surface, and each unmap fires `toplevel_unmap`,
+which asks the shell to redraw its taskbar.
+
+The address sanitizer said so in one report: a read of 8 bytes, 88 bytes into a
+4,944-byte region, freed by `recon_shell_destroy` twenty-six lines earlier.
+gdb was tried first and was the wrong instrument — its inferior's stdout is a
+pipe, so the crash report and the tail of the log both sat in a buffer nobody
+flushed.
+
+The dangling shell was not the whole of it. Those handlers can reach the theme,
+the fonts and the filesystem too, and all of those were finished by then; the
+shell is just what happened to be read first. **The clients go first now**,
+immediately after the control socket closes — a client window is part of the
+running system, and the time to end one is while the system is still standing.
+
+A crash at shutdown also costs the next start: no clean-stop marker is written,
+so the following run reports an unfinished session and blames a run that did
+nothing wrong.
+
+### One more latent fault the removal exposed
+
+`include/recon_shell.h` uses `uint32_t` and never included `<stdint.h>`. It had
+been getting it through `recon_server.h` all along, from a file that had no
+business supplying it.
+
+---
+
 ## v0.4.61 — what a receipt is for, and a gate in front of `dlopen`
 
 **Nothing checked what the running system loaded.** A package's signature is

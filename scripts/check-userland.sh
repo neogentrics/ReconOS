@@ -168,6 +168,18 @@ fi
 # desktop could compile for it at all.
 # Added 15 September 2026 with userland/include/limits.h, and with third_party
 # told to the compiler as vendored rather than as ours.
+# Added 17 September 2026 with include/recon_clients.h: recon_shell.c,
+# recon_cmd.c and recon_apps.c. They were the three largest sources in the
+# desktop that did not build freestanding and held 11,236 lines between them --
+# recon_shell.c alone being 7,231 with not one mention of wayland in it. What
+# held all three was a single include of recon_server.h, for a handful of calls
+# and two pointers they never looked inside. recon_cmd.c wanted one thing more:
+# two button codes out of Linux's input-event-codes.h, which recon_inject.h now
+# writes down itself and main.c holds a _Static_assert against.
+#
+# Note for whoever adds the next one: this list is split on whitespace, so a
+# "#" inside the string below is not a comment and every word on the line
+# becomes a file the check looks for. Notes go here, above it.
 FILES="
 src/recon_expr.c
 src/recon_url.c
@@ -238,6 +250,10 @@ src/recon_error.c
 
 src/recon_ocr_match.c
 src/recon_stb.c
+
+src/recon_shell.c
+src/recon_cmd.c
+src/recon_apps.c
 "
 
 out=$(mktemp -d)

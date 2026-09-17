@@ -39,10 +39,11 @@
 #include "recon_wallpaper.h"
 #include "recon_access.h"
 #include "recon_theme.h"
-#include "recon_server.h"
+#include "recon_clients.h"
+#include "recon_inject.h"
+#include "recon_server_facts.h"
 #include "recon_shell.h"
 
-#include <linux/input-event-codes.h> /* BTN_LEFT, BTN_RIGHT */
 
 #define OUTPUT_MAX 16384
 #define MAX_ARGS 16
@@ -757,7 +758,7 @@ static void show_rule(struct recon_cmd_session *s, int index,
  */
 static void cmd_blank(struct recon_cmd_session *s, int argc, char **argv) {
     struct recon_server *server = s->server;
-    if (server == NULL || server->shell == NULL) {
+    if (server == NULL || recon_server_shell(server) == NULL) {
         out(s, "  No desktop to blank.\n");
         return;
     }
@@ -768,16 +769,16 @@ static void cmd_blank(struct recon_cmd_session *s, int argc, char **argv) {
      * changes one -- but `reg set` does not, so a setting written that way
      * would be reported here as whatever it was at startup.
      */
-    recon_shell_blank_reload(server->shell);
+    recon_shell_blank_reload(recon_server_shell(server));
 
     if (argc >= 2 && strcasecmp(argv[1], "now") == 0) {
-        recon_shell_blank(server->shell);
+        recon_shell_blank(recon_server_shell(server));
         out(s, "  Blanked.\n");
         return;
     }
 
     if (argc >= 2 && strcasecmp(argv[1], "wake") == 0) {
-        out(s, recon_shell_note_input(server->shell)
+        out(s, recon_shell_note_input(recon_server_shell(server))
             ? "  Woken.\n" : "  It was not blanked.\n");
         return;
     }
@@ -795,7 +796,7 @@ static void cmd_blank(struct recon_cmd_session *s, int argc, char **argv) {
             lock ? "ask for the password" : "straight back");
     }
     out(s, "  Now:              %s\n\n",
-        recon_shell_is_blanked(server->shell) ? "blanked" : "awake");
+        recon_shell_is_blanked(recon_server_shell(server)) ? "blanked" : "awake");
     out(s, "  blank now | blank wake\n");
 }
 
@@ -1379,11 +1380,11 @@ static void cmd_copy(struct recon_cmd_session *s, int argc, char **argv) {
  */
 static void cmd_dialog(struct recon_cmd_session *s, int argc, char **argv) {
     struct recon_server *server = s->server;
-    if (server == NULL || server->shell == NULL) {
+    if (server == NULL || recon_server_shell(server) == NULL) {
         out(s, "No shell is running.\n");
         return;
     }
-    struct recon_shell *shell = server->shell;
+    struct recon_shell *shell = recon_server_shell(server);
 
     /* --- What is being asked --- */
 
@@ -1479,8 +1480,8 @@ static void cmd_dialog(struct recon_cmd_session *s, int argc, char **argv) {
          * aimed by hand.
          */
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
         out(s, "Pressed '%s' at %d,%d.\n", argv[2], x, y);
         return;
     }
@@ -1530,10 +1531,10 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         int x = atoi(argv[2]);
         int y = atoi(argv[3]);
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
         out(s, "double clicked at %d %d\n", x, y);
         return;
     }
@@ -1572,7 +1573,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
             return;
         }
 
-        uint32_t button = (strcasecmp(what, "rclick") == 0) ? BTN_RIGHT : BTN_LEFT;
+        uint32_t button = (strcasecmp(what, "rclick") == 0) ? RECON_BUTTON_RIGHT : RECON_BUTTON_LEFT;
         recon_inject_button(server, button, true);
         recon_inject_button(server, button, false);
         out(s, "%s at %d %d\n", what, x, y);
@@ -1582,7 +1583,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
     if (strcasecmp(what, "press") == 0 || strcasecmp(what, "release") == 0) {
         bool pressed = (strcasecmp(what, "press") == 0);
         uint32_t button = (argc > 2 && strcasecmp(argv[2], "right") == 0)
-            ? BTN_RIGHT : BTN_LEFT;
+            ? RECON_BUTTON_RIGHT : RECON_BUTTON_LEFT;
         recon_inject_button(server, button, pressed);
         out(s, "%s\n", what);
         return;
@@ -1631,7 +1632,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (strcasecmp(what, "app") == 0) {
-        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        struct recon_appwin *win = recon_shell_focused_app(recon_server_shell(server));
         if (win == NULL) {
             out(s, "No built-in window has focus.\n");
             return;
@@ -1645,7 +1646,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (strcasecmp(what, "hits") == 0) {
-        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        struct recon_appwin *win = recon_shell_focused_app(recon_server_shell(server));
         if (win == NULL) {
             out(s, "No built-in window has focus.\n");
             return;
@@ -1670,7 +1671,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
             out(s, "Usage: ui drag <region id> <dx> <dy>\n");
             return;
         }
-        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        struct recon_appwin *win = recon_shell_focused_app(recon_server_shell(server));
         if (win == NULL) {
             out(s, "No built-in window has focus.\n");
             return;
@@ -1687,12 +1688,12 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         int dy = atoi(argv[4]);
 
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
         /* A step in the middle, because a drag that only ever reports its
          * endpoint would not exercise the code that follows the pointer. */
         recon_inject_pointer(server, x + dx / 2, y + dy / 2);
         recon_inject_pointer(server, x + dx, y + dy);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
 
         out(s, "dragged region %u from %d,%d by %d,%d\n", id, x, y, dx, dy);
         return;
@@ -1703,7 +1704,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
             out(s, "Usage: ui hit <region id>\n");
             return;
         }
-        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        struct recon_appwin *win = recon_shell_focused_app(recon_server_shell(server));
         if (win == NULL) {
             out(s, "No built-in window has focus.\n");
             return;
@@ -1717,8 +1718,8 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
         out(s, "clicked region %u at %d,%d\n", id, x, y);
         return;
     }
@@ -1741,14 +1742,14 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         int x = 0, y = 0;
-        if (!recon_shell_dialog_button_at(server->shell, label, &x, &y)) {
+        if (!recon_shell_dialog_button_at(recon_server_shell(server), label, &x, &y)) {
             out(s, "No dialog button called '%s' is showing.\n", label);
             return;
         }
 
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
         out(s, "answered '%s' at %d,%d\n", label, x, y);
         return;
     }
@@ -1772,14 +1773,14 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         int x = 0, y = 0;
-        if (!recon_shell_account_at(server->shell, name, &x, &y)) {
+        if (!recon_shell_account_at(recon_server_shell(server), name, &x, &y)) {
             out(s, "The login screen is not offering '%s'.\n", name);
             return;
         }
 
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
         out(s, "chose '%s' at %d,%d\n", name, x, y);
         return;
     }
@@ -1807,17 +1808,17 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
          * every test do that with a click at a guessed coordinate was one
          * more thing to get wrong on a screen of a different size.
          */
-        recon_shell_open_menu(server->shell);
+        recon_shell_open_menu(recon_server_shell(server));
 
         int x = 0, y = 0;
-        if (!recon_shell_menu_entry_at(server->shell, label, &x, &y)) {
+        if (!recon_shell_menu_entry_at(recon_server_shell(server), label, &x, &y)) {
             out(s, "The Start menu is not showing '%s'.\n", label);
             return;
         }
 
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
         out(s, "chose '%s' at %d,%d\n", label, x, y);
         return;
     }
@@ -1841,14 +1842,14 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         int x = 0, y = 0;
-        if (!recon_shell_context_entry_at(server->shell, label, &x, &y)) {
+        if (!recon_shell_context_entry_at(recon_server_shell(server), label, &x, &y)) {
             out(s, "No menu entry called '%s' is showing.\n", label);
             return;
         }
 
         recon_inject_pointer(server, x, y);
-        recon_inject_button(server, BTN_LEFT, true);
-        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, RECON_BUTTON_LEFT, true);
+        recon_inject_button(server, RECON_BUTTON_LEFT, false);
         out(s, "chose '%s' at %d,%d\n", label, x, y);
         return;
     }
@@ -1888,7 +1889,7 @@ static void cmd_state(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
     char buffer[4096];
     buffer[0] = '\0';
-    recon_shell_describe(s->server->shell, buffer, sizeof(buffer));
+    recon_shell_describe(recon_server_shell(s->server), buffer, sizeof(buffer));
     out(s, "%s", buffer);
 }
 
@@ -2129,7 +2130,7 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
          * changes on screen until something asks. Without this the setting is
          * stored, is correct, and is invisible.
          */
-        recon_shell_restyle(s->server->shell);
+        recon_shell_restyle(recon_server_shell(s->server));
 
         const char *now = recon_tint_current();
         if (*now == '\0') {
@@ -2249,7 +2250,7 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
 
         /* The skin may have been the one on screen, in which case removing it
          * put the default on and everything drawn needs to hear about it. */
-        recon_shell_restyle(s->server->shell);
+        recon_shell_restyle(recon_server_shell(s->server));
         out(s, "Removed. The skin in use is '%s'.\n", recon_theme_current());
         return;
     }
@@ -2260,13 +2261,13 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     /* The whole desktop, not just what is in front. */
-    recon_shell_restyle(s->server->shell);
+    recon_shell_restyle(recon_server_shell(s->server));
     out(s, "Skin is now '%s'.\n", recon_theme_current());
 }
 
 /* Reading settings: spacing, and the font. */
 static void cmd_access(struct recon_cmd_session *s, int argc, char **argv) {
-    struct recon_shell *shell = s->server->shell;
+    struct recon_shell *shell = recon_server_shell(s->server);
 
     if (argc < 2) {
         const char *font = recon_registry_get(RECON_REG_USER,
@@ -2380,7 +2381,7 @@ static void cmd_session(struct recon_cmd_session *s, int argc, char **argv) {
 
     char buffer[512];
     buffer[0] = '\0';
-    recon_shell_describe_session(s->server->shell, buffer, sizeof(buffer));
+    recon_shell_describe_session(recon_server_shell(s->server), buffer, sizeof(buffer));
     out(s, "%s", buffer);
 }
 
@@ -2472,7 +2473,7 @@ static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (strcasecmp(argv[1], "signout") == 0) {
-        recon_shell_sign_out(s->server->shell);
+        recon_shell_sign_out(recon_server_shell(s->server));
         out(s, "Signed out.\n");
         return;
     }
@@ -2524,7 +2525,7 @@ static void cmd_icons(struct recon_cmd_session *s, int argc, char **argv) {
      * nothing on screen changes until something else happens to clear it. */
     recon_icons_forget();
     if (s->server != NULL) {
-        recon_shell_refresh(s->server->shell);
+        recon_shell_refresh(recon_server_shell(s->server));
     }
 
     if (written == 0) {
@@ -2538,7 +2539,7 @@ static void cmd_icons(struct recon_cmd_session *s, int argc, char **argv) {
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
-    struct recon_shell *shell = s->server->shell;
+    struct recon_shell *shell = recon_server_shell(s->server);
     int count = 0;
 
     int builtin = recon_shell_app_count(shell);
@@ -2552,12 +2553,14 @@ static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
         count++;
     }
 
-    struct recon_toplevel *toplevel;
-    wl_list_for_each(toplevel, &s->server->toplevels, link) {
+    struct recon_toplevel *clients[RECON_CLIENTS_MAX];
+    int client_count = recon_clients(s->server, clients, RECON_CLIENTS_MAX);
+
+    for (int i = 0; i < client_count; i++) {
         out(s, "  %-28s %-10s client (pid %d)\n",
-            recon_toplevel_title(toplevel),
-            recon_toplevel_is_minimized(toplevel) ? "minimized" : "running",
-            recon_toplevel_pid(toplevel));
+            recon_toplevel_title(clients[i]),
+            recon_toplevel_is_minimized(clients[i]) ? "minimized" : "running",
+            recon_toplevel_pid(clients[i]));
         count++;
     }
 
@@ -2567,7 +2570,7 @@ static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
 }
 
 static void cmd_apps(struct recon_cmd_session *s, int argc, char **argv) {
-    struct recon_shell *shell = s->server->shell;
+    struct recon_shell *shell = recon_server_shell(s->server);
 
     /*
      * What is installed, not what happens to have a window. Applications are
@@ -3070,7 +3073,7 @@ static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
         } else {
             out(s, "Installed.\n");
         }
-        recon_shell_restyle(s->server->shell);
+        recon_shell_restyle(recon_server_shell(s->server));
         return;
     }
 
@@ -3258,7 +3261,7 @@ static void cmd_uninstall(struct recon_cmd_session *s, int argc, char **argv) {
             return;
         }
         out(s, "Removed '%s' and everything it installed.\n", argv[1]);
-        recon_shell_restyle(s->server->shell);
+        recon_shell_restyle(recon_server_shell(s->server));
         return;
     }
 
@@ -3427,7 +3430,7 @@ static void cmd_upgrade(struct recon_cmd_session *s, int argc, char **argv) {
     } else {
         out(s, "Upgraded.\n");
     }
-    recon_shell_restyle(s->server->shell);
+    recon_shell_restyle(recon_server_shell(s->server));
 }
 
 static void cmd_shutdown(struct recon_cmd_session *s, int argc, char **argv) {

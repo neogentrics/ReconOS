@@ -1,5 +1,10 @@
 /*
- * The few things an application asks the server.
+ * The things something asks the server without including the compositor.
+ *
+ * It began as "the few things an *application* asks", and that is still most
+ * of what is here -- but the command interpreter now asks two of these, and a
+ * header whose opening sentence has stopped describing it is the thing this
+ * project keeps finding in other people's code.
  *
  * --- why this file exists -------------------------------------------------
  *
@@ -32,6 +37,7 @@
 #ifndef RECON_SERVER_FACTS_H
 #define RECON_SERVER_FACTS_H
 
+struct recon_control;
 struct recon_server;
 struct recon_shell;
 
@@ -176,5 +182,24 @@ struct recon_loop *recon_server_loop(struct recon_server *server);
  */
 void recon_quit(struct recon_server *server);
 void recon_restart(struct recon_server *server);
+
+/*
+ * Run a program.
+ *
+ * Asked for by the Start menu, by the command interpreter's `spawn`, and by
+ * anything that opens a file with something other than a built-in window. It
+ * forks and execs; nothing here waits for it or learns whether it worked,
+ * because the thing that starts a program is not the thing that watches it.
+ */
+void recon_spawn(struct recon_server *server, const char *command);
+
+/*
+ * The control layer, or NULL when ReconOS is running without one.
+ *
+ * NULL is ordinary rather than exceptional: the socket is optional, and a
+ * desktop running without one works in every respect except being driven from
+ * outside.
+ */
+struct recon_control *recon_server_control(struct recon_server *server);
 
 #endif /* RECON_SERVER_FACTS_H */

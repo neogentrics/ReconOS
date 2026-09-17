@@ -1331,6 +1331,16 @@ static bool dispatch_button(struct recon_server *server, uint32_t button,
         return false;
     }
 
+    /*
+     * Held against `include/recon_inject.h`, which writes these numbers down
+     * for the files that must not include Linux's header. This is the only
+     * file that sees both, so it is the only place the two can be compared --
+     * and a silent disagreement here is a right-click that does nothing.
+     */
+    _Static_assert(RECON_BUTTON_LEFT == BTN_LEFT, "button codes disagree");
+    _Static_assert(RECON_BUTTON_RIGHT == BTN_RIGHT, "button codes disagree");
+    _Static_assert(RECON_BUTTON_MIDDLE == BTN_MIDDLE, "button codes disagree");
+
     if (button == BTN_RIGHT) {
         /* Right click opens a context menu where there is one to open. */
         return recon_shell_handle_right_click(server->shell,
@@ -3358,12 +3368,50 @@ int main(int argc, char **argv) {
     recon_control_destroy(server.control);
 
     /*
+     * --- Everybody else's windows go first, while the system is still up ---
+     *
+     * This used to be two lines from the end, after the shell, the keyring,
+     * the theme, the fonts, the registry and the filesystem had all been
+     * taken apart. **BG-211.**
+     *
+     * `wl_display_destroy_clients` does not simply free memory: it unmaps
+     * every client surface, and each unmap fires this file's own
+     * `toplevel_unmap`, which asks the shell to redraw its taskbar. By then
+     * the shell had been freed twenty-six lines earlier, and the address
+     * sanitizer said so in one report -- a read of eight bytes eighty-eight
+     * bytes into a 4,944-byte region freed by `recon_shell_destroy`.
+     *
+     * The dangling shell is the part that crashed, and it is not the whole of
+     * what was wrong: those handlers can reach the theme, the fonts and the
+     * filesystem too, and every one of those was already finished. A client
+     * window is part of the running system, and the time to end one is while
+     * the system is still standing.
+     *
+     * It is deliberately before `recon_installed_apps_close_windows()` as
+     * well: the same argument applies twice over to a window whose code
+     * arrived in a module.
+     */
+    wl_display_destroy_clients(server.wl_display);
+
+    /*
      * The windows first, then the shell. The registry owns them now, and it
      * is the only thing that can end them -- the shell would have left them
      * alive, which is right for a restart and a leak at shutdown.
      */
     recon_installed_apps_close_windows();
     recon_shell_destroy(server.shell);
+
+    /*
+     * And nothing is left holding it.
+     *
+     * Belt as well as braces: the ordering above is what stops the crash, and
+     * a freed pointer left in a struct that outlives it is a second one
+     * waiting for the next late callback. A toplevel carries ten
+     * `wl_listener`s and unmap was only the one that happened to fire --
+     * `recon_shell_refresh` and its neighbours all check for NULL, so what
+     * they find now is nothing rather than freed memory.
+     */
+    server.shell = NULL;
     /*
      * The key is erased rather than left for the process to take with it.
      *
@@ -3389,7 +3437,7 @@ int main(int argc, char **argv) {
      */
     recon_error_end_run();
     recon_fs_finish();
-    wl_display_destroy_clients(server.wl_display);
+    /* The clients went at the top of this sequence; see BG-211 up there. */
     wl_display_destroy(server.wl_display);
 
     /*

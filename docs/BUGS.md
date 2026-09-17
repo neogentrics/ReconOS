@@ -8804,6 +8804,73 @@ regenerated after that tree is pushed.
   match the build's warning flags is the change that stopped it passing any.
 
 
+### BG-210 — "Show Desktop" minimized exactly one client window
+
+- **Found in** v0.4.62, while moving `src/recon_shell.c` off the compositor's
+  header. Not by reading the handler: by asking what shape the replacement for
+  `wl_list_for_each` had to be, which made the ordering question unavoidable.
+- **Was** the taskbar's Show Desktop walked `server->toplevels` with
+  `wl_list_for_each` and called `recon_toplevel_minimize` on each window. That
+  macro reads a window's successor **after** the body has run, and
+  `recon_toplevel_minimize` **moves the window to the back of that same list**
+  and gives the focus to the next one still visible. So the walk read the
+  successor of a window that was now last — the list head — and stopped.
+- **What it costs** One client window minimizes and the rest do not. The loop
+  immediately above it minimizes every *built-in* window correctly, because it
+  is a plain indexed loop over an array, so from the outside the fault looks
+  like **client windows are the thing that does not minimize** — which is the
+  worst shape a bug of this kind can have, because it points away from itself.
+- **Why it survived** it needs two clients to show at all. With one open, the
+  walk minimizes it and stopping early costs nothing.
+- **Fixed in** v0.4.62. `recon_clients()` in `include/recon_clients.h` hands
+  out a **copy** of the list, taken before anything happens. A copy cannot be
+  steered by what the body does, whatever that is — which matters beyond this
+  one handler, since `recon_toplevel_restore` reorders too.
+- **What holds it** `scripts/show-desktop-check.sh`: a live headless desktop,
+  two real `decor_client` windows, the menu entry chosen through the control
+  socket, and `windows` read back. Run against the old walk it reports one
+  client still running; against the copy, none. The old walk was put back and
+  rebuilt to get that first number rather than inferred.
+
+---
+
+### BG-211 — Shutting down with any client window open was a use-after-free
+
+- **Found in** v0.4.62, by the segfault at the end of the run that proved
+  BG-210. It happened with the old walk and the new one alike, so it was not
+  the change being tested — it was a second fault standing behind it, and it
+  had gone unseen because `scripts/look.sh` had never had a client to open.
+- **Was** `main.c` ran its whole teardown and called
+  `wl_display_destroy_clients()` **second to last**, after the shell, the
+  keyring, the users, the network, the theme, the fonts, the registry and the
+  filesystem had all been finished. That call does not merely free memory: it
+  unmaps every client surface, and each unmap fires `toplevel_unmap`, which
+  asks the shell to redraw its taskbar.
+- **What it costs** a crash on every shutdown with an application open, which
+  is most of them. It also writes no clean-stop marker, so the *next* start
+  reports an unfinished session and blames the run that did nothing wrong.
+- **What said so** the address sanitizer, in one report and without a
+  debugger: a read of 8 bytes at 88 bytes into a 4,944-byte region, freed by
+  `recon_shell_destroy` at `main.c:3376`, read by `recon_shell_refresh` from
+  `toplevel_unmap` by way of `wl_display_destroy_clients` at `main.c:3402`.
+  gdb was tried first and was the wrong instrument: its inferior's stdout is a
+  pipe, so the crash report and the last of the log both sat in a buffer that
+  was never flushed.
+- **And the dangling shell was not the whole of it.** Those handlers can reach
+  the theme, the fonts and the filesystem as well, and every one of those was
+  already finished by the time they ran. The shell is only what happened to be
+  read first.
+- **Fixed in** v0.4.62. The clients go **first**, immediately after the
+  control socket closes and before anything else is taken apart — a client
+  window is part of the running system, and the time to end one is while the
+  system is still standing. `server.shell` is set to NULL afterwards as well: a
+  toplevel carries ten `wl_listener`s and unmap is only the one that fired.
+- **What holds it** the same `scripts/show-desktop-check.sh` run, which now
+  exits cleanly, and an address-sanitized build of the compositor driven
+  through the same sequence, which reports nothing.
+
+---
+
 ### BG-209 — A file input was drawn as a text box, and its form sent in the wrong shape
 
 [#482](https://github.com/neogentrics/ReconOS/issues/482)
