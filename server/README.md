@@ -29,7 +29,7 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.21.0 |
+| **Version** | 0.21.1 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
 | **Checks** | 736 across eighteen suites, by `scripts/server-tests.sh` |
@@ -63,7 +63,7 @@ architecture document asks for:
 | route | what it answers |
 |---|---|
 | `GET /` | the dashboard — what this machine is, what it has done, what its clock and services are doing, and a form that renames it |
-| `GET /api/status` | the same facts as JSON, from the same structure |
+| `GET /api/status` | the same facts as JSON, from the same structure — including the clock offset with its uncertainty |
 | `GET /health` | `ok`, for something that is not a person |
 | `GET /api/services` | every registered service: state, polls, faults, restarts |
 | `GET /api/log` | the last 64 requests answered, and how many were dropped |
@@ -148,7 +148,7 @@ project builds with, and following them left two suites unbuildable.
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 93 | one request, and every way of writing two |
+| `server_http` | 94 | one request, and every way of writing two |
 | `server_http_serve` | 43 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
@@ -255,6 +255,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.21.1** | **The README claimed 736 checks and its own table summed to 735.** The userland session sent word, through Joshua, about blunt search-and-replace edits — and named the gap as doing the careful thing for code and not for `docs/`. Adding the table up took a minute: one row said 93 where the suite had grown to 94, a number quoted in the README, the board and three commit messages. My code edits all asserted their match count; the documentation edits beside them did not, **so the discipline was applied where a compiler would have caught the mistake anyway and dropped where nothing would.** `scripts/server-tests.sh` now checks the README against the run it just did — every row, the total, the suite count — and that uncovered a latent fault of its own: the runner had been parsing CRLF target names out of `CMakeLists.txt` since the day it was written, carrying a trailing carriage return that only mattered once a second reader compared it against text. Also: `/api/status` now reports the clock, which the dashboard had been showing alone for a version — in a structure whose stated purpose is that the two cannot disagree. VF-024. |
 | **0.21.0** | **The console works in a browser again, and had not since 0.17.0.** The dashboard has offered a rename form since long before there was a guard; the moment `POST /api/name` became guarded, that form answered 401 to every submission — on the one page a person actually looks at. Three versions of testing missed it because every check was `curl -H`, which is the client that *can* send a header. **Testing the API is not testing the console.** Fixed by accepting the token from a form field as well: the policy hook now gets the request body, which it needed and did not have. A token in a **query string** is still refused — that is logged, sent in `Referer` and kept in history, while a POST body is none of those. The dashboard also shows what the machine has learned to do: services running, the clock offset with its real uncertainty, and whether writes are guarded. VF-022, VF-023. |
 | **0.20.0** | **This machine knows how wrong its clock is — and found out its clock cannot say.** An NTP client, the same connected-datagram shape as the resolver, and the supervisor's long-awaited **second service**: adding it changed nothing in the main loop, which is what that shape was built for. It resolves `time.cloudflare.com` with this role's own resolver, which is the first thing here to use one built capability to reach another. **The danger is in believing the reply** — a clock is what every expiry is read against, so the server must echo the exact 64-bit timestamp sent, the same shape as the DNS identifier. Watched failing at 9 of 41 against a parser that takes the server's word, and every one of the nine returned `NTP_OK` where a refusal belonged. Then the line it printed said **round trip 0 ms** to a server thousands of kilometres away, which cannot be true: `SYS_WALLTIME` is declared in nanoseconds and counts whole seconds. The broken number was the one nobody was looking at; the number under test was the one hiding it. VF-021. |
 | **0.19.1** | **Outbound TCP had never worked, and it was two bytes of arithmetic.** Every SYN this machine ever sent carried a wrong TCP checksum, so every correct peer discarded it in silence — no SYN+ACK, not even a RST from a closed port. Found by capturing packets on the virtual NIC instead of reasoning about the code: the IP checksum was right, the TCP one wrong, and **wrong by the same 0x0C0F on every packet**, which is `0x0A00 + 0x020F` — the two halves of this machine's own address. `socket_connect` binds to `IPV4_ANY`, so `tcp_open` summed the pseudo-header over a source of zero while the IP layer wrote the real address into the header on the way out. An accepted connection never had this, which is why inbound always worked and nobody had looked. Fixed and proved on the wire: a closed port now refuses, an open one completes the full handshake, and the host listener logs `ACCEPTED`. A second fault underneath is the kernel session's, reported with its timings — the handshake completes and `connect` still never says so. VF-020. |

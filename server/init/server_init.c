@@ -467,13 +467,38 @@ static int handle_status(const struct http_request *r, const char *body,
 	             "\"memory_free_bytes\":%llu,"
 	             "\"page_size\":%u,"
 	             "\"requests_served\":%lu,"
-	             "\"bytes_sent\":%lu}\n",
+	             "\"bytes_sent\":%lu,"
+	             /*
+	              * The clock, reported here because the dashboard reports
+	              * it and `struct server_facts` exists so the two cannot
+	              * disagree. It was added to that structure and read only
+	              * by the page for one version, which is the drift the
+	              * structure was written to prevent -- caught by rereading
+	              * the comment that justified it.
+	              *
+	              * `clock_measured` is separate from the offset rather
+	              * than a sentinel value, because zero is a real offset:
+	              * a machine whose clock is right and one that has never
+	              * asked must not report the same thing.
+	              *
+	              * `clock_uncertainty_ms` is 1000 and is not a guess. See
+	              * VF-021: `SYS_WALLTIME` counts whole seconds, so this
+	              * machine's own two timestamps put about a second around
+	              * any offset it computes. A consumer that rounds to the
+	              * nearest second is reading this correctly.
+	              */
+	             "\"clock_measured\":%s,"
+	             "\"clock_offset_ms\":%lld,"
+	             "\"clock_uncertainty_ms\":1000,"
+	             "\"clock_stratum\":%d}\n",
 	             name, arch,
 	             f->machine.processors_found, f->machine.processors_online,
 	             (unsigned long long)f->machine.memory_bytes,
 	             (unsigned long long)f->machine.memory_free_bytes,
 	             f->machine.page_size,
-	             f->served, f->bytes_out);
+	             f->served, f->bytes_out,
+	             f->clock_known ? "true" : "false",
+	             f->clock_offset_ms, f->clock_stratum);
 
 	/* 500, not 413. The request was fine; this server could not fit its own
 	 * answer into its own buffer. See `HTTP_EINTERNAL` in `http.h`. */

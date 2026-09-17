@@ -657,3 +657,40 @@ None.
   guarantees booting the wrong one. The fix is procedural and is written here
   rather than in a comment nobody reads at the right moment: **build the role
   immediately before booting it**, never as the second half of a two-role check.
+
+### VF-024 -- the README claimed 736 checks and its own table summed to 735
+
+- **Found in** `server/README.md`, 17 September 2026. **Found by** the userland
+  session sending word, through Joshua, about blunt search-and-replace edits --
+  and naming the gap as *doing the careful thing for code and not for `docs/`*.
+  Adding the table up took a minute.
+- **What it was** The summary box said 736 and the suite table summed to 735.
+  One row said 93 where the suite had grown to 94. That number had been quoted
+  in the README, the board and three commit messages.
+- **Why** Several documentation edits here were bare `s.replace(old, new)` with
+  no assertion on the match count, on the unexamined grounds that they were
+  "just docs". The code edits beside them all asserted. **The discipline was
+  applied where a compiler would have caught the mistake anyway, and dropped
+  where nothing would.**
+- **Why it belongs here** The table was a **third list**, beside
+  `CMakeLists.txt` and the suites themselves. This register already carries two
+  entries about lists nobody derives -- the status table that drifted twice
+  before becoming an X-macro, and the suites run from memory for thirteen
+  versions before `server-tests.sh`. This is the same fault in the one document
+  that carries numbers, and it was written by the seat that wrote both fixes.
+- **What it is now** `scripts/server-tests.sh` checks the README against the
+  run it just did: every row, the total, and the suite count. **Watched
+  failing**, a row edited to 71 against a real 72:
+  `server_dns: the table says 71, the run gave 72`, exit 1.
+- **And it uncovered a latent fault of its own.** The runner has parsed target
+  names out of `CMakeLists.txt` since the day it was written, and that file is
+  checked out with **CRLF** endings here -- so every name carried a trailing
+  carriage return. It never mattered while the name was only a filename. It
+  became visible the moment the same name was compared against text in a
+  document. **A fault that waits for a second reader**, which is precisely the
+  shape the userland session's message described.
+- **And a second mistake in the fix itself**, worth recording because it is the
+  same class: the first version *derived* the README's row name from the
+  executable name, turning `recon_server_serve_tests` into `server_serve` while
+  the table correctly says `server_http_serve`. An invented mapping is a fourth
+  list with extra steps. It reads CMake's own `add_test(NAME ...)` now.

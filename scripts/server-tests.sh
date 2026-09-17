@@ -54,6 +54,21 @@ CC=${CC:-gcc}
 CFLAGS=${CFLAGS:--std=gnu11 -Wall -Wextra -Werror -O1}
 
 targets=$(awk '
+	#
+	# The carriage return goes first, on every line.
+	#
+	# `CMakeLists.txt` is checked out with CRLF endings on this machine, so
+	# without this every target name carries a trailing \r. That did not
+	# matter while the name was only ever used as a filename -- it became
+	# visible the day the name was also compared against the README, where
+	# `server_http_tests\r` did not match the pattern that strips `_tests`
+	# and the summary came out as two lines per suite.
+	#
+	# A latent fault that waited for a second reader. Stripped at the point
+	# the file is read rather than at each use, so there is one place to be
+	# right.
+	#
+	{ gsub(/\r/, "") }
 	/^add_executable\(recon_server_/ { name = $0; sub(/^add_executable\(/, "", name); collecting = 1; srcs = ""; next }
 	collecting {
 		line = $0
@@ -127,10 +142,50 @@ for entry in $(printf '%s\n' "$targets" | tr ' ' '\001'); do
 	cat "$out/$name.log"
 
 	n=$(sed -n 's/^  \([0-9]*\) checks, .*/\1/p' "$out/$name.log" | tail -1)
-	[ -n "$n" ] && total=$((total + n))
+	if [ -n "$n" ]; then
+		total=$((total + n))
+		# `recon_server_http_tests` is `server_http` to CMake's add_test
+		# and to the README's table. One mechanical mapping rather than
+		# a fourth list to keep.
+		#
+		# The name CMake registers the test under, which is what the
+		# README's table uses. Looked up rather than derived: the first
+		# version of this turned `recon_server_serve_tests` into
+		# `server_serve` while the table -- correctly -- says
+		# `server_http_serve`. An invented mapping is a fourth list
+		# with extra steps.
+		#
+		short=$(awk -v t="$name" '
+			{ gsub(/\r/, "") }
+			$0 ~ ("^add_test\\(NAME .* COMMAND " t "\\)$") {
+				n = $0
+				sub(/^add_test\(NAME[[:space:]]+/, "", n)
+				sub(/[[:space:]]+COMMAND.*$/, "", n)
+				print n
+			}
+		' CMakeLists.txt)
+		[ -n "$short" ] || short=$name
+		printf '%s %s\n' "$short" "$n" >> "$out/summary"
+	fi
 done
 
 printf '\n--- %d suites, %d checks, %d suites failed ---\n' \
 	"$suites" "$total" "$failed"
+
+#
+# Does the README describe this run?
+#
+# Its suite table and its summary box are typed by hand, which makes them a
+# third list beside `CMakeLists.txt` and the suites themselves. On 17 September
+# the table summed to 735 against a real 736, because one row had not been
+# updated when a suite grew -- found by adding it up, which is not a method.
+# See the header of `check-readme-suites.py`.
+#
+# Only checked when everything ran. Comparing a document against a partial run
+# would report the gap as a documentation fault, which it would not be.
+if [ "$failed" -eq 0 ] && [ -f "$out/summary" ] \
+   && command -v python3 >/dev/null 2>&1; then
+	python3 "$here/check-readme-suites.py" "$out/summary" || failed=1
+fi
 
 [ "$failed" -eq 0 ] || exit 1
