@@ -121,6 +121,75 @@ bool hci_acl_parse(const u8 *hdr, u32 len, struct hci_acl_header *out);
 
 /* --- the driver ----------------------------------------------------------- */
 
+/* --- the transport under HCI ----------------------------------------------
+ *
+ * Four ways in and out, which is exactly the four USB offers: commands out on
+ * the control pipe, events in on the interrupt pipe, ACL data both ways on the
+ * bulk pipes.
+ *
+ * **Named as an interface so that the thing underneath can be a test.**
+ * KF-248 is designed and not built, so no real transport exists yet -- and the
+ * kernel session's advice was to write the layers above it and exercise them
+ * against a fake one rather than wait. Everything below this line can be
+ * driven by a scripted controller that lives in an array.
+ *
+ * When the real one lands it is one implementation of this struct, and their
+ * note says the swap is one call site per direction. Nothing above here has to
+ * know which it is talking to, which is the point: if a byte count comes back
+ * wrong against real hardware and right against the fake, the fault is in the
+ * transport and not in any of this.
+ *
+ * Polled rather than blocking, because a test has no scheduler to yield to.
+ * The real implementation yields inside `poll_*` and the callers above cannot
+ * tell.
+ */
+struct bt_transport {
+	/* A command, as a class request on the interface. False means the
+	 * transport refused it -- not that the controller did. */
+	bool (*send_command)(void *ctx, const u8 *pdu, u32 len);
+
+	/* One transport packet of an event, if one has arrived. Returns its
+	 * length, or zero when nothing is waiting. Not one *event* -- an event
+	 * longer than the endpoint's packet size arrives in pieces, and
+	 * putting them together is `hci_event_feed`'s job. */
+	u32 (*poll_event)(void *ctx, u8 *buf, u32 max);
+
+	bool (*send_acl)(void *ctx, const u8 *pdu, u32 len);
+	u32 (*poll_acl)(void *ctx, u8 *buf, u32 max);
+
+	void *ctx;
+};
+
+/* One controller, and what has happened on it. */
+struct bt_hci {
+	const struct bt_transport *t;
+	struct hci_event_reassembly rx;
+
+	u64 commands_sent;
+	u64 events_seen;
+
+	/* Counted apart on purpose. An event that answers *no* command is
+	 * ordinary -- a controller reports connections and disconnections
+	 * unasked. An event that answers a command nobody sent is not, and
+	 * reading one as the answer to the command actually outstanding is
+	 * the mistake this layer exists to not make. */
+	u64 unsolicited;
+	u64 wrong_opcode;
+};
+
+void bt_hci_init(struct bt_hci *h, const struct bt_transport *t);
+
+/* Sends a command and pumps the transport until that command's answer comes
+ * back. `budget` bounds the polling so a silent controller ends the call
+ * rather than the boot.
+ *
+ * **The answer is matched by opcode.** An answer carrying a different one is
+ * counted and discarded, never returned -- a controller that answers an older
+ * command late would otherwise hand this command a status that belongs to
+ * something else, which is a success with the wrong number attached. */
+bool bt_hci_command(struct bt_hci *h, u16 opcode, const u8 *params, u8 plen,
+		    u8 *status, unsigned budget);
+
 /* Claims a device if it is a Bluetooth controller. False for anything else,
  * which is not an error. */
 bool bt_hci_attach(struct xhci *x, struct usb_device *ud);

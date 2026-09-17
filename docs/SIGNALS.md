@@ -669,3 +669,80 @@ the same lesson as the display test that passed against a black screen, found
 seven more times in four days.
 
 **Still nothing to merge and nothing blocked.**
+
+---
+
+### 17 September 2026 (sixth) — bluetooth → kernel
+
+**The fake transport you suggested, and the first test on this branch that
+runs more than one layer at a time.**
+
+`struct bt_transport` is four function pointers — command out, event in, ACL
+both ways — which is exactly the four pipes. Above it, `bt_hci_command` sends a
+command and pumps the transport until *that command's* answer comes back.
+Below it, for now, a scripted controller that lives in an array.
+
+When KF-248 lands, the real transport is one implementation of that struct and
+nothing above it changes. The point of the shape is diagnostic: **if a byte
+count comes back wrong against hardware and right against the fake, the fault
+is in the transport and not in any of this.**
+
+#### The protocol twin of KF-248, tested
+
+Your warning was that adding the endpoint field alone yields *"a short read
+reported as a success with a wrong byte count ... which looks like your parsing
+is wrong."* The same shape exists one layer up in protocol terms: a controller
+answering a stale command while a new one is outstanding hands this layer a
+status belonging to something else.
+
+So `bt_hci_command` matches the answer by opcode, and the test feeds it a
+Command Complete for `1009` while it waits for `0c03`. Deleting that check
+fails with `an answer for opcode 1009 satisfied a wait for 0c03, and its status
+came back as this command's`. The status is also asserted *untouched* after a
+rejected answer — a layer that writes it before matching leaves the caller a
+number it never earned, and that is a separate deletion with its own red.
+
+Also tested: an event answering nothing does not end the wait, an answer split
+into four-byte pieces is assembled before being read, a silent controller ends
+the call by budget rather than taking the boot with it, and a refused send is
+not counted as sent.
+
+#### The fake was wrong before the code was
+
+First run went red on the unsolicited-event case, and the fault was in the
+fake. It held one run of bytes and handed out a fixed chunk regardless of where
+one event ended and the next began, so two short events arrived in a single
+poll — and `hci_event_feed` refused the pair as a packet disagreeing with its
+own header.
+
+**It was right to.** On an interrupt endpoint each event is its own transfer; a
+controller does not pack two into one. The fake was modelling a transport that
+does not exist. It keeps event boundaries now and splits only *within* an
+event, which is what a sixteen-byte endpoint does.
+
+Worth reporting because a fake that is wrong in a way the real thing is not
+will either hide faults or invent them, and this one would have invented one.
+
+#### Running total on breaking things
+
+**Eight tests this session have passed when they should have failed**, every
+one a fault in the test rather than the code: a report-id case whose two
+readings agreed, a guard covered by nothing, a fragment length that had already
+arrived, a local-state clear the boot mouse cannot exercise, a Push withheld
+for an unrelated reason, a sign bit ambiguous in the chosen value, a short
+report caught earlier by field bounds, and a wait whose return value was
+checked without its status.
+
+Two further findings of a different kind: the fake above, and a break-script
+patch that inserted a second opcode check *after* the original early-continue —
+so it changed nothing, and the green it produced said nothing either. A broken
+test of a test.
+
+None of these would have surfaced without deliberately breaking working code,
+and none of them looked wrong beforehand.
+
+68 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean, on the tree merged with `6c93dae`.
+
+**Nothing blocked. Still not asking for a merge** — the transport swap is
+yours to land first, and nothing here is written against the old call shape.

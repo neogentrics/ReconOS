@@ -225,6 +225,89 @@ bool hci_acl_parse(const u8 *hdr, u32 len, struct hci_acl_header *out)
 	return true;
 }
 
+/* --- commands and their answers -------------------------------------------
+ *
+ * The one rule here is that a command's answer is the one carrying its own
+ * opcode, and nothing else will do.
+ *
+ * That sounds like belt and braces until you look one layer down. KF-248
+ * records that `route_completion` files a transfer event by slot and ignores
+ * the endpoint id, so with two IN endpoints outstanding a caller can be handed
+ * a byte count belonging to the other one -- *"a short read reported as a
+ * success with a wrong byte count ... which looks like your parsing is
+ * wrong."* The same shape exists here in protocol terms: a controller that
+ * answers a stale command while a new one is outstanding hands this layer a
+ * status for something else.
+ *
+ * Checking the opcode costs one comparison and makes the two cases
+ * distinguishable. If a byte count is ever wrong against real hardware and
+ * right against the fake controller in the self-test, the fault is underneath
+ * this file rather than in it.
+ */
+void bt_hci_init(struct bt_hci *h, const struct bt_transport *t)
+{
+	kmemset(h, 0, sizeof(*h));
+	h->t = t;
+	hci_reassembly_reset(&h->rx);
+}
+
+bool bt_hci_command(struct bt_hci *h, u16 opcode, const u8 *params, u8 plen,
+		    u8 *status, unsigned budget)
+{
+	u8 pdu[HCI_COMMAND_MAX];
+	u32 n;
+	unsigned tries;
+
+	if (!h->t || !h->t->send_command || !h->t->poll_event)
+		return false;
+
+	n = hci_command_build(pdu, opcode, params, plen);
+
+	if (!h->t->send_command(h->t->ctx, pdu, n))
+		return false;
+
+	h->commands_sent++;
+
+	for (tries = 0; tries < budget; tries++) {
+		u8 packet[64];
+		u16 answered;
+		u8 st;
+		u32 got = h->t->poll_event(h->t->ctx, packet, sizeof(packet));
+
+		if (!got)
+			continue;
+
+		/* One transport packet. A long event needs several, and
+		 * `hci_event_feed` says when it has them all. */
+		if (!hci_event_feed(&h->rx, packet, got))
+			continue;
+
+		h->events_seen++;
+
+		if (!hci_event_command_result(h->rx.buf, h->rx.want,
+					      &answered, &st)) {
+			/* Answers no command. A controller reports things
+			 * unasked and this is not an error -- but it is not
+			 * this command's answer either, so the wait goes on. */
+			h->unsolicited++;
+			continue;
+		}
+
+		if (answered != opcode) {
+			/* Somebody else's answer. Counted and dropped. */
+			h->wrong_opcode++;
+			continue;
+		}
+
+		if (status)
+			*status = st;
+
+		return true;
+	}
+
+	return false;
+}
+
 /* --- attaching ------------------------------------------------------------ */
 
 bool bt_hci_attach(struct xhci *x, struct usb_device *ud)
@@ -372,6 +455,141 @@ static bool feed_all(struct hci_event_reassembly *r, const u8 *ev, u32 total,
 	}
 
 	return true;
+}
+
+/* --- a controller that lives in an array ----------------------------------
+ *
+ * Enough of a Bluetooth controller to answer commands, and no more. It exists
+ * so the command/answer layer above can be exercised end to end before KF-248
+ * makes a real transport possible.
+ *
+ * What it can be told to do is the interesting part: answer correctly, answer
+ * with the wrong opcode, say something unasked first, dribble an answer out in
+ * pieces the way a sixteen-byte endpoint would, or say nothing at all.
+ */
+#define FAKE_MAX_EVENTS 8
+
+struct fake_controller {
+	/* What the driver sent, kept so the test can check it. */
+	u8  last_command[HCI_COMMAND_MAX];
+	u32 last_command_len;
+	unsigned commands_received;
+
+	/* What to say back.
+	 *
+	 * **Event boundaries are kept, and the first version of this did not
+	 * keep them.** It held one run of bytes and handed out `chunk` at a
+	 * time regardless of where one event ended and the next began -- so
+	 * two short events came back in a single poll, and `hci_event_feed`
+	 * refused the pair as a packet disagreeing with its own header. It
+	 * was right to. On an interrupt endpoint each event is its own
+	 * transfer; a controller does not pack two into one. The fake was
+	 * modelling a transport that does not exist, and a fake that is wrong
+	 * in a way the real thing is not will either hide faults or invent
+	 * them.
+	 *
+	 * So: one event per transfer, split into `chunk`-sized packets within
+	 * it, which is what the sixteen-byte endpoint actually does. */
+	u8  reply[HCI_EVENT_MAX * 2];
+	u32 ends[FAKE_MAX_EVENTS];	/* offset just past each event */
+	unsigned events;
+	unsigned event_at;
+	u32 reply_len;
+	u32 reply_at;
+	u32 chunk;
+
+	bool refuse_send;
+};
+
+static bool fake_send_command(void *ctx, const u8 *pdu, u32 len)
+{
+	struct fake_controller *c = (struct fake_controller *)ctx;
+
+	if (c->refuse_send)
+		return false;
+
+	if (len > sizeof(c->last_command))
+		return false;
+
+	kmemcpy(c->last_command, pdu, len);
+	c->last_command_len = len;
+	c->commands_received++;
+
+	return true;
+}
+
+static u32 fake_poll_event(void *ctx, u8 *buf, u32 max)
+{
+	struct fake_controller *c = (struct fake_controller *)ctx;
+	u32 end, n;
+
+	if (c->event_at >= c->events)
+		return 0;
+
+	/* Never past the end of the event being delivered. This is the line
+	 * the first version did not have. */
+	end = c->ends[c->event_at];
+	n = end - c->reply_at;
+
+	if (n > c->chunk)
+		n = c->chunk;
+
+	if (n > max)
+		n = max;
+
+	kmemcpy(buf, c->reply + c->reply_at, n);
+	c->reply_at += n;
+
+	if (c->reply_at >= end)
+		c->event_at++;
+
+	return n;
+}
+
+/* Marks the end of whatever was just appended. */
+static void fake_end_event(struct fake_controller *c)
+{
+	if (c->events < FAKE_MAX_EVENTS)
+		c->ends[c->events++] = c->reply_len;
+}
+
+/* Appends a Command Complete for `opcode` with `status` to the scripted
+ * reply. */
+static void fake_queue_complete(struct fake_controller *c, u16 opcode,
+				u8 status)
+{
+	u8 *p = c->reply + c->reply_len;
+
+	p[0] = HCI_EV_COMMAND_COMPLETE;
+	p[1] = 4;
+	p[2] = 1;			/* credits */
+	p[3] = (u8)(opcode & 0xFFu);
+	p[4] = (u8)(opcode >> 8);
+	p[5] = status;
+
+	c->reply_len += 6;
+	fake_end_event(c);
+}
+
+/* And an event that answers nothing -- a controller reporting something
+ * unasked. */
+static void fake_queue_unsolicited(struct fake_controller *c)
+{
+	u8 *p = c->reply + c->reply_len;
+
+	p[0] = 0x3E;			/* an LE meta event: answers nothing */
+	p[1] = 2;
+	p[2] = 0x01;
+	p[3] = 0x00;
+
+	c->reply_len += 4;
+	fake_end_event(c);
+}
+
+static void fake_reset(struct fake_controller *c)
+{
+	kmemset(c, 0, sizeof(*c));
+	c->chunk = 16;			/* what the real endpoint carries */
 }
 
 bool bt_hci_self_test(void)
@@ -664,6 +882,198 @@ bool bt_hci_self_test(void)
 		if (hci_event_command_result(complete, 4, &opcode, &status)) {
 			kputs("  bluetooth: a truncated Command Complete gave "
 			      "an opcode from bytes that had not arrived\n");
+			ok = false;
+		}
+	}
+
+	/* --- a command and its answer, against a fake controller ---------
+	 *
+	 * The first test on this branch that runs more than one layer at a
+	 * time: build a command, hand it to a transport, take the answer
+	 * apart, and match it. Everything before this checked a function.
+	 */
+	{
+		static struct fake_controller fake;
+		static struct bt_hci hci;
+		struct bt_transport t;
+		u8 st = 0xFF;
+
+		t.send_command = fake_send_command;
+		t.poll_event = fake_poll_event;
+		t.send_acl = 0;
+		t.poll_acl = 0;
+		t.ctx = &fake;
+
+		/* --- the ordinary case --- */
+		fake_reset(&fake);
+		fake_queue_complete(&fake, HCI_OP_RESET, 0);
+		bt_hci_init(&hci, &t);
+
+		if (!bt_hci_command(&hci, HCI_OP_RESET, 0, 0, &st, 16)) {
+			kputs("  bluetooth: HCI_Reset got no answer from a "
+			      "controller that was told to give one\n");
+			ok = false;
+		} else if (st != 0) {
+			kprintf("  bluetooth: HCI_Reset answered status %u, "
+				"expected 0\n", st);
+			ok = false;
+		}
+
+		/* And the bytes that actually went out are the command. */
+		if (fake.last_command_len != 3 ||
+		    fake.last_command[0] != 0x03 ||
+		    fake.last_command[1] != 0x0C) {
+			kprintf("  bluetooth: the controller received %u "
+				"bytes opening %02x %02x, expected 3 opening "
+				"03 0c\n", fake.last_command_len,
+				fake.last_command[0], fake.last_command[1]);
+			ok = false;
+		}
+
+		/* --- an answer to somebody else's command ---
+		 *
+		 * This is the protocol-level twin of KF-248. A controller
+		 * answering a stale command must not satisfy this one, and
+		 * the failure it prevents is a status belonging to another
+		 * request -- which reads as success with the wrong number.
+		 */
+		fake_reset(&fake);
+		fake_queue_complete(&fake, HCI_OP_READ_BD_ADDR, 0);
+		bt_hci_init(&hci, &t);
+		st = 0xFF;
+
+		if (bt_hci_command(&hci, HCI_OP_RESET, 0, 0, &st, 16)) {
+			kprintf("  bluetooth: an answer for opcode %04x "
+				"satisfied a wait for %04x, and its status "
+				"came back as this command's\n",
+				(unsigned)HCI_OP_READ_BD_ADDR,
+				(unsigned)HCI_OP_RESET);
+			ok = false;
+		}
+
+		if (hci.wrong_opcode != 1) {
+			kprintf("  bluetooth: %llu answers counted as "
+				"belonging to another command, expected 1\n",
+				(unsigned long long)hci.wrong_opcode);
+			ok = false;
+		}
+
+		/* The status must not have been touched. A layer that writes
+		 * it before matching leaves the caller a number it never
+		 * earned. */
+		if (st != 0xFF) {
+			kprintf("  bluetooth: status was written as %u by an "
+				"answer that was rejected\n", st);
+			ok = false;
+		}
+
+		/* --- something said unasked, then the answer ---
+		 *
+		 * An event answering no command is ordinary and must not end
+		 * the wait, nor be counted as a wrong opcode.
+		 */
+		fake_reset(&fake);
+		fake_queue_unsolicited(&fake);
+		fake_queue_complete(&fake, HCI_OP_RESET, 0);
+		bt_hci_init(&hci, &t);
+		st = 0xFF;
+
+		if (!bt_hci_command(&hci, HCI_OP_RESET, 0, 0, &st, 16)) {
+			kputs("  bluetooth: an event answering no command "
+			      "stopped the real answer being found\n");
+			ok = false;
+		}
+
+		/* **And the status came from the answer, not from stopping
+		 * early.** Returning true is not enough to check here: a layer
+		 * that treats the unsolicited event as the answer also returns
+		 * true, having written no status at all. Only the value says
+		 * which event ended the wait. The first version of this test
+		 * checked the return alone and stayed green when the
+		 * unsolicited case was made to return. */
+		if (st != 0) {
+			kprintf("  bluetooth: the wait ended with status %u, "
+				"expected 0 from the Command Complete -- an "
+				"event answering nothing ended it instead\n",
+				st);
+			ok = false;
+		}
+
+		if (hci.unsolicited != 1 || hci.wrong_opcode != 0) {
+			kprintf("  bluetooth: %llu unsolicited and %llu wrong "
+				"opcode, expected 1 and 0 -- an event that "
+				"answers nothing is not an event for another "
+				"command\n",
+				(unsigned long long)hci.unsolicited,
+				(unsigned long long)hci.wrong_opcode);
+			ok = false;
+		}
+
+		/* --- an answer that does not fit one transport packet ---
+		 *
+		 * The endpoint carries sixteen bytes. A long answer arrives in
+		 * pieces, and the layer must wait for all of them rather than
+		 * act on the first.
+		 */
+		fake_reset(&fake);
+		fake.chunk = 4;			/* four bytes at a time */
+		fake_queue_complete(&fake, HCI_OP_RESET, 0);
+		bt_hci_init(&hci, &t);
+		st = 0xFF;
+
+		if (!bt_hci_command(&hci, HCI_OP_RESET, 0, 0, &st, 16) ||
+		    st != 0) {
+			kputs("  bluetooth: an answer delivered four bytes at "
+			      "a time was never assembled\n");
+			ok = false;
+		}
+
+		if (hci.events_seen != 1) {
+			kprintf("  bluetooth: %llu events seen for one answer "
+				"in pieces, expected 1\n",
+				(unsigned long long)hci.events_seen);
+			ok = false;
+		}
+
+		/* --- a controller that says nothing ---
+		 *
+		 * The budget has to end the call. A driver that waits for ever
+		 * on a silent controller takes the boot with it, and this is
+		 * exactly what would have happened on real hardware with the
+		 * event endpoint thrown away.
+		 */
+		fake_reset(&fake);
+		bt_hci_init(&hci, &t);
+
+		if (bt_hci_command(&hci, HCI_OP_RESET, 0, 0, &st, 8)) {
+			kputs("  bluetooth: a silent controller produced an "
+			      "answer\n");
+			ok = false;
+		}
+
+		if (hci.commands_sent != 1) {
+			kprintf("  bluetooth: %llu commands sent to a silent "
+				"controller, expected 1 -- the command goes "
+				"out once and the polling is for its "
+				"answer\n",
+				(unsigned long long)hci.commands_sent);
+			ok = false;
+		}
+
+		/* --- a transport that refuses --- */
+		fake_reset(&fake);
+		fake.refuse_send = true;
+		bt_hci_init(&hci, &t);
+
+		if (bt_hci_command(&hci, HCI_OP_RESET, 0, 0, &st, 8)) {
+			kputs("  bluetooth: a command the transport refused "
+			      "was reported as answered\n");
+			ok = false;
+		}
+
+		if (hci.commands_sent != 0) {
+			kputs("  bluetooth: a refused command was counted as "
+			      "sent\n");
 			ok = false;
 		}
 	}
