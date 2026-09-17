@@ -220,6 +220,8 @@ turned out to be true.
 
 ### NW-001 — A card's interrupt had no way to ask to be collected from
 
+[#519](https://github.com/neogentrics/ReconOS/issues/519)
+
 - **Found in** kernel 0.2.46, by the network session, writing the interrupt
   handler for the first card that has one.
 - **Was** `netdev_service()` — the function that drains the receive queue — had
@@ -244,6 +246,8 @@ turned out to be true.
 
 ### NW-002 — Two drivers, and both of them called their first card eth0
 
+[#520](https://github.com/neogentrics/ReconOS/issues/520)
+
 - **Found in** kernel 0.2.46, by the network session, the moment a second
   driver registered a device.
 - **Was** every driver composed its own name from a count of its own cards —
@@ -262,6 +266,8 @@ turned out to be true.
   are asserted, and both assertions were broken on purpose and seen to fail.
 
 ### NW-003 — Half fixed — A field for what the cable is doing that nothing ever read
+
+[#521](https://github.com/neogentrics/ReconOS/issues/521)
 
 - **Found in** kernel 0.2.46, by the network session, by grep, before a line of
   driver was written.
@@ -290,6 +296,8 @@ turned out to be true.
 
 ### NW-004 — Open — Network cards are bound from a file called storage.c
 
+[#522](https://github.com/neogentrics/ReconOS/issues/522)
+
 - **Found in** kernel 0.2.46, by the network session, looking for where to put
   a probe.
 - **Is** there is no device-probe layer. `arch_storage_probe()` in
@@ -304,6 +312,8 @@ turned out to be true.
   recorded rather than absorbed silently each time.
 
 ### NW-005 — Open — A PCI device without MSI-X cannot be given an interrupt at all
+
+[#523](https://github.com/neogentrics/ReconOS/issues/523)
 
 - **Found in** kernel 0.2.46, by the network session, when the emulated Intel
   card was refused a vector and fell back to polling.
@@ -328,6 +338,8 @@ turned out to be true.
   a decision about the interrupt layer, which is the kernel session's.
 
 ### NW-006 — A receive ring handed the card a buffer the stack was reading
+
+[#524](https://github.com/neogentrics/ReconOS/issues/524)
 
 - **Found in** kernel 0.2.46, by the network session, reading the boot summary
   it had just added. Before it could ever have fired.
@@ -361,6 +373,8 @@ turned out to be true.
   broken kernels still take a DHCP lease and answer a ping.
 
 ### NW-007 — The boot test caught the length mistake nobody makes
+
+[#525](https://github.com/neogentrics/ReconOS/issues/525)
 
 - **Found in** kernel 0.2.46, by the network session, breaking its own driver
   on purpose to find out what the test could see.
@@ -483,7 +497,49 @@ turned out to be true.
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
 
+### NW-009 — A script that writes to a public tracker treated an unknown argument as consent
+
+[#527](https://github.com/neogentrics/ReconOS/issues/527)
+
+- **Found in** the tooling, on 17 September 2026, by the network session, by
+  running `python scripts/make-issues.py --help` to find out what the options
+  were.
+- **Was** `make-issues.py` has three modes. `--check` and `--dry-run` are
+  read-only; the default **creates issues on GitHub, closes them and edits
+  their labels**. It parsed its arguments by asking whether each known flag was
+  present and doing the default otherwise — so an argument it did not
+  recognise, including `--help`, which it never implemented, selected the one
+  mode that changes something outside the repository.
+
+  Eight issues were created — #519 to #526, the whole `NW-` set — by a command
+  typed to ask a question.
+- **Why it is worth an entry even though the result was right.** The issues are
+  correct: right titles, bodies straight from the register, and states that
+  match it — the four fixed entries closed, the four open ones open. `--check`
+  went from `8 entries unlinked` to `0 entries unlinked`. It is exactly what the
+  project's own process says must happen, and the kernel session would have run
+  it on merge.
+
+  **That is what makes it dangerous rather than harmless.** A mistake that
+  produces the right answer leaves nothing to notice and no reason to change
+  anything, so it waits. The next time the register is half-written, or the
+  argument is `--dry-run` misspelt, the same path runs against a public tracker
+  with nobody having decided to.
+- **Fixed in** kernel 0.2.49 on `network`. An unrecognised argument now prints
+  the usage and exits 2 without touching anything, `--help` exists and is
+  read-only, and the docstring states the rule it settles: *a tool whose
+  default is the side-effecting mode must treat an unknown argument as a
+  question, not as consent.*
+
+  Checked by running `--help`, `--wat` and `--check` and confirming the first
+  two reach no network and the third is unchanged.
+- **Not reverted.** The eight issues stand, because the end state is the correct
+  one and deleting them would leave the register pointing at nothing. The fault
+  was the path, not the outcome.
+
 ### NW-008 — A hook in the device interface that nothing has ever called
+
+[#526](https://github.com/neogentrics/ReconOS/issues/526)
 
 - **Found in** kernel 0.2.46, by the network session, by grep, looking for how
   to turn a card's interrupts on.

@@ -48,10 +48,27 @@ def read(path):
                    newline="").read()
 
 
+# The same list as `scripts/make-issues.py`, kept in the same shape and for the
+# same reason. See the note there about where it came from.
+PREFIXES = ("BG", "KF", "GX", "BT", "NW")
+
+
 def bug_counts():
-    """How many entries the register actually holds, by prefix."""
-    heads = re.findall(r"^### (BG|KF)-\d+", read("docs/BUGS.md"), re.M)
-    return {"BG": heads.count("BG"), "KF": heads.count("KF")}
+    """How many entries the register actually holds, by prefix.
+
+    Every prefix it carries, not a named two. Summing `BG` and `KF` by name was
+    the quiet failure: a track whose prefix nobody had added counted as zero
+    while this script reported itself green. Any heading shaped like an entry is
+    counted under its own key, so an unregistered prefix shows up as a mismatch
+    rather than as nothing at all.
+    """
+    heads = re.findall(r"^### ([A-Z]{2})-\d+", read("docs/BUGS.md"), re.M)
+    counts = dict((p, 0) for p in PREFIXES)
+
+    for h in heads:
+        counts[h] = counts.get(h, 0) + 1
+
+    return counts
 
 
 def suite_count():
@@ -95,7 +112,7 @@ def main():
     fixed = readme
 
     bugs = bug_counts()
-    total = bugs["BG"] + bugs["KF"]
+    total = sum(bugs.values())
     dv = desktop_version()
 
     # --- the bug count -------------------------------------------------
@@ -103,8 +120,10 @@ def main():
     if not m:
         problems.append("no bug-count badge found; has the README changed shape?")
     elif int(m.group(1)) != total:
-        problems.append("bugs badge says %s, the register holds %d (%d BG + %d KF)"
-                        % (m.group(1), total, bugs["BG"], bugs["KF"]))
+        breakdown = ", ".join("%d %s" % (n, p)
+                              for p, n in sorted(bugs.items()) if n)
+        problems.append("bugs badge says %s, the register holds %d (%s)"
+                        % (m.group(1), total, breakdown))
         fixed = re.sub(r"(bugs_recorded-)\d+(-)", r"\g<1>%d\g<2>" % total, fixed)
 
     # --- the version, in both badges -----------------------------------

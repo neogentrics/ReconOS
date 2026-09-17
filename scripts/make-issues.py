@@ -317,12 +317,33 @@ def existing_titles():
 # allowing a bare `-` with optional spaces on either side will happily match
 # the hyphen in `KF-246` itself, given the chance -- and the chance is a regex
 # that does not say where to start.
-ENTRY_HEAD = r'### ((?:BG|KF)-\d+) *(?:—|–|--|-) *'
+# Every prefix the register uses, and the one place to add one.
+#
+# This was spelled `(?:BG|KF)` at five separate call sites in this file, and
+# again in `check-readme-badges.py`. That made claiming a prefix a ten-line edit
+# across two files -- the same ten lines every session touches, so two sessions
+# claiming one at the same time conflict on the lines rather than on the list.
+#
+# The shape and the name are the Bluetooth session's, lifted from
+# `origin/bluetooth` so the two branches merge on one word instead of two files.
+#
+# **Their file was not taken verbatim, and that is worth a line.** Their copy
+# predates the `**Status:** not a bug` rule in `is_fixed` below, so adopting it
+# wholesale would have quietly reverted that rule and filed KF-225 -- a question
+# that was answered, not a fault -- as an open bug again. Measured, by taking
+# their file and watching the checker report exactly that. The refactor is
+# theirs; it is applied here to this file as it currently stands.
+PREFIXES = ('BG', 'KF', 'GX', 'BT', 'NW')
+
+# `BG|KF|GX|BT|NW`, built once so that no call site below spells a prefix.
+PREFIX_RE = '|'.join(PREFIXES)
+
+ENTRY_HEAD = r'### ((?:' + PREFIX_RE + r')-\d+) *(?:—|–|--|-) *'
 
 # What an entry heading is when you are only counting them. Deliberately
 # looser than ENTRY_HEAD; the gap between the two is what the check below
 # measures.
-ENTRY_ANY = r'^### ((?:BG|KF)-\d+)'
+ENTRY_ANY = r'^### ((?:' + PREFIX_RE + r')-\d+)'
 
 
 def parse(path):
@@ -440,7 +461,7 @@ def check_links():
     titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
     linked = wrong = missing = 0
 
-    for m in re.finditer(r'^### ((?:BG|KF)-\d+) .*$', text, re.M):
+    for m in re.finditer(r'^### ((?:' + PREFIX_RE + r')-\d+) .*$', text, re.M):
         bg = m.group(1)
         after = text[m.end():m.end() + 200].lstrip('\n')
         cite = re.match(r'\[#(\d+)\]', after)
@@ -479,12 +500,12 @@ def check_open(text):
         return 0
 
     open_now = []
-    for block in re.split(r'(?=^### (?:BG|KF)-)', text, flags=re.M):
-        m = re.match(r'### ((?:BG|KF)-\d+)', block)
+    for block in re.split(r'(?=^### (?:' + PREFIX_RE + r')-)', text, flags=re.M):
+        m = re.match(r'### ((?:' + PREFIX_RE + r')-\d+)', block)
         if m and not is_fixed(block.split('\n## ')[0]):
             open_now.append(m.group(1))
 
-    named = set(re.findall(r'(?:BG|KF)-\d+', head.group(1)))
+    named = set(re.findall(r'(?:' + PREFIX_RE + r')-\d+', head.group(1)))
     missing = [b for b in open_now if b not in named]
     extra = [b for b in named if b not in open_now]
 
@@ -497,7 +518,46 @@ def check_open(text):
     return 1 if (missing or extra) else 0
 
 
+USAGE = """usage: make-issues.py [--dry-run | --check]
+
+  --dry-run   say what would be created, closed and relabelled
+  --check     verify the register against itself and against the issues
+  (none)      create, close and relabel issues on %s
+
+Run from the top of the repository, with `gh` authenticated.
+""" % REPO
+
+
 def main():
+    """
+    An argument this script does not recognise is a **refusal**, not a run.
+
+    The default mode writes to a public issue tracker -- it creates issues,
+    closes them and edits their labels -- and every other mode is read-only.
+    So "no recognised flag" and "no flag at all" used to mean the same thing,
+    and `--help`, which this file did not implement, fell through to the one
+    branch that mutates something outside the repository.
+
+    That is NW-009, and it happened: eight issues were created by a command
+    typed to ask what the options were. The result was correct, because the
+    register was correct -- which is exactly what makes it worth a guard. A
+    mistake that produces the right answer teaches nothing and repeats.
+
+    The rule this settles: **a tool whose default is the side-effecting mode
+    must treat an unknown argument as a question, not as consent.**
+    """
+    known = ('--dry-run', '--check', '--help', '-h')
+    unknown = [a for a in sys.argv[1:] if a not in known]
+
+    if unknown:
+        sys.stderr.write('unrecognised: %s\n\n' % ' '.join(unknown))
+        sys.stderr.write(USAGE)
+        sys.exit(2)
+
+    if '--help' in sys.argv or '-h' in sys.argv:
+        sys.stdout.write(USAGE)
+        sys.exit(0)
+
     dry = '--dry-run' in sys.argv
     if '--check' in sys.argv:
         text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')

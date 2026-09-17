@@ -326,28 +326,142 @@ Worth being explicit since two drivers and two test suites arrive together:
 this is **one** minor bump, not one per driver. The capability is "the kernel
 can drive a network card that is not virtio", and it arrives once.
 
-**2. `NW` needs adding to `PREFIXES`, in one place, in two scripts.** It is
-**deliberately not added on this branch.** The Bluetooth session lifted the
-prefix out of five regexes per script into a single `PREFIXES` constant
-(`origin/bluetooth`, `589f55d`), and adding `NW` the old way here would create
-exactly the five-line conflict that refactor exists to remove. Once that lands:
+**2. `NW` is in `PREFIXES` now, and there is a warning attached.** Joshua said
+to go ahead rather than wait for the Bluetooth refactor to reach `kernel`, so
+this branch carries it:
 
 ```
-PREFIXES = ("BG", "KF", "GX", "BT", "NW")
+PREFIXES = ('BG', 'KF', 'GX', 'BT', 'NW')
 ```
 
-in both `scripts/make-issues.py` and `scripts/check-readme-badges.py`.
+in both `scripts/make-issues.py` and `scripts/check-readme-badges.py`, built
+once into a `PREFIX_RE` alternation so no call site spells a prefix.
 
-**3. The bugs badge goes up by 8 from this branch.** Under the old
-`check-readme-badges.py` it reads 319 and is green, because that script sums
-`BG` and `KF` by name and counts `NW` as zero — the same silent undercount that
-was hiding `GX`. Under the new one every prefix is counted, so this branch
-contributes **+8**. I am giving you the delta rather than a total because
-`GX` and `BT` land from their own branches and only the merged tree knows the
-sum.
+**The warning is the important half, and it is about your merge of
+`origin/bluetooth`, not mine.**
 
-Verified against a simulated post-refactor checker (the script with `NW` taught
-to it): my entries produce **no new complaints**.
+I started by taking their two script files verbatim — same refactor, same
+constant name, so the branches would merge on one word. The checker immediately
+reported:
+
+```
+KF-225 is open and the Open section does not say so
+```
+
+**Their copy predates the `**Status:** not a bug` rule in `is_fixed`.** KF-225
+is a question that was answered rather than a fault, and their version cannot
+see that, so adopting their file wholesale files it as an open bug again and
+quietly reverts a rule of yours. Measured, by doing it and watching it happen —
+not inferred from the diff.
+
+So their file was put back and **the refactor was applied to your current
+script instead**. The shape and the name are theirs and the comment says so.
+
+**When you merge `origin/bluetooth`, that regression is waiting for you** unless
+their branch has picked up the rule since. Taking theirs on `scripts/` is the
+obvious resolution and it is the wrong one.
+
+Behaviour-preserving, checked rather than asserted: your script and the
+refactored one produce byte-identical output on everything that is not an NW
+entry —
+
+```
+325 links checked, 0 wrong        (both)
+```
+
+— the only differences being `8 entries unlinked` instead of `0` and `all 14
+open entries` instead of `10`, which are the NW entries becoming visible and are
+the point.
+
+**3. The bugs badge is fixed at 333.** It read 325 and was green, because the
+old script summed `BG` and `KF` by name and counted `NW` as zero — the same
+silent undercount that had been hiding `GX`. With every prefix counted:
+
+```
+the README's badges match the tree (333 bugs, version 0.4.37, kernel 0.2.49)
+```
+
+205 BG, 120 KF, 8 NW. The +8 I predicted in an earlier draft of this signal is
+exactly what it turned out to be. `GX` and `BT` will move it again when their
+branches land, and the script now computes the total instead of being told it.
+
+## The NW issues exist on the tracker, and how they got there
+
+**#519 to #527 are the `NW-` set**, created by `make-issues.py`. Titles, bodies
+and states all match the register: NW-001, 002, 006, 007 and 009 closed, NW-003,
+004, 005 and 008 open. `--check` reports `334 links checked, 0 wrong, 0 entries
+unlinked`, and the register carries the links. **Do not create them again on
+merge.**
+
+**They were created by accident and that is NW-009.** I ran
+`make-issues.py --help` to see the options. That flag did not exist, the script
+selected its mode by asking whether each *known* flag was present and doing the
+default otherwise, and the default is the mode that writes to GitHub. Eight
+issues appeared from a command typed to ask a question.
+
+The outcome was correct — which is the whole reason it is in the register rather
+than shrugged off. A mistake that produces the right answer leaves nothing to
+notice, so it waits for a time when the register is half-written or the flag is
+`--dry-run` misspelt. The guard is in: an unrecognised argument prints the usage
+and exits 2 without reaching the network, `--help` exists and is read-only, and
+the rule is written into the docstring — *a tool whose default is the
+side-effecting mode must treat an unknown argument as a question, not as
+consent.*
+
+Nothing was reverted. The issues stand because the end state is the correct one
+and deleting them would leave the register pointing at nothing; the fault was
+the path, not the outcome. NW-009's own issue (#527) was then created
+deliberately, which is the only one in the set anybody chose.
+
+## A procedure for the twenty-ninth boot path, which is a real computer
+
+`docs/BARE-METAL.md` is new: how ReconOS gets booted on `cycloneserver`, where
+the two RTL8168s are, and general enough to be the procedure for the next
+machine. Joshua asked for it; it is not a thing this session would do
+unattended.
+
+**The claim the whole procedure rests on is measured, not argued.** That machine
+has four mounted volumes of real data on it, so before anything else:
+`scripts/check-disk-safety.sh` builds three disks that look like the server's —
+GPT, and a real ext4 filesystem with real contents on the first — checksums
+them, offers them to ReconOS as ordinary AHCI disks, boots, and checksums them
+again.
+
+```
+Block traffic
+  transfers    : 14 read, 0 written, 0 flushed
+  blocks       : 127 read, 0 written
+
+PASS: three disks, one with a filesystem on it, byte-identical after a full boot
+```
+
+Two instruments agreeing: the kernel's own counter, and `md5sum` from outside
+which knows nothing about ReconOS. A kernel that wrote without counting would
+print zero just as loudly, which is why the checksum is there. **The check goes
+red on demand** — a single byte written to the third image between the two
+checksums makes it exit non-zero, tried on purpose.
+
+The empty-disk version of that test would have been weaker and it is worth
+saying why: an empty disk has no superblock to rewrite, no journal to replay and
+nothing a filesystem driver could decide to tidy up.
+
+**What that does not cover**, and the doc says so rather than implying
+otherwise: it was emulated AHCI with 256 MB disks, not the server's controller
+and its 3.6 TB volumes; and a partition table ReconOS misparses is still one it
+only reads.
+
+Two facts about that machine shape the rest, both measured over SSH: it is
+**legacy BIOS**, not UEFI, so the medium boots through your loader rather than
+the UEFI one — and it has **no BMC and no IPMI**, so if it does not come back it
+needs somebody in the room. The rollback is therefore the one-time boot menu
+(F12) and nothing persistent changed, so a power cycle returns it to Debian.
+
+The one real risk to the *result* rather than the machine: its graphics is a
+Radeon HD 7790, which ReconOS's display layer does not recognise, so there may
+be no video. `arch_console_putc` writes COM1 at 115200 on every x86 boot and the
+board has a COM header, so a serial cable is the difference between a transcript
+and a photograph. That is in the doc as the single biggest improvement to the
+quality of the run.
 
 ## The four register complaints — yours, and now gone
 
