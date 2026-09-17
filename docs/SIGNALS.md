@@ -111,8 +111,11 @@ base this branch started from. Re-run from scratch after each of the two
 merges, and after each addition to the tests:
 
 ```
-1578 self-tests across every path, no failures (0 skipped).
+2119 self-tests across every path, no failures (0 skipped).
 ```
+
+(1578 before the third merge; the graphics backends brought three more suites
+per boot path with them.)
 
 Green across every section — both architectures and all their boot paths,
 randomness, partition tables, durability, swap, reconfs, foreign filesystems,
