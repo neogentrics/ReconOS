@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-13, and each entry says why. They are listed because a register that only
+12, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -175,7 +175,6 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
-- **KF-251** — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
 
 ---
 
@@ -7861,9 +7860,58 @@ boot log.
   service reports honestly, and the console line states the uncertainty rather
   than implying accuracy it does not have.
 
-- **Status:** open. Measured by another session, cause confirmed here in
-  `arch/x86_64/time.c`, fix designed and deliberately not rushed in beside a
-  merge and a matrix run.
+- **Fixed**, kernel 0.3.1. The RTC stops being the clock and becomes the thing
+  that *sets* it: one reading latched against the monotonic counter, and the
+  answer served as `latched + (counter now − counter then)`.
+
+- **Not read on every call, and that matters for the use that found it.**
+  `arch_wall_ns` spins while the RTC's update-in-progress bit is set — up to two
+  milliseconds by specification — then does seven port reads. A program timing a
+  round trip calls this twice in quick succession, and *a clock that costs two
+  milliseconds to read cannot measure anything shorter than that.* The RTC is
+  consulted at most every 250 ms; between probes the answer is a counter read.
+
+- **How the phase is found, without paying for it at boot.** Waiting for the
+  seconds field to change would cost up to a second of every boot. Instead each
+  probe notices whether it changed since the last one, and **this clock is
+  always late, never early** — a reading says which second it is and nothing
+  about where in it, so the first latch starts behind by the fraction it could
+  not see and the monotonic delta preserves exactly that lateness. Every later
+  observation offers a different lateness. Keeping the one that is furthest
+  forward keeps the least-late estimate, and refusing the others is what makes
+  the clock monotonic by construction rather than by a clamp somebody could
+  remove.
+
+- **A counter reading zero, which was very nearly misread.** `time_wall_fixups`
+  reported **0** on a boot, and a counter that is always zero looks exactly like
+  a branch that never runs. Instrumented rather than assumed: over 1600 ms
+  `arch_wall_ns` was read 1,548,460 times, its value changed **twice**, and
+  **one** of those two changes improved the phase. The other was offered and
+  correctly refused for being further from the turn than the estimate already in
+  hand. So zero means *no observation beat the first latch*, which is a normal
+  and correct outcome — and the accessor now says so in as many words, because
+  the next person to read a zero there will make the same inference.
+
+- **Tested by putting the old clock back.** The new self-test asserts that the
+  low nine digits are not zero across eight reads — a property of one reading,
+  not a difference between two, because a test comparing two readings passes on
+  the broken clock whenever the machine is slow enough, which is a test that
+  measures the host. With the coarse RTC restored it reports *"its low nine
+  digits were zero on eight reads — it is counting whole seconds"*; with the fix
+  it is silent. Red on the old, green on the new.
+
+- **And the resolution is now measured on every boot rather than declared**:
+  `resolution : two reads apart by 21048 ns, phase corrected 0 time(s)`. The
+  line above it printed a perfectly plausible date for as long as this fault
+  existed. A resolution nobody measures is a resolution nobody can be wrong
+  about.
+
+- **What it does not give.** The absolute offset keeps up to the probe interval
+  of error and the clock is still always late, so this is not a reason to trust
+  the date to better than a fraction of a second. NTP is the right thing to hold
+  the remainder, and that is what the server session is building.
+
+- **Status:** fixed, kernel 0.3.1.
 
 ### KF-250 — The network stack failed once, on the installed-disk boot, and has not failed since
 

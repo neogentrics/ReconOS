@@ -53,6 +53,11 @@ u64 time_monotonic_ns(void);
  * plausible wrong one. */
 u64 time_wall_ns(void);
 
+/* How many observations of the turning second improved the wall clock's idea
+ * of where in a second it is. **Zero is normal** -- it means no later
+ * observation beat the first latch, not that nothing ran. See KF-251. */
+u64 time_wall_fixups(void);
+
 /* How many intervals have passed. Resynced from the hardware clock where a
  * processor has stopped its tick, so this keeps counting through idleness and
  * **cannot be used to measure whether the tick stopped**. */
