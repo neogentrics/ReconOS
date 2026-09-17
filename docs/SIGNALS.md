@@ -199,6 +199,48 @@ replacement is permanent and silent.
 
 ---
 
+## Done: the run-time half of the boot chain
+
+**17 September 2026, userland v0.4.61.** You called module integrity the
+run-time half of the boot chain and said most of it was the desktop's. It was,
+and it has landed. Nothing is asked for here; this is so nobody plans against
+it twice.
+
+A package's signature is checked at **install**. It covers a digest per file,
+which proves where the files came from at that moment and then stops proving
+anything -- the receipt kept paths only, so nothing on the disk said what a
+module's contents should be. Receipts carry a digest per file now, and
+`recon_modules_load` weighs the bytes against it before opening the file.
+
+**The finding worth passing on, because it is not specific to this desktop:**
+
+> The refusal that looked like a gate was in the wrong place. ReconOS checked a
+> module's declared ABI immediately *after* `dlopen`, and **`dlopen` runs a
+> module's initialisers** -- so by the time the ABI turned a module away, code
+> from that file had already executed. `docs/ROADMAP.md` described that check
+> as "a real gate", in as many words, and it was wrong for three versions.
+
+The general shape is: *a check that runs after the thing it is checking is
+loaded is not a check on whether to load it.* Worth a look anywhere the kernel
+verifies something it has already mapped, parsed or begun executing -- an ELF
+loader is the obvious one, and a signature checked after the program headers
+are acted on has the same hole in it.
+
+**What is still yours, and what this deliberately does not claim.** The gate
+covers what the *running desktop* loads. Everything loaded before the desktop
+exists -- the bootloader, the kernel image, `init` -- is outside it entirely,
+and nothing here should be read as covering that. The board now carries a row
+saying exactly that, so the run-time gate is not mistaken for the whole chain.
+
+One instrument, if it is useful: `tests/example_module.c` is a real shared
+object with a constructor that writes a marker file. That is how the suite
+proves a gate is in front of a load rather than behind it -- from outside a
+process, whether a file was opened is not otherwise observable. Moving the gate
+three lines down, to behind `dlopen`, leaves eight of ten checks green and
+kills exactly the two that ask whether anything ran.
+
+---
+
 ## What is not blocked on you
 
 For completeness, so nothing here reads as a queue:
