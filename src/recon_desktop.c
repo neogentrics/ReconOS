@@ -16,7 +16,6 @@
 #include <string.h>
 #include <strings.h> /* strcasecmp */
 
-#include <wlr/types/wlr_scene.h>
 
 #include "ReconOS.h"
 #include "recon_desktop.h"
@@ -25,7 +24,7 @@
 #include "recon_registry.h"
 #include "recon_icons.h"
 #include "recon_shell.h"
-#include "recon_server.h"
+#include "recon_server_facts.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 #include "recon_widget.h"
@@ -606,7 +605,7 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
      * guessing only works while the two happen to line up.
      */
     if (item->kind == ITEM_SHORTCUT && item->target[0] != '\0') {
-        const char *icon = recon_shell_icon_for_app(desktop->server->shell,
+        const char *icon = recon_shell_icon_for_app(recon_server_shell(desktop->server),
             item->target);
         if (draw_desktop_icon(desktop, p, icon, cx, cy)) {
             return;
@@ -747,7 +746,7 @@ struct recon_desktop *recon_desktop_create(struct recon_server *server,
     /* Nothing is being dragged yet. Zero would mean the first icon. */
     desktop->dragging = -1;
 
-    desktop->panel = recon_panel_create(server->layer_background, width,
+    desktop->panel = recon_server_background_panel(server, width,
         height);
     if (desktop->panel == NULL) {
         free(desktop);
@@ -807,13 +806,6 @@ void recon_desktop_set_visible(struct recon_desktop *desktop, bool visible) {
 
 struct recon_panel *recon_desktop_panel(struct recon_desktop *desktop) {
     return desktop != NULL ? desktop->panel : NULL;
-}
-
-struct wlr_scene_node *recon_desktop_node(struct recon_desktop *desktop) {
-    if (desktop == NULL || desktop->panel == NULL) {
-        return NULL;
-    }
-    return recon_panel_node(desktop->panel);
 }
 
 /* --- Operations --- */

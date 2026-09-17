@@ -91,10 +91,9 @@ void recon_desktop_set_visible(struct recon_desktop *desktop, bool visible);
 struct recon_panel *recon_desktop_panel(struct recon_desktop *desktop);
 
 /*
- * **Defined in `src/recon_desktop_wlr.c`**, which is not built for ReconOS.
- * Nothing on that side has a scene graph to hand a node to.
+ * `recon_desktop_node` was here for the same reason `recon_appwin_node` was,
+ * and went for the same reason: its only caller compares panels now.
  */
-struct wlr_scene_node *recon_desktop_node(struct recon_desktop *desktop);
 
 bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double ly,
     bool pressed, struct recon_desktop_action *action);

@@ -28,6 +28,23 @@
 #define SOCK_STREAM	1
 #define SOCK_DGRAM	2
 
+/*
+ * The two flags that go in the same argument, with Linux's values.
+ *
+ * `socket()` takes them, strips them and says what it did -- see
+ * `libc/socket.c`. They are here rather than in `sys/socket.h` because this is
+ * where the type they are OR'd into lives, and two files defining the pieces
+ * of one argument is how the pieces come to disagree.
+ *
+ * **Neither is zero, and that is deliberate.** Zero would compile identically
+ * today and would be a trap the day either becomes real: every caller asking
+ * for the protection would silently stop asking, with nothing in any source
+ * changed to notice. `<fcntl.h>` gives `O_NOFOLLOW` the same treatment for the
+ * same reason.
+ */
+#define SOCK_NONBLOCK	04000
+#define SOCK_CLOEXEC	02000000
+
 #define IPPROTO_IP	0
 #define IPPROTO_TCP	6
 #define IPPROTO_UDP	17

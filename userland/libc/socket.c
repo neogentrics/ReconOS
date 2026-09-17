@@ -102,12 +102,36 @@ int socket(int domain, int type, int protocol)
      * for what it would get anyway and is allowed; anything else is refused
      * rather than quietly given TCP.
      */
+    int kind = type & ~(SOCK_NONBLOCK | SOCK_CLOEXEC);
+
     if (protocol != 0 &&
-            !(type == SOCK_STREAM && protocol == 6) &&
-            !(type == SOCK_DGRAM && protocol == 17)) {
+            !(kind == SOCK_STREAM && protocol == 6) &&
+            !(kind == SOCK_DGRAM && protocol == 17)) {
         errno = EPROTONOSUPPORT;
         return -1;
     }
+
+    /*
+     * --- The two flags, and what each means on this kernel ---
+     *
+     * Stripped before the type is checked, because they are part of the same
+     * argument and a type with a flag on it is not an unknown type.
+     *
+     * **`SOCK_NONBLOCK` is granted, and it is also the only thing on offer.**
+     * Nothing on this kernel blocks: `accept` answers EAGAIN when nobody is
+     * waiting, and so does a read with nothing to read. A caller asking for
+     * non-blocking gets what it asked for; a caller *not* asking for it also
+     * gets non-blocking, which is the difference from Linux that the header
+     * above spells out. Refusing the flag would be worse than granting it --
+     * the program that asks is the one written for this behaviour.
+     *
+     * **`SOCK_CLOEXEC` is accepted and does nothing**, because there is no
+     * `exec` for a descriptor to survive into. It is taken rather than refused
+     * so that a program written the careful way still runs; the day this
+     * kernel can replace a program, the flag is already being asked for and
+     * this comment is where to start.
+     */
+    type &= ~(SOCK_NONBLOCK | SOCK_CLOEXEC);
 
     if (type != SOCK_STREAM && type != SOCK_DGRAM) {
         errno = ESOCKTNOSUPPORT;

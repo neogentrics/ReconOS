@@ -1,7 +1,7 @@
 /*
  * Where the wayland stops.
  *
- * Six functions, and the only reason they are a file rather than six lines
+ * Seven functions, and the only reason they are a file rather than six lines
  * in each caller is that this is the one place allowed to include
  * `recon_server.h` on their behalf. See that header and
  * `include/recon_server_facts.h` for why.
@@ -43,6 +43,14 @@ struct recon_panel *recon_server_chrome_panel(struct recon_server *server,
         return NULL;
     }
     return recon_panel_create(server->layer_chrome, width, height);
+}
+
+struct recon_panel *recon_server_background_panel(struct recon_server *server,
+        int width, int height) {
+    if (server == NULL) {
+        return NULL;
+    }
+    return recon_panel_create(server->layer_background, width, height);
 }
 
 struct recon_loop *recon_server_loop(struct recon_server *server) {

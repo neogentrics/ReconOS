@@ -28,81 +28,82 @@ help-27.txt	The firewall
 help-28.txt	Reaching this machine from elsewhere
 help-29.txt	When something goes wrong
 help-30.txt	What is not built yet
-changes-01.txt	v0.4.59 — which window is on top
-changes-02.txt	v0.4.58 — waiting, as its own thing
-changes-03.txt	v0.4.57 — what is left of the port, measured
-changes-04.txt	v0.4.56 — the desktop program runs
-changes-05.txt	v0.4.55 — the desktop can be typed at
-changes-06.txt	v0.4.54 — there is a desktop program
-changes-07.txt	v0.4.53 — the desktop links, and one symbol is missing
-changes-08.txt	v0.4.52 — a form can carry a file
-changes-09.txt	v0.4.51 — a keyboard and something to read with
-changes-10.txt	v0.4.50 — the host must not show through
-changes-11.txt	v0.4.49 — a file field was a text box
-changes-12.txt	v0.4.48 — a `#` that ended the command
-changes-13.txt	v0.4.47 — signals, and two files left off the list on purpose
-changes-14.txt	v0.4.46 — the same shape a third time, and once in the instrument
-changes-15.txt	v0.4.45 — the other side of the seam
-changes-16.txt	v0.4.44 — the last inch
-changes-17.txt	v0.4.43 — it is the workstation, and its text stays in the box
-changes-18.txt	v0.4.42 — one include held twenty-four files
-changes-19.txt	v0.4.41 — four sentences nobody was checking
-changes-20.txt	v0.4.40 — a cell can cover several columns
-changes-21.txt	v0.4.39 — the Recycle Bin, which nothing had ever run
-changes-22.txt	v0.4.38 — sockets, and the claim nobody could test
-changes-23.txt	v0.4.37 — a cell wraps inside its column
-changes-24.txt	v0.4.36 — what installing a package actually does
-changes-25.txt	v0.4.35 — five of them were not text
-changes-26.txt	v0.4.34 — every error code has something that can raise it
-changes-27.txt	v0.4.33 — memory a program can ask for
-changes-28.txt	v0.4.32 — the nine that need nothing from the kernel
-changes-29.txt	v0.4.31 — sscanf
-changes-30.txt	v0.4.30 — files by name, by number, and by directory
-changes-31.txt	v0.4.29 — errno, and two numberings that meet in one place
-changes-32.txt	v0.4.28 — the allocator
-changes-33.txt	v0.4.27 — the kernel starts the system instead of containing it
-changes-34.txt	v0.4.26 — the volume has a shape, and a second boot finds it
-changes-35.txt	v0.4.25 — ReconOS is on the screen
-changes-36.txt	v0.4.24 — the maths, and the difference between close and right
-changes-37.txt	v0.4.23 — the calendar, and a measurement that asks the linker
-changes-38.txt	v0.4.22 — a C library of our own, checked against the one it replaces
-changes-39.txt	v0.4.21 — cookies, and the four things they are not allowed to do
-changes-40.txt	v0.4.20 — forms, and they submit
-changes-41.txt	v0.4.19 — a > inside an attribute is not the end of a tag
-changes-42.txt	v0.4.18 — the package module splits, and the stub file goes
-changes-43.txt	v0.4.17 — tables have columns
-changes-44.txt	v0.4.16 — the fuzzer learns about stylesheets and addresses
-changes-45.txt	v0.4.15 — text-align, which needed a line before it could be placed
-changes-46.txt	v0.4.14 — the configuration that ships, built for the first time
-changes-47.txt	v0.4.13 — a package says who made it
-changes-48.txt	v0.4.11 — History and Bookmarks, as pages
-changes-49.txt	v0.4.10 — a link to a place on a page goes there
-changes-50.txt	v0.4.9 — a corpus nobody here wrote
-changes-51.txt	v0.4.8 — the browser gets the rest of a browser
-changes-52.txt	v0.4.7
-changes-53.txt	v0.4.6
-changes-54.txt	v0.4.5
-changes-55.txt	v0.4.0
-changes-56.txt	v0.3.0
-changes-57.txt	v0.2.17
-changes-58.txt	v0.2.16
-changes-59.txt	v0.2.15
-changes-60.txt	v0.2.14
-changes-61.txt	v0.2.13
-changes-62.txt	v0.2.12
-changes-63.txt	v0.2.11
-changes-64.txt	v0.2.10
-changes-65.txt	v0.2.9
-changes-66.txt	v0.2.8
-changes-67.txt	v0.2.7
-changes-68.txt	v0.2.6
-changes-69.txt	v0.2.5
-changes-70.txt	v0.2.4
-changes-71.txt	v0.2.3
-changes-72.txt	v0.2.2
-changes-73.txt	v0.2.1
-changes-74.txt	v0.2.0
-changes-75.txt	v0.1.3
-changes-76.txt	v0.1.2
-changes-77.txt	v0.1.1
-changes-78.txt	v0.1.0
+changes-01.txt	v0.4.60 — the clock, the desktop, and two functions nothing wanted
+changes-02.txt	v0.4.59 — which window is on top
+changes-03.txt	v0.4.58 — waiting, as its own thing
+changes-04.txt	v0.4.57 — what is left of the port, measured
+changes-05.txt	v0.4.56 — the desktop program runs
+changes-06.txt	v0.4.55 — the desktop can be typed at
+changes-07.txt	v0.4.54 — there is a desktop program
+changes-08.txt	v0.4.53 — the desktop links, and one symbol is missing
+changes-09.txt	v0.4.52 — a form can carry a file
+changes-10.txt	v0.4.51 — a keyboard and something to read with
+changes-11.txt	v0.4.50 — the host must not show through
+changes-12.txt	v0.4.49 — a file field was a text box
+changes-13.txt	v0.4.48 — a `#` that ended the command
+changes-14.txt	v0.4.47 — signals, and two files left off the list on purpose
+changes-15.txt	v0.4.46 — the same shape a third time, and once in the instrument
+changes-16.txt	v0.4.45 — the other side of the seam
+changes-17.txt	v0.4.44 — the last inch
+changes-18.txt	v0.4.43 — it is the workstation, and its text stays in the box
+changes-19.txt	v0.4.42 — one include held twenty-four files
+changes-20.txt	v0.4.41 — four sentences nobody was checking
+changes-21.txt	v0.4.40 — a cell can cover several columns
+changes-22.txt	v0.4.39 — the Recycle Bin, which nothing had ever run
+changes-23.txt	v0.4.38 — sockets, and the claim nobody could test
+changes-24.txt	v0.4.37 — a cell wraps inside its column
+changes-25.txt	v0.4.36 — what installing a package actually does
+changes-26.txt	v0.4.35 — five of them were not text
+changes-27.txt	v0.4.34 — every error code has something that can raise it
+changes-28.txt	v0.4.33 — memory a program can ask for
+changes-29.txt	v0.4.32 — the nine that need nothing from the kernel
+changes-30.txt	v0.4.31 — sscanf
+changes-31.txt	v0.4.30 — files by name, by number, and by directory
+changes-32.txt	v0.4.29 — errno, and two numberings that meet in one place
+changes-33.txt	v0.4.28 — the allocator
+changes-34.txt	v0.4.27 — the kernel starts the system instead of containing it
+changes-35.txt	v0.4.26 — the volume has a shape, and a second boot finds it
+changes-36.txt	v0.4.25 — ReconOS is on the screen
+changes-37.txt	v0.4.24 — the maths, and the difference between close and right
+changes-38.txt	v0.4.23 — the calendar, and a measurement that asks the linker
+changes-39.txt	v0.4.22 — a C library of our own, checked against the one it replaces
+changes-40.txt	v0.4.21 — cookies, and the four things they are not allowed to do
+changes-41.txt	v0.4.20 — forms, and they submit
+changes-42.txt	v0.4.19 — a > inside an attribute is not the end of a tag
+changes-43.txt	v0.4.18 — the package module splits, and the stub file goes
+changes-44.txt	v0.4.17 — tables have columns
+changes-45.txt	v0.4.16 — the fuzzer learns about stylesheets and addresses
+changes-46.txt	v0.4.15 — text-align, which needed a line before it could be placed
+changes-47.txt	v0.4.14 — the configuration that ships, built for the first time
+changes-48.txt	v0.4.13 — a package says who made it
+changes-49.txt	v0.4.11 — History and Bookmarks, as pages
+changes-50.txt	v0.4.10 — a link to a place on a page goes there
+changes-51.txt	v0.4.9 — a corpus nobody here wrote
+changes-52.txt	v0.4.8 — the browser gets the rest of a browser
+changes-53.txt	v0.4.7
+changes-54.txt	v0.4.6
+changes-55.txt	v0.4.5
+changes-56.txt	v0.4.0
+changes-57.txt	v0.3.0
+changes-58.txt	v0.2.17
+changes-59.txt	v0.2.16
+changes-60.txt	v0.2.15
+changes-61.txt	v0.2.14
+changes-62.txt	v0.2.13
+changes-63.txt	v0.2.12
+changes-64.txt	v0.2.11
+changes-65.txt	v0.2.10
+changes-66.txt	v0.2.9
+changes-67.txt	v0.2.8
+changes-68.txt	v0.2.7
+changes-69.txt	v0.2.6
+changes-70.txt	v0.2.5
+changes-71.txt	v0.2.4
+changes-72.txt	v0.2.3
+changes-73.txt	v0.2.2
+changes-74.txt	v0.2.1
+changes-75.txt	v0.2.0
+changes-76.txt	v0.1.3
+changes-77.txt	v0.1.2
+changes-78.txt	v0.1.1
+changes-79.txt	v0.1.0

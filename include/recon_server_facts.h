@@ -122,6 +122,31 @@ struct recon_panel *recon_server_chrome_panel(struct recon_server *server,
     int width, int height);
 
 /*
+ * And one for what is behind everything: the wallpaper, and the desktop's own
+ * icons drawn over it.
+ *
+ * The fourth and last layer a shell puts things in. They are four because the
+ * compositor stacks by layer and there are four heights of thing -- behind,
+ * among the windows, above them, and the chrome above that -- and naming the
+ * *kind* is what keeps a caller from having to know which is which.
+ */
+struct recon_panel *recon_server_background_panel(struct recon_server *server,
+    int width, int height);
+
+/*
+ * How light or dark the wallpaper is at a point, 0 to 255.
+ *
+ * For anything drawn straight onto the desktop, which has to stay readable
+ * over a picture the system did not choose -- an icon label, mostly.
+ *
+ * Answers 128, neither light nor dark, when there is no wallpaper to ask
+ * about, so a caller gets a usable answer rather than a special case. On a
+ * machine with no compositor that is every point, and a label drawn against
+ * it is as readable as one drawn against a real average.
+ */
+int recon_background_luminance_at(struct recon_server *server, int x, int y);
+
+/*
  * The loop to wait on.
  *
  * `include/recon_loop.h` is what a program does with it, and this is where one

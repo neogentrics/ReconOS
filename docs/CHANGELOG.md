@@ -9,6 +9,66 @@ way for the two to disagree.
 
 ---
 
+## v0.4.60 — the clock, the desktop, and two functions nothing wanted
+
+**64 of 85 sources build with no libc under them**, up from 62. Twenty are
+left, holding 23,478 lines — and eight of those twenty are the wayland halves
+of seams, which are supposed to be there.
+
+### 629 lines held by one constant
+
+`src/recon_clock.c` asks for a non-blocking datagram socket to send an SNTP
+question on, which is the ordinary way to write that, and this library had no
+name for `SOCK_NONBLOCK`. `socket()` also refused any type with a flag on it,
+because a type with a flag is not a type it recognised.
+
+Both flags are defined now, with Linux's values, and `socket()` strips them
+before it checks the type. What each means here is worth saying:
+
+- **`SOCK_NONBLOCK` is granted, and is also the only thing on offer.** Nothing
+  on this kernel blocks — `accept` answers `EAGAIN` when nobody is waiting, and
+  so does a read with nothing to read. A caller *not* asking for it gets it
+  anyway, which is the difference from Linux the header already spells out.
+  Refusing the flag would be worse than granting it: the program that asks is
+  the one written for this behaviour.
+- **`SOCK_CLOEXEC` is accepted and does nothing**, because there is no `exec`
+  for a descriptor to survive into. Accepted rather than refused so a program
+  written the careful way still runs.
+
+**Neither is defined as zero**, which would compile identically today and be a
+trap the day either becomes real: every caller asking for the protection would
+silently stop asking. `O_NOFOLLOW` got the same treatment in v0.4.53 and for
+the same reason.
+
+### And two functions nothing called
+
+`recon_appwin_node` and `recon_desktop_node` existed to hand a scene node to
+`recon_shell.c`, which was their only caller. The shell asks about panels since
+v0.4.59, so nothing anywhere named either of them.
+
+v0.4.57 had given `recon_appwin_node` a file of its own — twenty-five lines,
+with a note saying *"if it grew, the seam would be in the wrong place"*. It did
+not grow. **It turned out not to be needed at all**, which is the better
+outcome and the one worth recording: the seam did not relocate the compositor
+dependency, it removed it. That file is gone.
+
+`src/recon_desktop.c` — 1,287 lines about icons, selection rectangles and
+renaming — went with the include, once two more questions moved onto
+`recon_server_facts.h`: which layer the wallpaper sits in, and how light or
+dark it is at a point. That file is seven functions now, and all seven are the
+same shape: something a program wants to know, asked without naming a
+compositor to ask it of.
+
+### The same blunt-replace mistake, twice in two days
+
+`server->shell` replaced without an anchor around it hit `desktop->server->shell`
+and turned a member access into a call on a member that does not exist. The
+identical fault hit `recon_taskmgr.c` in v0.4.58. Both were caught by the
+compiler immediately, which is the only reason it is a footnote rather than an
+entry — **a replacement with no anchor around it hits things nobody looked at.**
+
+---
+
 ## v0.4.59 — which window is on top
 
 `src/recon_shell.c` is seven thousand two hundred lines and mentioned a

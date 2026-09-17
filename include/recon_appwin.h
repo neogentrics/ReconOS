@@ -407,18 +407,15 @@ struct recon_panel *recon_appwin_panel(struct recon_appwin *win);
 void recon_appwin_set_visible(struct recon_appwin *win, bool visible);
 
 /*
- * The scene node this window draws into.
+ * There was a `recon_appwin_node` here, which handed a window's scene node to
+ * `recon_shell.c` so it could ask the scene graph what was on top. The shell
+ * asks `recon_panel_topmost_of` now, and nothing anywhere wanted the node --
+ * so it is gone rather than kept for a caller that does not exist.
  *
- * Lets the shell ask the scene graph which window is genuinely on top at a
- * point, rather than assuming. Testing only whether a point falls inside a
- * window is not enough: a maximized window contains every point on screen and
- * would claim clicks meant for windows stacked above it.
- *
- * **Defined in `src/recon_appwin_wlr.c`**, which is the wlroots half and is
- * not built for ReconOS. A build with no compositor under it does not call
- * this, because nothing on that side has a scene graph to ask.
+ * The question it existed for is still asked, and still not answered by
+ * testing containment: a maximized window contains every point on the screen.
+ * See `recon_panel_topmost_of` in `include/recon_ui.h`.
  */
-struct wlr_scene_node *recon_appwin_node(struct recon_appwin *win);
 
 /*
  * The cursor to show at this point, or NULL to leave it alone. Lets a resize
