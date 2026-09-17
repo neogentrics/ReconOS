@@ -50,6 +50,7 @@
  */
 #include <recon/kernel/xhci.h>
 #include <recon/kernel/input.h>
+#include <recon/kernel/hid_boot.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
@@ -64,17 +65,6 @@
 #define HID_SET_PROTOCOL 0x0B
 #define HID_BOOT_PROTOCOL 0
 
-/* The first modifier's keycode. The eight bits of a boot keyboard's first byte
- * are left control, shift, alt, meta, then the same four on the right -- which
- * is exactly the order of HID keycodes 224 to 231, so the bit number is the
- * offset and no table is needed. */
-#define MODIFIER_FIRST KEY_LEFTCTRL
-
-/* Six, because that is what a boot keyboard reports. A seventh key held is not
- * reported as a seventh key; the device sends a rollover instead, which is
- * handled below. */
-#define BOOT_KEYS 6
-
 /* How many devices this driver will take. A machine with more keyboards than
  * this plugged in is not a machine anybody is holding. */
 #define HID_MAX 4
@@ -84,9 +74,12 @@ struct hid {
 	struct usb_device *ud;
 	bool is_mouse;
 
-	/* The previous report, which is what makes a state into events. */
-	u8 last[8];
-	bool have_last;
+	/* The previous report, which is what makes a state into events.
+	 *
+	 * Held here rather than decoded here: `hid_boot` is the state the boot
+	 * protocol needs and nothing in it is about USB, which is why a
+	 * Bluetooth keyboard can use the same decoder. */
+	struct hid_boot boot;
 
 	u64 reports;
 };
@@ -109,112 +102,6 @@ static u32 report_size(const struct hid *h)
 		n = 8;
 
 	return n ? n : (h->is_mouse ? 4u : 8u);
-}
-
-/* --- the keyboard ---------------------------------------------------------
- *
- * Eight bytes: modifiers, a reserved byte, then up to six keycodes. The
- * keycodes are HID usage ids, which are exactly what this kernel's input layer
- * uses -- so there is no translation here at all, which is the whole reason
- * those numbers were chosen.
- */
-static bool key_in(const u8 *report, u8 code)
-{
-	unsigned i;
-
-	for (i = 0; i < BOOT_KEYS; i++)
-		if (report[2 + i] == code)
-			return true;
-
-	return false;
-}
-
-static void decode_keyboard(struct hid *h, const u8 *report)
-{
-	unsigned i;
-
-	/* Every keycode being 1 is ErrorRollOver: more keys are held than the
-	 * device can report, so **this is not a list of keys**. Treating it as
-	 * one would press the letter A six times. The report is dropped and
-	 * the previous state left alone -- the keys really are still held, and
-	 * the device will say so properly as soon as one is let go. */
-	if (report[2] == 1 && report[3] == 1 && report[4] == 1) {
-		rollovers++;
-		return;
-	}
-
-	/* The modifiers, which are a bitmap and not in the key list. */
-	for (i = 0; i < 8; i++) {
-		bool now  = (report[0] >> i) & 1u;
-		bool was  = h->have_last ? ((h->last[0] >> i) & 1u) : false;
-
-		if (now != was)
-			input_post((u16)(MODIFIER_FIRST + i),
-				   now ? INPUT_PRESS : INPUT_RELEASE);
-	}
-
-	/* Released: in the old report and not the new one.
-	 *
-	 * Done before the presses so that a key let go in the same report as
-	 * another is pressed arrives in that order. It is the order the person
-	 * did it in more often than not, and a reader building a chord from
-	 * these should see the release first. */
-	if (h->have_last) {
-		for (i = 0; i < BOOT_KEYS; i++) {
-			u8 code = h->last[2 + i];
-
-			if (code > 3 && !key_in(report, code))
-				input_post(code, INPUT_RELEASE);
-		}
-	}
-
-	/* Pressed: in the new report and not the old.
-	 *
-	 * Codes below 4 are not keys -- 0 is "no key here", 1 to 3 are error
-	 * conditions -- and posting them would be a keypress nobody made. */
-	for (i = 0; i < BOOT_KEYS; i++) {
-		u8 code = report[2 + i];
-
-		if (code > 3 && !(h->have_last && key_in(h->last, code)))
-			input_post(code, INPUT_PRESS);
-	}
-
-	kmemcpy(h->last, report, 8);
-	h->have_last = true;
-}
-
-/* --- the mouse ------------------------------------------------------------
- *
- * Three bytes, or four with a wheel: buttons, then x and y as signed bytes.
- *
- * **Y is not negated here**, and that is the difference from the PS/2 mouse.
- * HID reports positive as *down*, which is the direction the input layer uses,
- * so this driver passes it through and the older one flips it. Both arrive
- * meaning the same thing, which is the point of normalising in the driver.
- */
-static void decode_mouse(struct hid *h, const u8 *report, u32 len)
-{
-	static const u16 button[3] = { BTN_LEFT, BTN_RIGHT, BTN_MIDDLE };
-	unsigned i;
-
-	/* Signed bytes, and cast through i8 rather than subtracted: a HID mouse
-	 * reports eight bits, unlike PS/2's nine, so the sign is in the byte
-	 * itself. */
-	input_post_motion(REL_X, (i32)(i8)report[1]);
-	input_post_motion(REL_Y, (i32)(i8)report[2]);
-
-	if (len >= 4)
-		input_post_motion(REL_WHEEL, (i32)(i8)report[3]);
-
-	for (i = 0; i < 3; i++) {
-		bool down = (report[0] >> i) & 1u;
-
-		/* Asked of the input layer rather than remembered here, so that
-		 * two mice cannot disagree about whether a button is down. */
-		if (down != input_key_held(button[i]))
-			input_post(button[i], down ? INPUT_PRESS
-						   : INPUT_RELEASE);
-	}
 }
 
 /* --- the thread ----------------------------------------------------------- */
@@ -268,9 +155,12 @@ static void poll(void *arg)
 				h->reports++;
 
 				if (h->is_mouse)
-					decode_mouse(h, buf, got);
-				else
-					decode_keyboard(h, buf);
+					hid_boot_mouse(buf, got);
+				else if (!hid_boot_keyboard(&h->boot, buf))
+					/* A rollover, dropped. Counted here
+					 * rather than inside the decoder, so
+					 * this number stays this bus's. */
+					rollovers++;
 			}
 
 			/* Straight back on, before anything else is looked at.
@@ -342,7 +232,7 @@ bool usb_hid_attach(struct xhci *x, struct usb_device *ud)
 	h->x = x;
 	h->ud = ud;
 	h->is_mouse = ud->usb_protocol == HID_PROTOCOL_MOUSE;
-	h->have_last = false;
+	h->boot.have_last = false;
 	h->reports = 0;
 
 	kprintf("  usbhid       : a %s on interrupt endpoint %02x\n",
@@ -430,7 +320,7 @@ static bool feed(struct hid *h, u8 mods, u8 k0, u8 k1)
 	report[2] = k0;
 	report[3] = k1;
 
-	decode_keyboard(h, report);
+	hid_boot_keyboard(&h->boot, report);
 	return true;
 }
 
@@ -453,7 +343,7 @@ bool usb_hid_self_test(void)
 
 	kmemset(&h, 0, sizeof(h));
 	h.is_mouse = false;
-	h.have_last = false;
+	h.boot.have_last = false;
 
 	drain();
 
@@ -489,7 +379,14 @@ bool usb_hid_self_test(void)
 		roll[2] = roll[3] = roll[4] = 1;
 		roll[5] = roll[6] = roll[7] = 1;
 
-		decode_keyboard(&h, roll);
+		/* And the decoder must *say* it dropped it, not merely post
+		 * nothing -- those look identical from the input layer and
+		 * only one of them is the behaviour being tested. */
+		if (hid_boot_keyboard(&h.boot, roll)) {
+			kputs("  usbhid: a rollover report was decoded as a "
+			      "key list rather than reported as a rollover\n");
+			ok = false;
+		}
 
 		if (drain()) {
 			kputs("  usbhid: a rollover report produced events -- "
@@ -501,7 +398,7 @@ bool usb_hid_self_test(void)
 		/* And it did not disturb what was held: the keys really are
 		 * still down, and the device will say so properly as soon as
 		 * one is let go. */
-		if (!h.have_last || h.last[2] != KEY_A) {
+		if (!h.boot.have_last || h.boot.last[2] != KEY_A) {
 			kputs("  usbhid: a rollover overwrote the state, so "
 			      "every key would appear to be released\n");
 			ok = false;

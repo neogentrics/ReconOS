@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-10, and each entry says why. They are listed because a register that only
+11, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -173,6 +173,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-232** — Three timers did not fire, once, on one path of twenty-eight
 - **KF-237** — A power cut inside a rename left no valid superblock, once
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
+- **KF-249** — Plug in a USB keyboard and the machine can never idle again
 
 ---
 
@@ -7779,6 +7780,68 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-249 — Plug in a USB keyboard and the machine can never idle again
+
+- **Found:** 17 September 2026, booting a machine with USB input attached to
+  check that lifting the boot decoders out of `usb_hid.c` had broken nothing.
+  It had not. This was already there.
+
+  ```
+  $ qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+        -device qemu-xhci -device usb-kbd -device usb-mouse \
+        -kernel kernel/build/x86_64/reconos-kernel.elf
+
+    power: 11 wakeup(s) in 204 ms, against 20 a fixed tick would have cost
+    power: the tick was suspended and cost no fewer wakeups, which means it
+           did not stay suspended
+    a tick that stops  : FAIL
+  ```
+
+- **What it is.** `usb_hid.c`'s poller queues an interrupt transfer, asks
+  whether it completed, and when nothing has arrived sleeps **4 ms** and asks
+  again. The comment says why it sleeps rather than yields, and that reasoning
+  is right as far as it goes. But a thread that wakes every 4 ms is a machine
+  that wakes every 4 ms, so the tickless idle this kernel went to some trouble
+  to build is switched off by the presence of a keyboard.
+
+  The measurement is the entry: 11 wakeups where a fully suspended tick would
+  be a handful and a fixed 100 Hz tick would be 20. The idle path is working —
+  it halved the wakeups — and then the poller put most of them back.
+
+- **An interrupt endpoint is called that because it interrupts.** The xHCI
+  driver reads its event ring by polling it, so every transfer on every device
+  is discovered by somebody asking. The fix is to let the controller raise an
+  interrupt and have the poller wait on that instead of on a timer — which is
+  the same machinery KF-248 wants for per-endpoint completions, and is the
+  reason these two should be built together rather than one after the other.
+
+- **The cost is a laptop's battery**, on the one machine this project is
+  actually aimed at. The Gateway is a fanless Celeron; waking 250 times a
+  second to ask a keyboard whether anything happened is exactly the thing
+  tickless idle exists to avoid.
+
+- **Why nothing caught it, and this is the part that matters.** The kernel's
+  own `power_idle_self_test` detects it perfectly, prints the numbers, and fails
+  — it needed no new instrument at all. **No path in the matrix attaches a USB
+  input device.** `grep -c 'usb-kbd\|usb-mouse' scripts/*.sh` finds nothing, so
+  twenty-eight boots all report `a tick that stops : pass` about machines that
+  have no keyboard, which is the one kind of machine nobody uses.
+
+  A check that runs on every path and is never given the input that breaks it
+  is a check that cannot fail, and it looks exactly like one that passes.
+
+- **The path is deliberately not added yet, and that is a choice worth
+  recording.** Adding it turns the matrix red immediately and blocks every
+  session's pushes on a fault none of them introduced. So the configuration is
+  written down here with the command that reproduces it, and the matrix path
+  goes in **with** the fix rather than before it — the only case in this
+  project where a missing test is left missing on purpose, and it is on the
+  condition that it is not left that way quietly.
+
+- **Status:** open. Measured, reproducible in one command, and not a
+  regression: the same boot on `6c93dae`, the commit before the graphics merge,
+  fails identically.
 
 ### KF-248 — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 
