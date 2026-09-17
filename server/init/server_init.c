@@ -131,6 +131,14 @@ struct server_facts {
 	char                 name[RECON_NAME_MAX];
 	unsigned long        served;
 	unsigned long        bytes_out;
+
+	/* What the clock service last measured. Kept here rather than read
+	 * from the NTP client directly, for the reason this structure exists
+	 * at all: the page and the JSON endpoint must not be able to disagree,
+	 * and two readers of one fact eventually become two facts. */
+	long long clock_offset_ms;
+	int       clock_stratum;
+	int       clock_known;
 };
 
 static struct server_facts FACTS;
@@ -166,10 +174,25 @@ static struct dns_client RESOLVER;
  * `Referer`, which is the one place a secret must not go -- `auth.c` says so at
  * more length.
  */
-static int may_write(const struct http_request *r, void *ctx)
+static int may_write(const struct http_request *r, const char *body,
+                     size_t body_len, void *ctx)
 {
-	return auth_ok((const struct auth *)ctx,
-	               http_header_get(r, "authorization"));
+	const struct auth *guard = (const struct auth *)ctx;
+
+	/* The header first: it is what an API client sends and it works for
+	 * every method, including the ones with no body. */
+	if (auth_ok(guard, http_header_get(r, "authorization")))
+		return 1;
+
+	/*
+	 * Then a form field, so the console can be driven from a browser.
+	 *
+	 * **A browser form cannot send a header**, which is why the dashboard's
+	 * rename form answered 401 to every submission from the moment the
+	 * guard landed until this was written. See `auth.h` for why a POST body
+	 * is admitted where a query string is still refused.
+	 */
+	return auth_ok_form(guard, body, body_len);
 }
 
 /*
@@ -311,10 +334,34 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 {
 	static char page[HTTP_RESPONSE_MAX];
 	static char safe_name[RECON_NAME_MAX * 6 + 1];
+	static char clock_said[96];
 	struct server_facts *f = (struct server_facts *)ctx;
+	unsigned running = 0, failed = 0, refused = 0;
 	int n;
 
 	(void)r; (void)body; (void)body_len;
+
+	supervisor_tally(&SUPERVISOR, &running, &failed, &refused);
+
+	/*
+	 * The clock, in words, with its real uncertainty.
+	 *
+	 * **Never to the millisecond it cannot support.** `SYS_WALLTIME`
+	 * counts whole seconds -- VF-021 -- so this machine's contribution to
+	 * the offset is coarse, and a page that printed "1174 ms" would be
+	 * claiming a precision the hardware underneath it does not have.
+	 */
+	if (!f->clock_known) {
+		snprintf(clock_said, sizeof(clock_said),
+		         "not measured yet");
+	} else {
+		long long off = f->clock_offset_ms;
+
+		snprintf(clock_said, sizeof(clock_said),
+		         "about %lld s %s (+/- 1 s), from a stratum %d server",
+		         (off >= 0 ? off : -off) / 1000,
+		         off >= 0 ? "behind" : "ahead", f->clock_stratum);
+	}
 
 	/* Six bytes out for one in, worst case -- a name of nothing but quotes.
 	 * A buffer sized at the name's length would refuse on the first one,
@@ -336,13 +383,26 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             "<tr><td>page size</td><td>%u KiB</td></tr>\n"
 	             "<tr><td>requests served</td><td><code>%lu</code></td></tr>\n"
 	             "<tr><td>bytes sent</td><td><code>%lu</code></td></tr>\n"
+	             "<tr><td>services</td><td>%u running, %u failed, "
+	             "%u refused</td></tr>\n"
+	             "<tr><td>clock</td><td>%s</td></tr>\n"
+	             "<tr><td>writes</td><td>%s</td></tr>\n"
 	             "</table>\n"
 	             "<form class=\"rename\" method=\"post\" "
 	             "action=\"/api/name\">\n"
 	             "<label>rename this machine "
 	             "<input name=\"name\" value=\"%s\"></label>\n"
+	             "<label>console token "
+	             "<input name=\"token\" type=\"password\" "
+	             "autocomplete=\"off\"></label>\n"
 	             "<button>Set</button>\n"
 	             "</form>\n"
+	             "<p class=\"footnote\">The token is printed on this "
+	             "machine's serial console at boot and is new on every "
+	             "boot. A browser form cannot send an "
+	             "<code>Authorization</code> header, which is why this "
+	             "asks for it here; an API client should send the header "
+	             "instead.</p>\n"
 	             "<p class=\"footnote\">"
 	             "Served by <code>server/http/</code> over the kernel's five "
 	             "socket calls. This page is the first thing to move bytes "
@@ -359,6 +419,10 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             (unsigned long long)(f->machine.memory_free_bytes >> 20),
 	             f->machine.page_size / 1024u,
 	             f->served, f->bytes_out,
+	             running, failed, refused,
+	             clock_said,
+	             GUARD.armed ? "need the console token"
+	                         : "refused -- this machine has no secret",
 	             safe_name);
 
 	if (n < 0 || (size_t)n >= sizeof(page))
@@ -1190,6 +1254,10 @@ static int clock_poll(void *ctx)
 	 * Filed in `docs/SIGNALS.md`. A finer wall clock makes this useful;
 	 * nothing else has to change.
 	 */
+	FACTS.clock_offset_ms = sample.offset_ms;
+	FACTS.clock_stratum = sample.stratum;
+	FACTS.clock_known = 1;
+
 	snprintf(line, sizeof(line),
 	         "  the clock: %s by about %lld ms (+/- a second, this"
 	         " machine's clock counts whole ones), stratum %d\n",

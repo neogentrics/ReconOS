@@ -376,7 +376,8 @@ struct http_site {
 	 * `WWW-Authenticate` header, and logged, so a locked-out client is an
 	 * entry somebody can find rather than a silence.
 	 */
-	int (*allow)(const struct http_request *r, void *ctx);
+	int (*allow)(const struct http_request *r, const char *body,
+	             size_t body_len, void *ctx);
 	void *allow_ctx;
 };
 

@@ -116,4 +116,36 @@ int auth_arm(struct auth *a, const unsigned char *bytes, size_t len);
  */
 int auth_ok(const struct auth *a, const char *value);
 
+/*
+ * The same decision, for a token that arrived in a form field.
+ *
+ * --- Why a second way in, when `auth.c` refuses the query string ---
+ *
+ * **Because a browser form cannot send a header**, and a console a browser
+ * cannot use is not a console.
+ *
+ * That was found the hard way: the dashboard has offered a rename form since
+ * long before the guard existed, and from the moment `POST /api/name` became
+ * guarded that form answered 401 to every submission. Nobody noticed for three
+ * versions, because the endpoint was tested with `curl -H` and the page it is
+ * on was never submitted.
+ *
+ * --- Why this is not the thing `auth.c` refuses ---
+ *
+ * A **query string** is refused and stays refused. It is written into this
+ * server's own access log, it is sent onward by a browser in `Referer`, and it
+ * sits in history. A secret in one is a secret in three places nobody meant to
+ * put it.
+ *
+ * A **POST body** is none of those. It is not logged here, not in `Referer`,
+ * not in history. It is still not private -- nothing over plain HTTP is, and
+ * `auth.h` above says so at length -- but it is exactly as exposed as the
+ * header beside it and no more.
+ *
+ * The header is preferred and is what an API client should send. This exists so
+ * the machine can be administered from a browser with no JavaScript, which is
+ * the only kind of browser this project has committed to supporting.
+ */
+int auth_ok_form(const struct auth *a, const char *body, size_t body_len);
+
 #endif

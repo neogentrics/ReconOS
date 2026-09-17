@@ -1066,6 +1066,7 @@ add_test(NAME server_http_concurrent COMMAND recon_server_concurrent_tests)
 # strcmp, no scheme check, and an unarmed guard that allowed everyone through.
 add_executable(recon_server_auth_tests
     server/auth.c
+    server/http/form.c
     server/tests/test_auth.c)
 
 add_test(NAME server_auth COMMAND recon_server_auth_tests)

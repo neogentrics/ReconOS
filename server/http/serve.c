@@ -838,7 +838,11 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 				            site->bytes_sent);
 				return 0;
 			}
-			if (!site->allow(req, site->allow_ctx)) {
+			if (!site->allow(req,
+			                 req->content_length ?
+			                     buf + req->head_length : 0,
+			                 req->content_length,
+			                 site->allow_ctx)) {
 				/* Logged. A client that cannot get in is
 				 * exactly the entry somebody goes looking for,
 				 * and a refusal that leaves no trace is

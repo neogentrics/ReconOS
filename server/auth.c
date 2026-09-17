@@ -29,6 +29,7 @@
  */
 
 #include "auth.h"
+#include "http/form.h"
 
 static char hex(unsigned v)
 {
@@ -141,4 +142,48 @@ int auth_ok(const struct auth *a, const char *value)
 	 * already ended at the terminator, so reaching here means the rest of
 	 * the header is exactly the token's length. */
 	return same_always(value + at, a->token, AUTH_TOKEN_CHARS);
+}
+
+int auth_ok_form(const struct auth *a, const char *body, size_t body_len)
+{
+	struct http_form form;
+	const char *token;
+
+	if (!a || !a->armed || !body || body_len == 0)
+		return 0;
+
+	if (http_form_parse(body, body_len, &form) != HTTP_OK)
+		return 0;
+
+	/*
+	 * `http_form_get` answers NULL for a field given twice as well as for
+	 * one absent -- see `form.h` -- and both are right here. A body
+	 * carrying two different tokens is a body two readers could disagree
+	 * about, which is the fault that rule exists for.
+	 */
+	token = http_form_get(&form, "token");
+	if (!token)
+		return 0;
+
+	/*
+	 * Compared by the same function as a header's, so the constant-time
+	 * property is not something this path has to remember separately. The
+	 * scheme is prepended rather than the comparison duplicated: one place
+	 * decides what a valid token looks like.
+	 */
+	{
+		char wrapped[AUTH_TOKEN_CHARS + 16];
+		size_t i, at = 0;
+		static const char SCHEME[] = "Bearer ";
+
+		for (i = 0; i < sizeof(SCHEME) - 1; i++)
+			wrapped[at++] = SCHEME[i];
+		for (i = 0; token[i]; i++) {
+			if (at + 1 >= sizeof(wrapped))
+				return 0;	/* too long to be the token */
+			wrapped[at++] = token[i];
+		}
+		wrapped[at] = '\0';
+		return auth_ok(a, wrapped);
+	}
 }

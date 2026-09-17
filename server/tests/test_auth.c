@@ -158,6 +158,71 @@ int main(void)
 		   "a token cut short by a NUL is not the token");
 	}
 
+	/* --- the same decision, from a form field ------------------------------
+	 *
+	 * A browser form cannot send a header, and a console a browser cannot
+	 * use is not a console. The dashboard's rename form answered 401 to
+	 * every submission for three versions because of exactly that, and
+	 * nobody noticed: the endpoint was tested with `curl -H` and the page
+	 * it sits on was never submitted.
+	 *
+	 * A query string stays refused -- it is logged, sent onward in
+	 * `Referer`, and kept in history. A POST body is none of those. */
+	{
+		char form[128];
+		int n;
+
+		n = snprintf(form, sizeof(form), "token=%s", a.token);
+		ok(n > 0 && auth_ok_form(&a, form, (size_t)n) == 1,
+		   "the right token in a form field");
+
+		n = snprintf(form, sizeof(form), "name=M17&token=%s", a.token);
+		ok(n > 0 && auth_ok_form(&a, form, (size_t)n) == 1,
+		   "and beside the field the form is actually for");
+
+		n = snprintf(form, sizeof(form), "token=%s&name=M17", a.token);
+		ok(n > 0 && auth_ok_form(&a, form, (size_t)n) == 1,
+		   "in either order");
+
+		ok(auth_ok_form(&a, "token=wrong", 11) == 0, "a wrong token");
+		ok(auth_ok_form(&a, "name=M17", 8) == 0, "no token field");
+		ok(auth_ok_form(&a, "", 0) == 0, "an empty body");
+		ok(auth_ok_form(&a, 0, 10) == 0, "no body");
+		ok(auth_ok_form(&a, "token=", 6) == 0, "an empty token");
+
+		/* Given twice, `http_form_get` answers NULL -- see `form.h`.
+		 * A body carrying two tokens is one two readers could
+		 * disagree about. */
+		n = snprintf(form, sizeof(form), "token=%s&token=%s",
+		             a.token, a.token);
+		ok(n > 0 && auth_ok_form(&a, form, (size_t)n) == 0,
+		   "the right token given twice is still refused");
+
+		/* Longer than any token can be, so the copy cannot run off. */
+		{
+			char big[256];
+			size_t i;
+
+			for (i = 0; i < 6; i++)
+				big[i] = "token="[i];
+			for (i = 6; i < sizeof(big) - 1; i++)
+				big[i] = 'a';
+			big[sizeof(big) - 1] = '\0';
+			ok(auth_ok_form(&a, big, sizeof(big) - 1) == 0,
+			   "a token far too long");
+		}
+
+		/* And the rule that matters most, once more from this door. */
+		{
+			struct auth unarmed;
+
+			memset(&unarmed, 0, sizeof(unarmed));
+			n = snprintf(form, sizeof(form), "token=%s", a.token);
+			ok(n > 0 && auth_ok_form(&unarmed, form, (size_t)n) == 0,
+			   "an unarmed guard refuses a form token too");
+		}
+	}
+
 	printf("  %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

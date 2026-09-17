@@ -156,11 +156,15 @@ static const struct http_route GUARDED_ROUTES[] = {
 
 /* Allows only the exact header. Deliberately trivial: the real decision is
  * `auth_ok`, and repeating it here would test this file against itself. */
-static int allow_if_word(const struct http_request *r, void *ctx)
+static int allow_if_word(const struct http_request *r, const char *body,
+                         size_t body_len, void *ctx)
 {
 	const char *v = http_header_get(r, "authorization");
 
-	(void)ctx;
+	/* The body is handed over so a policy can read a form field -- a
+	 * browser form cannot send a header. This one does not need it; the
+	 * real policy in `server_init.c` does. */
+	(void)ctx; (void)body; (void)body_len;
 	if (GUARD_SAW)
 		(*GUARD_SAW)++;
 	return v && strcmp(v, "Bearer opensesame") == 0;

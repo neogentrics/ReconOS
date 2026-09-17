@@ -607,3 +607,53 @@ None.
   and answers NTP nowhere. It resolves `time.cloudflare.com` with this role's
   own resolver now, which is what a real machine does and is the first thing
   here to use one built capability to reach another.
+
+### VF-022 -- the guard broke the console's own form, and curl hid it for three versions
+
+- **Found in** the dashboard, 17 September 2026. **Found by** reading the page
+  while adding rows to it, and noticing what its form posts to.
+- **What it was** `GET /` has offered a rename form since long before there was
+  a guard. 0.17.0 marked `POST /api/name` guarded. **A browser form cannot send
+  an `Authorization` header**, so from that moment the form answered 401 to
+  every submission -- on the one page a person actually looks at.
+- **Why three versions of testing missed it** Every check of that endpoint was
+  `curl -H 'Authorization: Bearer ...'`, which is the client that *can* send
+  the header. The endpoint was tested exhaustively and the page it sits on was
+  never submitted. **Testing the API is not testing the console**, and the
+  console is the part with a person in front of it.
+- **Confirmed rather than assumed**: a POST shaped exactly as a browser sends
+  one -- form encoding, no `Authorization` -- answered `401 Unauthorized`, while
+  the page continued to render the form that produces it.
+- **Fixed** by accepting the token from a form field as well as the header. The
+  policy hook now receives the body, which it needs and did not have.
+- **And the line that was already drawn stays drawn.** A token in a **query
+  string** is still refused: it is written into this server's own access log,
+  sent onward in `Referer`, and kept in history. A **POST body** is none of
+  those -- it is exactly as exposed as the header beside it and no more. That
+  distinction is in `auth.h` so the next person does not have to rediscover
+  which half of it was the objection.
+- **Why it belongs here** A guard is a change to every caller of the thing it
+  guards, and one of the callers was this project's own page. The suites could
+  not have caught it: `test_auth.c` is pure and `test_http_serve.c` builds its
+  own site. Nothing in the tree knew the dashboard and the route were connected.
+
+### VF-023 -- four boots spent on a kernel I had built for the other role
+
+- **Found in** my own verification procedure, 17 September 2026.
+- **What it was** The last step of landing 0.20.0 was a check that *both* roles
+  build -- `make ROLE=server`, then `make ROLE=workstation`. That leaves the
+  **workstation** kernel in `kernel/build/`, and the next thing done was to boot
+  it expecting a server. It booted, ran its self-tests, and never served, which
+  is exactly correct behaviour for a workstation.
+- **What it looked like** A machine that hangs after the socket self-test. Three
+  identical stuck boots, byte-for-byte the same log length, which read as a
+  deterministic fault in freshly committed work.
+- **Why it took four boots** Because the symptom is indistinguishable from a
+  real hang, and because `/tmp` is shared with other sessions -- the reference
+  logs that would have shown the difference had been cleaned up, along with the
+  16 GB test disk, which sent the diagnosis down a second wrong path first.
+- **Why it belongs here** This is VF-008's family: the `ROLE` stamp means the
+  **last build wins**, and a verification order of *server, workstation, boot*
+  guarantees booting the wrong one. The fix is procedural and is written here
+  rather than in a comment nobody reads at the right moment: **build the role
+  immediately before booting it**, never as the second half of a two-role check.
