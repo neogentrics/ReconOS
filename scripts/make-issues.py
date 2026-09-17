@@ -213,6 +213,7 @@ AREA = {
     'KF-248': 'kernel',
     'KF-249': 'kernel',
     'KF-250': 'network',
+    'KF-251': 'kernel',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
@@ -326,11 +327,26 @@ def existing_titles():
 # allowing a bare `-` with optional spaces on either side will happily match
 # the hyphen in `KF-246` itself, given the chance -- and the chance is a regex
 # that does not say where to start.
-# The prefixes, in one place. `GX-` arrived with the graphics branch and had to
-# be added to five separate literals spread through this file, which is the
-# same drift KF-247 was about: a sixth would have been missed exactly as
-# quietly. Everything below is built from this.
-ENTRY_ID = r'(?:BG|KF|GX)-\d+'
+# What an entry's identifier looks like -- **two capitals and a number, not a
+# list of the tracks that exist today.**
+#
+# It was a list twice. `GX-` arrived with the graphics branch and had to be
+# added to five separate literals spread through this file; collapsing those
+# into one constant was right and did not go far enough, because the constant
+# was still `(?:BG|KF|GX)` and `NW-` and `BT-` are already written on two other
+# branches waiting to merge.
+#
+# The blind spot that leaves is the interesting part. The check at the bottom
+# of `parse` compares what the parser found against a second, looser count --
+# and if **both** are built from a list of prefixes, an unknown track is
+# invisible to the parser *and* to the thing watching the parser, and the run
+# reports a register it cannot see all of. A second opinion drawn from the same
+# assumption is not a second opinion.
+#
+# `check-readme-badges.py` had the same fault with a comment above it claiming
+# the opposite -- "every prefix, not a list of the ones that existed when this
+# was written", directly above that list. Both are derived now.
+ENTRY_ID = r'[A-Z]{2}-\d+'
 
 ENTRY_HEAD = r'### (' + ENTRY_ID + r') *(?:—|–|--|-) *'
 

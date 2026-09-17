@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-12, and each entry says why. They are listed because a register that only
+13, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -175,6 +175,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
+- **KF-251** — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
 
 ---
 
@@ -7801,6 +7802,68 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-251 — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
+
+[#518](https://github.com/neogentrics/ReconOS/issues/518)
+
+- **Found:** 17 September 2026, by the **server session**, building an NTP
+  client — which needs two of this machine's timestamps to compute a round
+  trip. Measured rather than reasoned about: five reads with twenty thousand
+  yields between each.
+
+  ```
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  ```
+
+  The low nine digits are zero every time, and over 200,000 yields the value
+  moved by exactly 1000 ms.
+
+- **What it is.** `sys_walltime` returns `time_wall_ns`, which prefers
+  `arch_wall_ns` — and on x86_64 that reads the CMOS RTC, whose finest field is
+  **seconds**. So the number is a whole second multiplied by a billion. The
+  signature promises nanoseconds and the clock behind it has never had them.
+
+- **What it costs, in their words and they are right.** An NTP round trip
+  cannot be measured at all: both local timestamps land in the same second, the
+  delay computes to zero, and `round trip 0 ms` to a server across the internet
+  is *quantisation wearing the clothes of a measurement*. Their client refuses
+  to print it, which is the correct response to a number that would be a lie.
+
+  It is wider than NTP. **Any** duration measured with the wall clock is rounded
+  to a second, and nothing in the interface says so.
+
+- **The mechanism to fix it already exists in the same function.** When
+  `arch_wall_ns` returns zero — a machine with no CMOS — `time_wall_ns` falls
+  back to the time the firmware gave once, plus the monotonic counter since.
+  That path has exactly the resolution the interface promises. **The coarse
+  clock is preferred over the fine one whenever a coarse clock is present.**
+
+- **The fix, and the part that needs care.** Latch the CMOS reading against the
+  monotonic counter once and serve `latched + (monotonic now − monotonic then)`.
+  That makes *differences* correct immediately, which is what the round trip
+  needs.
+
+  The absolute offset keeps up to a second of error, because latching at an
+  arbitrary moment says nothing about where in the second it happened. Chasing
+  the edge at boot would cost up to a second of every boot. The cheap answer is
+  to keep sampling the seconds field and **snap the phase the first time it
+  changes** — that observation *is* the edge, it costs two port reads, and it
+  self-corrects within a second of the first sample. It must only ever move the
+  clock forward: a wall clock that goes backwards is a worse fault than the one
+  being fixed.
+
+- **Nothing on the server branch is blocked by it** — they said so, their clock
+  service reports honestly, and the console line states the uncertainty rather
+  than implying accuracy it does not have.
+
+- **Status:** open. Measured by another session, cause confirmed here in
+  `arch/x86_64/time.c`, fix designed and deliberately not rushed in beside a
+  merge and a matrix run.
 
 ### KF-250 — The network stack failed once, on the installed-disk boot, and has not failed since
 
