@@ -14,8 +14,12 @@ git show origin/graphics:docs/SIGNALS.md
 ```
 
 This track merges into **`kernel`**, not `main`: it is kernel code, and the
-kernel session verifies it against the full matrix first. **`VERSION` in
-`kernel/Makefile` is untouched here** — the merging session owns it.
+kernel session verifies it against the full matrix first.
+
+**`VERSION` in `kernel/Makefile` reads 0.3.5 in this branch**, which is a
+departure from the rule that the merging session owns it. Joshua set the
+direction and told this session to apply it; see the version section below for
+the arithmetic. Override it if the merged tree wants otherwise.
 
 ---
 
@@ -317,21 +321,37 @@ See the section on the two tests below.
 
 ## Three things you need to do on merge
 
-**1. The version: `0.3.0 → 0.4.0`.** A new driver is a capability, so it is a
-minor bump, and the base has moved twice while this branch was working —
-0.2.46, then 0.2.49, and now **0.3.0**, which you took when graphics merged
-three display backends. `kernel/Makefile` is untouched here and reads 0.3.0.
+**1. The version is set, and it is `0.3.5` rather than the `0.4.0` I first
+asked for.** Joshua's call, and he was right to push back on it.
 
-Still **one** bump, not one per driver. The capability is "the kernel can drive
-a network card that is not virtio", and it arrives once however many files it
-arrives in.
+`kernel/Makefile` reads **0.3.5** in this branch. That is a departure from the
+convention that the merging session owns the number, and it is on his explicit
+instruction rather than this session deciding to reach for it — override it
+freely if the merged tree wants something else.
 
-Joshua said to go ahead on this one and I have not, deliberately. It is not
-something this branch was blocked on — it is a coordination rule, and the reason
-for it is exactly what the last two days demonstrated: the number has to
-describe the merged tree, this branch is not the merged tree, and it has been
-wrong three times from here already. Say the word and I will set it, but it
-reads better as yours.
+**Five patches, one per fault fixed**, which is the arithmetic this file has
+followed since 0.1.x: NW-001, NW-002, NW-006, NW-007, NW-009. The other four
+entries are open and are interface decisions rather than driver faults, so they
+buy nothing.
+
+**Why not a minor, since a second display backend was one.** By the letter of
+the rule — *an update adds something it did not have* — this looks like the same
+shape: `net.h` had one implementation behind it and now has three. The reason it
+is not:
+
+> **the Realtek has never touched silicon.** QEMU emulates no Realtek gigabit
+> part, so that driver compiles, passes its own tests, and has never met a card.
+> The Intel is proved against an emulated 82540EM.
+
+So what the kernel demonstrably gained is two more implementations behind an
+interface it already had, exercised in the same hypervisor virtio-net was
+already exercised in. **"The kernel can network on real hardware" is the claim
+that would earn a minor, and nobody can make it yet.**
+
+`docs/BARE-METAL.md` is the procedure that would settle it. When a Realtek
+answers a ping on the server, that is 0.4.0 — earned rather than assumed. It is
+worth saying plainly that this leaves a minor bump sitting unclaimed on purpose:
+the work to claim it is a boot, not a commit.
 
 **2. `NW` needs nothing — you solved it better than I did.**
 
