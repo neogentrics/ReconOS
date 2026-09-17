@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-11, and each entry says why. They are listed because a register that only
+12, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -174,12 +174,15 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-237** — A power cut inside a rename left no valid superblock, once
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
+- **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
 
 ---
 
 ## Fixed
 
 ### GX-010 — The attach path of both hardware backends had no test, and the first test written for it could not fail
+
+[#506](https://github.com/neogentrics/ReconOS/issues/506)
 
 - **Found in** kernel 0.2.48, on 16 September 2026, by noticing that everything
   proved about the two real-hardware backends was proved about
@@ -258,6 +261,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ### GX-009 — The boot report named one display on a machine with two, and contradicted itself two lines later
 
+[#507](https://github.com/neogentrics/ReconOS/issues/507)
+
 - **Found in** kernel 0.2.48, on 16 September 2026, by reading a boot report
   that had been printed several times already without anyone looking at it
   closely. QEMU given `-device virtio-gpu-pci` and no `-vga none` presents a
@@ -321,6 +326,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 ---
 
 ### GX-008 — The vendor check in both hardware tables had no test that could fail
+
+[#508](https://github.com/neogentrics/ReconOS/issues/508)
 
 - **Found in** kernel 0.2.48, on 16 September 2026, by sabotaging a check that
   had just been written and watching the test pass anyway.
@@ -400,6 +407,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ### GX-007 — A shape check that vetoed real hardware, protected nothing, and reported one number when it refused
 
+[#509](https://github.com/neogentrics/ReconOS/issues/509)
+
 - **Found in** kernel 0.2.48, on 16 September 2026, by writing the second
   real-hardware backend and reading the two side by side.
 
@@ -472,6 +481,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 ---
 
 ### GX-006 — A display that can be read and not set failed its own self-test, three ways
+
+[#510](https://github.com/neogentrics/ReconOS/issues/510)
 
 - **Found in** kernel 0.2.46, on 16 September 2026, **before the driver that
   would have hit it existed.** The Intel Gen9 backend was going to be the first
@@ -569,6 +580,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ### GX-003 — Every display self-test passed against a completely black screen
 
+[#511](https://github.com/neogentrics/ReconOS/issues/511)
+
 - **Found in** kernel 0.2.41, on 15 September 2026, by the first boot that drove
   a virtio-gpu — and *not* by any assertion in the kernel, all of which reported
   pass. It was found by asking QEMU for a screendump and counting the pixels.
@@ -636,6 +649,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 ---
 
 ### GX-001 — A program that maps the screen and exits gives the screen to the page allocator
+
+[#512](https://github.com/neogentrics/ReconOS/issues/512)
 
 - **Found in** kernel 0.2.41, on 15 September 2026, by writing the second
   display backend and then asking what `addrspace_release_page` would do with
@@ -712,6 +727,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ### GX-004 — An oversized mode was refused and not counted as refused
 
+[#513](https://github.com/neogentrics/ReconOS/issues/513)
+
 - **Found in** kernel 0.2.41, on 15 September 2026, by `display_self_test`
   itself, on the first boot where the primary display was not a Bochs adapter:
 
@@ -748,6 +765,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 ---
 
 ### GX-005 — A 1280x800 screen driven at 5120x2880, because nothing could ask it
+
+[#514](https://github.com/neogentrics/ReconOS/issues/514)
 
 - **Found in** kernel 0.2.41, on 15 September 2026, by reading two lines of the
   same boot next to each other:
@@ -791,6 +810,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 ---
 
 ### GX-002 — One driver's private state, addressed by another driver's position in a table
+
+[#515](https://github.com/neogentrics/ReconOS/issues/515)
 
 - **Found in** kernel 0.2.41, on 15 September 2026, while writing the second
   display backend — by the second backend needing somewhere to keep its own
@@ -7781,7 +7802,65 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-250 — The network stack failed once, on the installed-disk boot, and has not failed since
+
+[#516](https://github.com/neogentrics/ReconOS/issues/516)
+
+- **Found:** 17 September 2026, matrix 67, on one path of twenty-eight:
+
+  ```
+    installs from media, and the disk boots     FAILED
+      and its own tests pass, with a volume under them  FAILED
+            the network stack  : FAIL
+      1 of 9 failed
+  ```
+
+  Every other step of that path passed either side of it — the install, the
+  loader on the target, the disk booting on its own, BIOS boot, seven
+  partitions found, and 73 checks passing on the second boot of the same
+  volume.
+
+- **What is known, which is less than it looks.** `net_self_test` runs eight
+  sub-tests and a packet round trip, and **each prints its own diagnostic**.
+  None of them reached the log: `verify-kernel.sh` reports a failed path with
+  `head -16`, and the failure was further down than that. So the register
+  records *the network stack* and not which part of it, which is the same
+  compression KF-238 and KF-246 were about, one level up.
+
+- **Not reproduced, and the attempts are the entry:**
+
+  | what was run | result |
+  |---|---|
+  | the same path alone | 9 of 9 |
+  | the same path, twice, six CPU spinners running | 9 of 9, both |
+  | twelve plain kernel boots, six at a time | no failure |
+
+  **The load I reproduced was the wrong load, and that is worth saying rather
+  than filing this as flaky.** A matrix run is four sub-scripts booting guests
+  that format and write disk images, alongside the main sequence. Spinning CPUs
+  is not that: the contention that matters here may be disk, and a test about
+  a network stack failing under disk contention would be a real fault about
+  timing, not a tired machine.
+
+- **Two readings, and nothing yet separates them.** Either a sub-test has a
+  deadline that a loaded machine misses — the shape KF-201 had, and KF-205, and
+  KF-235 — or something in the stack genuinely fails about one boot in many. The
+  first is a fault in a test; the second is a fault in the kernel. They are not
+  close, and one observation cannot choose.
+
+- **What would settle it**, in order of cost: raise the reporter's `head -16` so
+  a failed path carries its own diagnostics — that alone turns the next
+  occurrence into an answer instead of another entry like this one. Then, if it
+  recurs, the sub-test that failed names itself.
+
+- **Status:** open, seen once, unreproduced in fifteen further boots. Recorded
+  rather than dismissed because *rare* and *absent* look identical from one
+  green run, and this project has KF-232 and KF-237 already sitting in exactly
+  this state.
+
 ### KF-249 — Plug in a USB keyboard and the machine can never idle again
+
+[#517](https://github.com/neogentrics/ReconOS/issues/517)
 
 - **Found:** 17 September 2026, booting a machine with USB input attached to
   check that lifting the boot decoders out of `usb_hid.c` had broken nothing.

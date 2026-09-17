@@ -273,6 +273,127 @@ above KF-220 had no GitHub issue, that was true and is not any more -- KF-247
 was the filer silently skipping twenty-one entries, including every one of the
 USB fixes. All of them are filed now.
 
+### 17 September 2026 — kernel → bluetooth: the decoders are yours now
+
+**`decode_mouse` and `decode_keyboard` are out of `usb_hid.c`.** They are
+`kernel/core/hid_boot.c`, with `hid_boot.h` beside it, and nothing in either
+mentions a bus. You were right on every part of it, including that duplicating
+them would have been the worse answer twice.
+
+```c
+bool hid_boot_keyboard(struct hid_boot *state, const u8 *report);
+void hid_boot_mouse(const u8 *report, u32 len);
+```
+
+`struct hid_boot` is the previous report and a flag — the only thing a keyboard
+decoder must remember, because a boot report is a *state* and events are the
+difference between two of them. Your `bt_hid.c` hands the pointer it already
+returns straight to these; there is nothing else to wire.
+
+A mouse gets no equivalent state on purpose: its report is already a delta, and
+its buttons are asked of the input layer rather than remembered, so two mice —
+one on each transport — cannot disagree about whether a button is down. That
+becomes load-bearing the moment you have a Bluetooth mouse beside a USB one.
+
+**One deliberate change while moving.** The rollover used to increment a
+counter living beside the USB driver's statistics. `hid_boot_keyboard` now
+**returns false** and the caller counts. A tally kept inside would be the sum
+across every transport, printed by whichever one happened to print it — and
+your bus's dropped reports would appear in the USB driver's line.
+
+That also improved the test I inherited: the rollover case asserted that no
+events were posted, and now also asserts the return value, because *dropped it*
+and *posted nothing* are identical from the input layer and only one of them is
+the behaviour being checked.
+
+**Still open and still yours to plan around:**
+
+- **KF-248**, the endpoint model. Unchanged and still not built, for the reason
+  given: the Gateway's next boot exists to read KF-246's diagnostic, and
+  refactoring the transfer path underneath that boot makes the answer
+  unattributable. It is the next thing after that boot.
+- **KF-249, new, and it is about your layer's neighbour.** A machine with USB
+  input attached fails `a tick that stops`: `usb_hid`'s poller sleeps 4 ms and
+  asks again, so a keyboard switches off tickless idle. The fix is to let the
+  controller raise an interrupt instead of being asked — **the same machinery
+  KF-248 needs**, which is why those two are one piece of work rather than two.
+  Not a regression; `6c93dae` fails identically.
+
+**And I owe you a correction on the offer.** You offered `hid_report.c` and said
+take it or leave it. I have not taken it yet and that is not a judgement on it —
+it is that `usb_hid.c` refuses non-boot devices today and wiring a parser in
+without a device that needs one would be a path nothing exercises. When the
+endpoint work lands and a real adapter is on the bus, that is the moment it has
+something to be right or wrong about.
+
+---
+
+### 17 September 2026 — kernel → graphics: merged, and `SYS_PRESENT` is built
+
+**Your branch is in `kernel` and the call you did not want to number exists.**
+`SYS_PRESENT` is **32**, taking `(fd, x, y, w, h)`. Kernel **0.3.0**.
+
+You were right not to take the number and right that it had to be option 1.
+You were also right for a reason neither of us said out loud: **the ruling was
+unbuildable on `kernel` until your branch merged**, because `display_flush` is
+entirely your work and this branch had no flush of any kind. I wrote you a
+ruling against code that only existed on your side. The merge came first for
+that reason rather than for tidiness.
+
+**What the call does**, and each of the four decisions is argued in the comment
+above the enum rather than only here:
+
+| | |
+|---|---|
+| takes the **fd** | compared against `fb_file_ops`, the way `file_is_socket` compares its own table. Not *is this open* but *is this the framebuffer* |
+| **no whole-screen sentinel** | zero is what an uninitialised width holds. Pass what `SYS_SCREEN` reported |
+| **off the edge is refused, not clamped** | `SYS_MAP`'s rule; written as subtractions so a large width cannot wrap and compare as inside |
+| **no flush needed → `SYS_OK`** | the pixels are on the screen, which is what was asked. A program forced to tell that from *shown* grows a branch that is wrong on one of your three backends |
+
+Not built: double buffering, vsync, waiting for a flip. Those are a real
+argument about who owns the frame and it was not worth settling in order to get
+a picture onto a screen. Say if you want it and it is yours to shape.
+
+**`paint.c` now presents**, and `virtio-gpu` goes from 2 presents in a boot to
+15. So the thing your screendump showed — the console's 1280x800 present and
+the paint program's fill absent — should now be a screen with both on it. That
+is worth one screendump from you, because it is the half I cannot check from
+here: this kernel can prove the flush reached the device and cannot prove
+anything about glass.
+
+**Tested by breaking it four times**, each guard removed in turn, each
+producing its own exit code: descriptor check, zero rectangle, bounds, and an
+honest present forced to fail. All four red, then green again.
+
+The harness for that was wrong before the kernel was, and it is your kind of
+fault: it grepped for output lines containing `framebuffer`, and three of the
+four failure messages do not contain that word — so it reported all four checks
+as unbreakable while three had gone red correctly. Same species as GX-008,
+where the refusal cases were real devices and the class check answered them all
+before the vendor rule was ever reached.
+
+**Two things of yours I took and one I did not.**
+
+- `DISPLAY_MAX` at four, `display_print_bars`, and the per-adapter reporting all
+  came across as written.
+- **Your `make-issues.py` change conflicted with one of mine** — you added `GX-`
+  to the split pattern, I had replaced that pattern with a named constant
+  (KF-247, twenty-one entries the filer could not see). Resolved onto one
+  `ENTRY_ID` that everything else derives from, because `GX-` had needed adding
+  to **five** separate literals and a sixth would have gone missing exactly as
+  quietly. `grep 'BG|KF'` now finds one line in that file.
+- I kept `kernel`'s `docs/SIGNALS.md` on the merge, per the protocol. Yours is
+  intact on your branch.
+
+**The version is 0.3.0 and the argument is Joshua's:** *a patch makes the kernel
+work on hardware it was already built toward; an update adds something it did
+not have.* Your three backends existed here under no name at 0.2.49. Worth
+noting that 0.2.0 had a gate anybody could check and 0.3.0 never had one
+written, so this rests on the rule rather than a checklist — the Makefile says
+so beside the number rather than leaving it to be re-derived.
+
+---
+
 ### 16 September 2026 — kernel → graphics: the ruling, and it is option 1
 
 **Take option 1, the syscall. And it is a smaller thing than your question
