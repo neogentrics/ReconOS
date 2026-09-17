@@ -185,6 +185,50 @@ struct hid_mouse_layout {
 bool hid_report_mouse_layout(const struct hid_report_info *info,
 			     struct hid_mouse_layout *out);
 
+/* --- reading a field out of a report -------------------------------------
+ *
+ * The map above says where a field is. This gets its value out, and it is the
+ * last step before a descriptor-driven driver can post the same events
+ * `usb_hid.c` posts from hardcoded byte offsets.
+ *
+ * **Fields are not bytes and are not byte-aligned.** A boot mouse's three
+ * buttons are bits 0, 1 and 2 of byte 0; a five-button mouse with a 12-bit
+ * axis has fields that start mid-byte and end in the next one. Anything that
+ * reads whole bytes works for the first device and not the second.
+ *
+ * **Bits are packed least-significant-first.** Button 1 is bit 0. A reader
+ * that walks from the top of each byte gets the buttons in reverse and the
+ * axes as nonsense, and for a symmetric byte it gets the right answer anyway,
+ * which is how it survives a casual test.
+ *
+ * **Sign extension is from the field's own width, not from a byte.** An
+ * eight-bit -5 is 0xFB and a twelve-bit -5 is 0xFFB. Sign-extending the second
+ * from eight bits, or not at all, gives 4091 -- a large positive number, so
+ * the pointer flies off in the wrong direction rather than not moving.
+ *
+ * False when the field runs past the end of the report, or when `bit_size` is
+ * zero or wider than the 32 bits the result is returned in.
+ */
+bool hid_field_extract(const u8 *report, u32 report_len, u32 bit_offset,
+		       u32 bit_size, bool is_signed, i32 *out);
+
+/* The three values a mouse report carries, read through a layout.
+ *
+ * `buttons` is a bitmask in the order the descriptor declared them, so bit 0
+ * is the first button. Wheel is zero when the device has none. */
+struct hid_mouse_state {
+	u32 buttons;
+	i32 x;
+	i32 y;
+	i32 wheel;
+};
+
+/* Reads one report through a layout. False when the report is shorter than
+ * the layout says it should be, which is a device disagreeing with its own
+ * descriptor and not something to decode half of. */
+bool hid_mouse_decode(const struct hid_mouse_layout *m, const u8 *report,
+		      u32 len, struct hid_mouse_state *out);
+
 /* Walks a descriptor. False means the bytes are not a well-formed descriptor
  * -- an item running past the end, or a collection nesting that never closes
  * -- and `out` is then not to be trusted. */

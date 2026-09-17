@@ -476,6 +476,97 @@ bool hid_report_mouse_layout(const struct hid_report_info *info,
 	return true;
 }
 
+/* --- reading a field out of a report -------------------------------------- */
+
+bool hid_field_extract(const u8 *report, u32 report_len, u32 bit_offset,
+		       u32 bit_size, bool is_signed, i32 *out)
+{
+	u32 v = 0;
+	u32 i;
+	u32 last_bit;
+
+	/* Zero bits is not a field, and more than 32 does not fit the result.
+	 * Both refused rather than clamped: a clamped field is a value read
+	 * from some of the bits the descriptor named. */
+	if (!bit_size || bit_size > 32)
+		return false;
+
+	/* The field's last bit has to be inside the report. Computed as a bit
+	 * position and then rounded up to a byte, rather than comparing bytes
+	 * -- a field ending at bit 17 needs three bytes, and byte arithmetic
+	 * on the offset alone loses that. */
+	last_bit = bit_offset + bit_size;
+
+	if ((last_bit + 7u) / 8u > report_len)
+		return false;
+
+	/* Least significant bit first. Bit `i` of the field comes from bit
+	 * `(bit_offset + i) % 8` of byte `(bit_offset + i) / 8`. */
+	for (i = 0; i < bit_size; i++) {
+		u32 b = bit_offset + i;
+		u32 bit = ((u32)report[b / 8u] >> (b % 8u)) & 1u;
+
+		v |= bit << i;
+	}
+
+	/* Sign extension from the field's own width.
+	 *
+	 * Guarded at 32 because shifting a 32-bit value by 32 is undefined --
+	 * and at 32 bits there is nothing to extend, the value already fills
+	 * the result. */
+	if (is_signed && bit_size < 32) {
+		u32 sign = 1u << (bit_size - 1u);
+
+		if (v & sign)
+			v |= ~((1u << bit_size) - 1u);
+	}
+
+	*out = (i32)v;
+	return true;
+}
+
+bool hid_mouse_decode(const struct hid_mouse_layout *m, const u8 *report,
+		      u32 len, struct hid_mouse_state *out)
+{
+	u32 i;
+
+	kmemset(out, 0, sizeof(*out));
+
+	if (!m->found || len < m->report_bytes)
+		return false;
+
+	/* Buttons, one bit each, into a mask in declaration order. Read one at
+	 * a time rather than as a single field of `buttons_count` bits --
+	 * which would be the same answer here and would stop being so the
+	 * moment a descriptor puts a gap in the row. */
+	for (i = 0; i < m->buttons_count; i++) {
+		i32 bit;
+
+		if (!hid_field_extract(report, len, m->buttons_offset + i, 1,
+				       false, &bit))
+			return false;
+
+		if (bit)
+			out->buttons |= 1u << i;
+	}
+
+	/* Axes are signed: a mouse reports deltas in both directions. */
+	if (!hid_field_extract(report, len, m->x_offset, m->x_size, true,
+			       &out->x))
+		return false;
+
+	if (!hid_field_extract(report, len, m->y_offset, m->y_size, true,
+			       &out->y))
+		return false;
+
+	if (m->have_wheel &&
+	    !hid_field_extract(report, len, m->wheel_offset, m->wheel_size,
+			       true, &out->wheel))
+		return false;
+
+	return true;
+}
+
 /* --- the self-test --------------------------------------------------------
  *
  * The descriptor below is a real boot-mouse one, and it is used because its
@@ -1073,6 +1164,266 @@ bool hid_report_self_test(void)
 			kputs("  hidrep: four buttons and no axes was read "
 			      "as a mouse, and driving it as one posts "
 			      "motion that does not exist\n");
+			ok = false;
+		}
+	}
+
+	/* --- pulling a value out of a field ------------------------------ */
+	{
+		i32 v;
+		/* A boot mouse report: left button down, x = +5, y = -5. */
+		static const u8 rep[3] = { 0x01, 0x05, 0xFB };
+
+		/* One bit, the first button. */
+		if (!hid_field_extract(rep, 3, 0, 1, false, &v) || v != 1) {
+			kprintf("  hidrep: button 1 read as %d, expected 1\n",
+				v);
+			ok = false;
+		}
+
+		/* The second and third, which are up. If these read as down,
+		 * the bits are being taken from the top of the byte. */
+		if (!hid_field_extract(rep, 3, 1, 1, false, &v) || v != 0) {
+			kprintf("  hidrep: button 2 read as %d, expected 0 -- "
+				"bits are packed least-significant first\n",
+				v);
+			ok = false;
+		}
+
+		/* Eight bits, signed, byte-aligned. This is exactly what
+		 * usb_hid.c does with (i32)(i8)report[2], so the two must
+		 * agree on the same byte. */
+		if (!hid_field_extract(rep, 3, 16, 8, true, &v) || v != -5) {
+			kprintf("  hidrep: y read as %d, expected -5 -- "
+				"usb_hid.c casts the same byte through i8 and "
+				"gets -5\n", v);
+			ok = false;
+		}
+
+		if (v != (i32)(i8)rep[2]) {
+			kprintf("  hidrep: y read as %d and usb_hid.c's cast "
+				"gives %d from the same byte\n", v,
+				(i32)(i8)rep[2]);
+			ok = false;
+		}
+
+		/* The same bits unsigned. These must differ, or the signed
+		 * test above proves nothing about sign extension. */
+		if (!hid_field_extract(rep, 3, 16, 8, false, &v) || v != 251) {
+			kprintf("  hidrep: y read unsigned as %d, expected "
+				"251\n", v);
+			ok = false;
+		}
+
+		/* A field that runs off the end. */
+		if (hid_field_extract(rep, 3, 16, 16, true, &v)) {
+			kputs("  hidrep: a 16-bit field at bit 16 of a "
+			      "3-byte report was read; it ends eight bits "
+			      "past the end\n");
+			ok = false;
+		}
+
+		/* And one that ends exactly at the end, which must work --
+		 * an off-by-one in the bounds check shows up here and
+		 * nowhere else. */
+		if (!hid_field_extract(rep, 3, 16, 8, true, &v)) {
+			kputs("  hidrep: a field ending exactly at the end "
+			      "of the report was refused\n");
+			ok = false;
+		}
+
+		if (hid_field_extract(rep, 3, 0, 0, false, &v) ||
+		    hid_field_extract(rep, 3, 0, 33, false, &v)) {
+			kputs("  hidrep: a zero-bit or 33-bit field was "
+			      "accepted\n");
+			ok = false;
+		}
+	}
+
+	/* --- a field that is not byte-aligned, and is not eight bits -----
+	 *
+	 * Twelve bits starting at bit 4, which is how a high-resolution mouse
+	 * packs two axes into three bytes. Every shortcut that works on a boot
+	 * mouse fails here: it crosses a byte boundary, it is not a whole
+	 * number of bytes, and its sign bit is bit 11.
+	 */
+	{
+		i32 v;
+		/* x = 12 bits at offset 4 = 0xFFB, which is -5.
+		 * byte 0 = 0xB0 (low nibble of x in the high nibble),
+		 * byte 1 = 0xFF. */
+		static const u8 packed[3] = { 0xB0, 0xFF, 0x00 };
+
+		if (!hid_field_extract(packed, 3, 4, 12, true, &v) ||
+		    v != -5) {
+			kprintf("  hidrep: a 12-bit field at bit 4 read as "
+				"%d, expected -5 -- it crosses a byte and its "
+				"sign bit is bit 11, not bit 7\n", v);
+			ok = false;
+		}
+
+		/* Unsigned, the same bits are 4091. A reader that fails to
+		 * sign-extend from twelve bits returns exactly this, so the
+		 * two must differ or the test above cannot tell them apart. */
+		if (!hid_field_extract(packed, 3, 4, 12, false, &v) ||
+		    v != 4091) {
+			kprintf("  hidrep: the same 12 bits unsigned read as "
+				"%d, expected 4091\n", v);
+			ok = false;
+		}
+	}
+
+	/* --- a positive value whose bit 7 is set -------------------------
+	 *
+	 * **The 0xFFB above cannot catch sign extension from the wrong bit**,
+	 * and the first version of this block stopped there. Testing a reader
+	 * that takes bit 7 as the sign of a twelve-bit field: 0xFFB has bit 7
+	 * set *and* bit 11 set, so both the right rule and the wrong one call
+	 * it negative and both produce -5. Breaking the sign bit on purpose
+	 * left the test green.
+	 *
+	 * 0x080 is 128 -- positive in twelve bits, with bit 7 set. The right
+	 * rule leaves it at 128; taking bit 7 as the sign gives -3968.
+	 */
+	{
+		i32 v;
+		static const u8 positive[3] = { 0x00, 0x08, 0x00 };
+
+		if (!hid_field_extract(positive, 3, 4, 12, true, &v) ||
+		    v != 128) {
+			kprintf("  hidrep: a 12-bit +128 read as %d -- its "
+				"bit 7 is set and its sign bit, bit 11, is "
+				"not\n", v);
+			ok = false;
+		}
+	}
+
+	/* --- the whole chain, descriptor to values -----------------------
+	 *
+	 * Parse the boot mouse, build its layout, and decode a report through
+	 * it. The answer is checked against `usb_hid.c`'s own arithmetic on
+	 * the same three bytes, so this asserts that a descriptor-driven read
+	 * and a hardcoded one agree.
+	 */
+	if (hid_report_parse(boot_mouse, sizeof(boot_mouse), &info) &&
+	    info.fields_usable) {
+		struct hid_mouse_layout m;
+		struct hid_mouse_state s;
+		/* Buttons 1 and 3 down, x = +5, y = -5. */
+		static const u8 rep[3] = { 0x05, 0x05, 0xFB };
+
+		if (!hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: no mouse layout on the way to "
+			      "decoding\n");
+			ok = false;
+		} else if (!hid_mouse_decode(&m, rep, 3, &s)) {
+			kputs("  hidrep: a three-byte report was refused by "
+			      "a layout that says three bytes\n");
+			ok = false;
+		} else {
+			if (s.buttons != 0x05) {
+				kprintf("  hidrep: buttons decoded as %02x, "
+					"expected 05 -- one and three down\n",
+					s.buttons);
+				ok = false;
+			}
+
+			if (s.x != 5 || s.y != -5) {
+				kprintf("  hidrep: motion decoded as x=%d "
+					"y=%d, expected 5 and -5\n", s.x, s.y);
+				ok = false;
+			}
+
+			/* Against the driver that has been doing this on real
+			 * hardware, on the same bytes. */
+			if (s.x != (i32)(i8)rep[1] ||
+			    s.y != (i32)(i8)rep[2]) {
+				kprintf("  hidrep: descriptor-driven decode "
+					"gives x=%d y=%d, usb_hid.c's casts "
+					"give x=%d y=%d\n", s.x, s.y,
+					(i32)(i8)rep[1], (i32)(i8)rep[2]);
+				ok = false;
+			}
+
+			if (s.wheel) {
+				kprintf("  hidrep: a wheel value of %d came "
+					"from a mouse with no wheel\n",
+					s.wheel);
+				ok = false;
+			}
+		}
+
+		/* A report shorter than the layout expects is a device
+		 * disagreeing with its own descriptor. */
+		if (hid_report_mouse_layout(&info, &m) &&
+		    hid_mouse_decode(&m, rep, 2, &s)) {
+			kputs("  hidrep: a two-byte report was decoded "
+			      "through a three-byte layout\n");
+			ok = false;
+		}
+	}
+
+	/* --- a short report the field bounds cannot catch ----------------
+	 *
+	 * **The check above is not the one that matters, and the first
+	 * version of this test did not notice.** On the plain boot mouse, a
+	 * two-byte report fails anyway because Y's own bounds check runs off
+	 * the end -- so deleting `len < report_bytes` from `hid_mouse_decode`
+	 * left the test green.
+	 *
+	 * The descriptor below ends with eight bits of padding, so its report
+	 * is four bytes while every *named* field fits in three. A three-byte
+	 * report then passes every field bound and is still a device sending
+	 * less than it said it would.
+	 */
+	{
+		static const u8 trailing_pad[] = {
+			0x05, 0x01,	/* Usage Page (Generic Desktop) */
+			0x09, 0x02,	/* Usage (Mouse)                */
+			0xA1, 0x01,	/* Collection (Application)     */
+			0x05, 0x09,	/*   Usage Page (Button)        */
+			0x19, 0x01,	/*   Usage Minimum (1)          */
+			0x29, 0x03,	/*   Usage Maximum (3)          */
+			0x95, 0x03,	/*   Report Count (3)           */
+			0x75, 0x01,	/*   Report Size (1)            */
+			0x81, 0x02,	/*   Input -- bits 0..2         */
+			0x95, 0x01,	/*   Report Count (1)           */
+			0x75, 0x05,	/*   Report Size (5)            */
+			0x81, 0x01,	/*   Input (Const) -- bits 3..7 */
+			0x05, 0x01,	/*   Usage Page (Generic Desktop) */
+			0x09, 0x30,	/*   Usage (X)                  */
+			0x09, 0x31,	/*   Usage (Y)                  */
+			0x75, 0x08,	/*   Report Size (8)            */
+			0x95, 0x02,	/*   Report Count (2)           */
+			0x81, 0x06,	/*   Input -- bits 8..23        */
+			0x95, 0x01,	/*   Report Count (1)           */
+			0x75, 0x08,	/*   Report Size (8)            */
+			0x81, 0x01,	/*   Input (Const) -- bits 24..31 */
+			0xC0		/* End Collection               */
+		};
+		struct hid_mouse_layout m;
+		struct hid_mouse_state s;
+		static const u8 three[3] = { 0x01, 0x05, 0xFB };
+
+		if (!hid_report_parse(trailing_pad, sizeof(trailing_pad),
+				      &info) || !info.fields_usable) {
+			kputs("  hidrep: a descriptor with trailing padding "
+			      "did not parse into a usable map\n");
+			ok = false;
+		} else if (!hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: no mouse layout from the "
+			      "trailing-padding descriptor\n");
+			ok = false;
+		} else if (m.report_bytes != 4) {
+			kprintf("  hidrep: that report is %u bytes, expected "
+				"4 -- three of fields and one of padding\n",
+				m.report_bytes);
+			ok = false;
+		} else if (hid_mouse_decode(&m, three, 3, &s)) {
+			kputs("  hidrep: a three-byte report was decoded "
+			      "through a four-byte layout -- every named "
+			      "field fits in three, so only the report "
+			      "length catches this\n");
 			ok = false;
 		}
 	}
