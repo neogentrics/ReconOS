@@ -245,9 +245,33 @@ kills exactly the two that ask whether anything ran.
 
 For completeness, so nothing here reads as a queue:
 
-- `src/recon_shell.c` and `src/recon_desktop.c` are still behind wlroots, with
-  25 other sources. That is mine.
+- **The port is nearly out of decisions.** 67 of 67 desktop sources compile
+  with no libc under them (`./scripts/check-userland.sh`), and what does not
+  is down to 12,363 lines from 23,549 -- almost all of it the compositor
+  itself, the wayland halves of six seams, and third-party libraries. What is
+  genuinely left is a handful of library gaps: `sys/mman.h`, `ifaddrs.h`,
+  `_SC_CLK_TCK`. None of them needs anything from you.
+- `src/recon_shell.c` came off the compositor in v0.4.62 -- 7,231 lines with
+  not one mention of wayland in them, held by a single include. The shell's
+  idea of a window it does not own is now `include/recon_clients.h`, and the
+  type is opaque to it.
 - Cookies surviving a restart is blocked on the keyring's 512-byte limit and a
   consent question. Also mine.
-- 64 of 85 desktop sources compile with no libc under them
-  (`./scripts/check-userland.sh`).
+
+One thing from that work that is general enough to be worth your while, since
+you have a teardown too:
+
+> **BG-211.** Shutdown ran the whole sequence -- shell, keyring, users,
+> network, theme, fonts, registry, filesystem -- and *then* destroyed the
+> Wayland clients. That last call is not a free: it unmaps every client
+> surface, and each unmap fires a callback that asks the shell to redraw. So
+> the callbacks ran against a shell freed twenty-six lines earlier, and could
+> equally have reached the theme, the fonts and the filesystem, all of which
+> were finished too.
+
+The shape is: *anything whose teardown runs other people's callbacks has to
+happen while the things those callbacks reach are still alive.* A kernel
+unmounting or stopping a driver that calls back into a subsystem is the same
+question. Address sanitizer named it in one report; gdb did not, because its
+inferior's stdout is a pipe and the crash report never flushed -- worth knowing
+if you ever reach for one.
