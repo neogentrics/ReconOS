@@ -105,9 +105,10 @@ clean`. Both drivers are in `core/` and contain nothing about a machine.
 
 ### The matrix, on the merged tree
 
-`scripts/verify-kernel.sh` run after merging `origin/kernel` at `95fd008`, so
-this is a verdict on the tree you would be merging and not on the base this
-branch started from:
+`scripts/verify-kernel.sh` run after merging `origin/kernel` at `6c93dae`
+(0.2.49), so this is a verdict on the tree you would be merging and not on the
+base this branch started from. Re-run from scratch after each of the two
+merges, and after each addition to the tests:
 
 ```
 1578 self-tests across every path, no failures (0 skipped).
