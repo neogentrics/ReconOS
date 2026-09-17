@@ -142,9 +142,14 @@ Five faults introduced on purpose, all five caught:
 | a frame the card marked bad accepted | FAIL | lease ✓ ping ✓ |
 | half of a split frame accepted | FAIL | lease ✓ ping ✓ |
 
-**The right-hand column is the point.** Every one of those five boots got a
-DHCP lease and a ping answered in about 300 microseconds. Booting catches none
-of them, so this is coverage of ground a running machine cannot reach.
+Every one of those five boots got a DHCP lease and a ping answered in about 300
+microseconds. **For this driver that is the weak reading of that column, not
+the strong one** — see the correction further down. The rig emulates no Realtek
+part, so a green boot here does not mean a fault slipped past a running
+machine; it means no running machine ever touched the code. Which is exactly
+why the test had to exist, but it is not evidence of subtlety. The strong
+version of this claim belongs to the Intel's table below, where the card under
+test *is* the one carrying the boot's traffic.
 
 **One of the five found a fault in the test, not the driver.** The assertions
 measured `rx_bytes` alone — and removing the short-length guard turns a
