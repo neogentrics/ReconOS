@@ -474,6 +474,79 @@ static void test_a_refused_screen_is_refused(void) {
     recon_panel_destroy(ok);
 }
 
+static void test_which_panel_is_on_top(void) {
+    printf("the topmost panel at a point, when nothing knows better\n");
+
+    /*
+     * --- What this is, and why the default is not an approximation ---
+     *
+     * `recon_panel_topmost_of` asks which panel is genuinely drawn on top at a
+     * point. Under a compositor a hook answers, because the scene graph knows
+     * about windows the caller never passed in -- a client's.
+     *
+     * With no hook, it walks the caller's own list front to back. On a
+     * framebuffer that is not a worse answer, it is **the** answer:
+     * `src/recon_ui_fb.c` says what is in front of what is decided by the
+     * order things are committed, by whoever is doing the committing. This
+     * reads that order back.
+     *
+     * What it must not do is what a plain containment test would: a maximized
+     * window contains every point on the screen and would claim clicks meant
+     * for windows stacked above it.
+     */
+    unsigned char bytes[256 * 4 * 64];
+    memset(bytes, 0, sizeof(bytes));
+
+    /* A big one behind, a small one in front of part of it. */
+    struct recon_panel *behind = recon_panel_on_screen(bytes, 256 * 4,
+        256, 64, 0, 0, 200, 60);
+    struct recon_panel *front = recon_panel_on_screen(bytes, 256 * 4,
+        256, 64, 0, 0, 40, 20);
+
+    check(behind != NULL && front != NULL, "two panels");
+    recon_panel_set_position(behind, 0, 0);
+    recon_panel_set_position(front, 10, 10);
+
+    struct recon_panel *order[2] = { front, behind };
+
+    check(recon_panel_topmost_of(order, 2, 20, 15) == 0,
+        "where they overlap, the one in front wins");
+    check(recon_panel_topmost_of(order, 2, 150, 50) == 1,
+        "outside it, the one behind answers");
+    check(recon_panel_topmost_of(order, 2, 400, 400) == -1,
+        "and a point on neither is nobody's");
+
+    /*
+     * The order is the caller's, so reversing it reverses the answer. That is
+     * the property the shell relies on: it keeps `app_order` front-most first
+     * and hands that straight in.
+     */
+    struct recon_panel *reversed[2] = { behind, front };
+
+    check(recon_panel_topmost_of(reversed, 2, 20, 15) == 0,
+        "reversing the list puts the other one on top");
+
+    /*
+     * A hidden panel does not answer. A window that is not on the screen
+     * cannot be clicked, and having it answer and making every caller check
+     * afterwards is the same check written at every call site instead of once.
+     */
+    recon_panel_set_enabled(front, false);
+    check(!recon_panel_is_enabled(front), "the front one is hidden");
+    check(recon_panel_topmost_of(order, 2, 20, 15) == 1,
+        "so the one behind it answers instead");
+
+    recon_panel_set_enabled(front, true);
+    check(recon_panel_is_enabled(front), "shown again");
+    check(recon_panel_topmost_of(order, 2, 20, 15) == 0, "and it answers again");
+
+    check(recon_panel_topmost_of(NULL, 2, 1, 1) == -1, "no list, nobody");
+    check(recon_panel_topmost_of(order, 0, 1, 1) == -1, "no panels, nobody");
+
+    recon_panel_destroy(front);
+    recon_panel_destroy(behind);
+}
+
 int main(void) {
     printf("ReconOS desktop frame tests\n\n");
 
@@ -486,6 +559,7 @@ int main(void) {
     test_small_screens();
     test_missing_facts_still_draw();
     test_a_refused_screen_is_refused();
+    test_which_panel_is_on_top();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

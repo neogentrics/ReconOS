@@ -398,6 +398,15 @@ void recon_appwin_raise(struct recon_appwin *win);
 struct recon_panel *recon_appwin_panel(struct recon_appwin *win);
 
 /*
+ * Show it, or stop showing it.
+ *
+ * Not the same as closing: a hidden window keeps its contents, its position
+ * and its place in the stack, and comes back exactly as it was. That is what
+ * "show the desktop" does to everything at once.
+ */
+void recon_appwin_set_visible(struct recon_appwin *win, bool visible);
+
+/*
  * The scene node this window draws into.
  *
  * Lets the shell ask the scene graph which window is genuinely on top at a

@@ -37,6 +37,14 @@ struct recon_panel *recon_server_system_panel(struct recon_server *server,
     return recon_panel_create(server->layer_system, width, height);
 }
 
+struct recon_panel *recon_server_chrome_panel(struct recon_server *server,
+        int width, int height) {
+    if (server == NULL) {
+        return NULL;
+    }
+    return recon_panel_create(server->layer_chrome, width, height);
+}
+
 struct recon_loop *recon_server_loop(struct recon_server *server) {
     if (server == NULL || server->wl_display == NULL) {
         return NULL;

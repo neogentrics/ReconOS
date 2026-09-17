@@ -21,13 +21,12 @@
 #include <string.h>
 #include <strings.h> /* strcasecmp */
 
-#include <wlr/types/wlr_scene.h>
-#include <wlr/util/log.h>
 
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_appicon.h"
 #include "recon_appwin.h"
+#include "recon_loop.h"
 #include "recon_calendar.h"
 #include "recon_mailwin.h"
 #include "recon_player.h"
@@ -1024,10 +1023,10 @@ struct recon_shell {
      * one has exactly one timer running.
      */
     struct recon_panel *blank;
-    struct wl_event_source *blank_timer;
+    struct recon_timer *blank_timer;
 
     /* Redraws the taskbar when the displayed minute changes. */
-    struct wl_event_source *clock_timer;
+    struct recon_timer *clock_timer;
 
     /*
      * The one thing in ReconOS that moves on its own.
@@ -1042,7 +1041,7 @@ struct recon_shell {
      * moves windows somebody did not ask to have moved, and a thing that
      * happens without being explained looks like a fault.
      */
-    struct wl_event_source *slide_timer;
+    struct recon_timer *slide_timer;
     int slide_step;
 
     /*
@@ -1054,7 +1053,7 @@ struct recon_shell {
      * the edge of the thing it describes.
      */
     struct recon_panel *tip;
-    struct wl_event_source *tip_timer;
+    struct recon_timer *tip_timer;
     char tip_text[80];
     int tip_x, tip_y;
     bool blanked;
@@ -1198,7 +1197,7 @@ static void tip_hide(struct recon_shell *shell) {
     shell->tip_text[0] = '\0';
     recon_panel_set_enabled(shell->tip, false);
     if (shell->tip_timer != NULL) {
-        wl_event_source_timer_update(shell->tip_timer, 0);
+        recon_timer_after(shell->tip_timer, 0);
     }
 }
 
@@ -1248,10 +1247,10 @@ static void tip_draw(struct recon_shell *shell) {
     recon_panel_raise_to_top(shell->tip);
 }
 
-static int tip_expired(void *data) {
+static void tip_expired(void *data) {
     struct recon_shell *shell = data;
     tip_draw(shell);
-    return 0;
+    return;
 }
 
 /*
@@ -1332,7 +1331,7 @@ static void tip_track(struct recon_shell *shell, double lx, double ly) {
     snprintf(shell->tip_text, sizeof(shell->tip_text), "%s", found);
 
     if (shell->tip_text[0] != '\0') {
-        wl_event_source_timer_update(shell->tip_timer, TIP_DELAY_MS);
+        recon_timer_after(shell->tip_timer, TIP_DELAY_MS);
     }
 }
 
@@ -2261,7 +2260,7 @@ static void context_add_id(struct recon_shell *shell, const char *label,
          * that can open a file, so this is reachable by installing modules
          * rather than by anything in this build.
          */
-        wlr_log(WLR_ERROR, "ReconOS: menu is full; '%s' left out", label);
+        recon_ui_say(true, "ReconOS: menu is full; '%s' left out", label);
         return;
     }
     int i = shell->context_item_count++;
@@ -2414,27 +2413,45 @@ static void raise_app_order(struct recon_shell *shell, int index) {
 }
 
 /*
- * The topmost scene node at this point.
+ * The topmost thing this shell owns at this point, or NULL.
  *
- * The scene graph is the only thing that knows what is actually drawn on top.
- * Asking whether a point falls inside a window is not the same question: a
- * maximized window contains every point on screen, so it would claim clicks
- * meant for windows stacked above it.
+ * **Not the same question as which window contains the point.** A maximized
+ * window contains every point on the screen and would claim clicks meant for
+ * windows stacked above it.
+ *
+ * The list is the app windows in this shell's own front-to-back order, then
+ * the desktop behind them -- which is all the callers compare against. Panels
+ * above these, the menu and the dialogs, have already been offered the point
+ * and returned by the time anything asks this.
+ *
+ * NULL is a real answer and not a failure to find one. Under a compositor,
+ * `recon_panel_topmost_of` can see windows this shell does not own -- a
+ * client's -- and says so by naming none of these. A shell that claimed the
+ * click anyway would take it from the client.
  */
-static struct wlr_scene_node *topmost_node(struct recon_shell *shell,
+static struct recon_panel *topmost_panel(struct recon_shell *shell,
         double lx, double ly) {
-    double sx, sy;
-    return wlr_scene_node_at(&shell->server->scene->tree.node, lx, ly, &sx, &sy);
+    struct recon_panel *panels[RECON_SHELL_WINDOWS_MAX + 1];
+    int count = 0;
+
+    for (int i = 0; i < shell->app_count; i++) {
+        panels[count++] = recon_appwin_panel(shell->apps[shell->app_order[i]]);
+    }
+    panels[count++] = recon_desktop_panel(shell->desktop);
+
+    int at = recon_panel_topmost_of(panels, count, lx, ly);
+
+    return at >= 0 ? panels[at] : NULL;
 }
 
-/* The built-in window that owns a node, if any. */
-static int appwin_index_for_node(struct recon_shell *shell,
-        struct wlr_scene_node *node) {
-    if (node == NULL) {
+/* The built-in window that draws on a panel, if any. */
+static int appwin_index_for_panel(struct recon_shell *shell,
+        struct recon_panel *panel) {
+    if (panel == NULL) {
         return -1;
     }
     for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_node(shell->apps[i]) == node) {
+        if (recon_appwin_panel(shell->apps[i]) == panel) {
             return i;
         }
     }
@@ -2474,10 +2491,10 @@ static int slide_remaining(int step) {
     return (int)(((int64_t)t * t / 1024) * t / 1024);
 }
 
-static int on_slide_tick(void *data) {
+static void on_slide_tick(void *data) {
     struct recon_shell *shell = data;
     if (shell == NULL) {
-        return 0;
+        return;
     }
 
     shell->slide_step++;
@@ -2502,11 +2519,11 @@ static int on_slide_tick(void *data) {
             recon_appwin_set_slide(shell->apps[i], 0, 0);
         }
         recon_damage_all(shell->server);
-        return 0;
+        return;
     }
 
-    wl_event_source_timer_update(shell->slide_timer, SLIDE_MS);
-    return 0;
+    recon_timer_after(shell->slide_timer, SLIDE_MS);
+    return;
 }
 
 /*
@@ -2534,7 +2551,7 @@ static void begin_slide(struct recon_shell *shell) {
     }
 
     shell->slide_step = 0;
-    wl_event_source_timer_update(shell->slide_timer, SLIDE_MS);
+    recon_timer_after(shell->slide_timer, SLIDE_MS);
 }
 
 /* --- Drawing --- */
@@ -3907,8 +3924,8 @@ static void layout(struct recon_shell *shell) {
  */
 static int adopt_window(struct recon_shell *shell, struct recon_appwin *win);
 /* Defined with the rest of the blanking, below the shell it acts on. */
-static int blank_expired(void *data);
-static int clock_ticked(void *data);
+static void blank_expired(void *data);
+static void clock_ticked(void *data);
 
 /*
  * Wake at the top of the next minute, not sixty seconds from now.
@@ -3931,10 +3948,10 @@ static void clock_arm(struct recon_shell *shell) {
     recon_clock_now(&now);
 
     int ms = (60 - now.second) * 1000 + 200;
-    wl_event_source_timer_update(shell->clock_timer, ms);
+    recon_timer_after(shell->clock_timer, ms);
 }
 
-static int clock_ticked(void *data) {
+static void clock_ticked(void *data) {
     struct recon_shell *shell = data;
 
     /*
@@ -3944,7 +3961,7 @@ static int clock_ticked(void *data) {
      */
     draw_taskbar(shell);
     clock_arm(shell);
-    return 0;
+    return;
 }
 
 struct recon_shell *recon_shell_create(struct recon_server *server,
@@ -3965,15 +3982,15 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      */
     shell->font = recon_font_system(FONT_HEIGHT);
 
-    shell->taskbar = recon_panel_create(server->layer_chrome,
+    shell->taskbar = recon_server_chrome_panel(server,
         screen_width, TASKBAR_HEIGHT);
     if (shell->taskbar == NULL) {
-        wlr_log(WLR_ERROR, "ReconOS: could not create the taskbar");
+        recon_ui_say(true, "ReconOS: could not create the taskbar");
         free(shell);
         return NULL;
     }
 
-    shell->menu = recon_panel_create(server->layer_chrome, MENU_WIDTH,
+    shell->menu = recon_server_chrome_panel(server, MENU_WIDTH,
         menu_height(false, ""));
     if (shell->menu != NULL) {
         recon_panel_set_enabled(shell->menu, false);
@@ -3985,55 +4002,51 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      * including the dim and the session screen -- it is the last thing drawn
      * because it is meant to cover all of them.
      */
-    shell->blank = recon_panel_create(server->layer_chrome,
+    shell->blank = recon_server_chrome_panel(server,
         screen_width, screen_height);
     if (shell->blank != NULL) {
         recon_panel_set_enabled(shell->blank, false);
     }
-    shell->blank_timer = wl_event_loop_add_timer(
-        wl_display_get_event_loop(server->wl_display), blank_expired, shell);
+    shell->blank_timer = recon_timer_create(recon_server_loop(server), blank_expired, shell);
 
-    shell->clock_timer = wl_event_loop_add_timer(
-        wl_display_get_event_loop(server->wl_display), clock_ticked, shell);
+    shell->clock_timer = recon_timer_create(recon_server_loop(server), clock_ticked, shell);
     clock_arm(shell);
 
     /* Small to start with; it is resized to whatever it has to say. */
-    shell->tip = recon_panel_create(server->layer_system, 120, 24);
+    shell->tip = recon_server_system_panel(server, 120, 24);
     if (shell->tip != NULL) {
         recon_panel_set_enabled(shell->tip, false);
     }
-    shell->tip_timer = wl_event_loop_add_timer(
-        wl_display_get_event_loop(server->wl_display), tip_expired, shell);
-    shell->slide_timer = wl_event_loop_add_timer(
-        wl_display_get_event_loop(server->wl_display), on_slide_tick, shell);
+    shell->tip_timer = recon_timer_create(recon_server_loop(server), tip_expired, shell);
+    shell->slide_timer = recon_timer_create(recon_server_loop(server), on_slide_tick, shell);
     recon_shell_blank_reload(shell);
 
-    shell->programs = recon_panel_create(server->layer_chrome,
+    shell->programs = recon_server_chrome_panel(server,
         MENU_LEFT_WIDTH, MENU_ITEM_HEIGHT * 4);
     if (shell->programs != NULL) {
         recon_panel_set_enabled(shell->programs, false);
     }
     shell->programs_hover = -1;
 
-    shell->dim = recon_panel_create(server->layer_system,
+    shell->dim = recon_server_system_panel(server,
         screen_width, screen_height);
     if (shell->dim != NULL) {
         recon_panel_set_enabled(shell->dim, false);
     }
 
-    shell->dialog = recon_panel_create(server->layer_system, DIALOG_WIDTH, 200);
+    shell->dialog = recon_server_system_panel(server, DIALOG_WIDTH, 200);
     if (shell->dialog != NULL) {
         recon_panel_set_enabled(shell->dialog, false);
     }
     shell->dialog_hover = -1;
 
-    shell->context = recon_panel_create(server->layer_chrome,
+    shell->context = recon_server_chrome_panel(server,
         CONTEXT_WIDTH, CONTEXT_ITEM_HEIGHT * CONTEXT_ITEMS_MAX);
     if (shell->context != NULL) {
         recon_panel_set_enabled(shell->context, false);
     }
 
-    shell->security = recon_panel_create(server->layer_system,
+    shell->security = recon_server_system_panel(server,
         SEC_WIDTH, security_height());
     if (shell->security != NULL) {
         recon_panel_set_enabled(shell->security, false);
@@ -4147,7 +4160,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
 
     for (size_t i = 0; i < sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]); i++) {
         if (!recon_register_builtin_app(&BUILTIN_APPS[i])) {
-            wlr_log(WLR_ERROR, "ReconOS: could not register '%s'",
+            recon_ui_say(true, "ReconOS: could not register '%s'",
                 BUILTIN_APPS[i].name);
         }
     }
@@ -4237,17 +4250,17 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         }
     }
 
-    wlr_log(WLR_INFO, "ReconOS: shell up, taskbar %dx%d",
+    recon_ui_say(false, "ReconOS: shell up, taskbar %dx%d",
         screen_width, TASKBAR_HEIGHT);
     return shell;
 }
 
 /* --- Blanking the screen --- */
 
-static int blank_expired(void *data) {
+static void blank_expired(void *data) {
     struct recon_shell *shell = data;
     recon_shell_blank(shell);
-    return 0;
+    return;
 }
 
 /*
@@ -4263,11 +4276,11 @@ static void blank_rearm(struct recon_shell *shell) {
     }
 
     if (shell->blank_after_seconds <= 0 || shell->blanked) {
-        wl_event_source_timer_update(shell->blank_timer, 0);
+        recon_timer_after(shell->blank_timer, 0);
         return;
     }
 
-    wl_event_source_timer_update(shell->blank_timer,
+    recon_timer_after(shell->blank_timer,
         shell->blank_after_seconds * 1000);
 }
 
@@ -4373,15 +4386,15 @@ void recon_shell_destroy(struct recon_shell *shell) {
      * whatever somebody was in the middle of typing.
      */
     if (shell->clock_timer != NULL) {
-        wl_event_source_remove(shell->clock_timer);
+        recon_timer_destroy(shell->clock_timer);
         shell->clock_timer = NULL;
     }
     if (shell->tip_timer != NULL) {
-        wl_event_source_remove(shell->tip_timer);
+        recon_timer_destroy(shell->tip_timer);
         shell->tip_timer = NULL;
     }
     if (shell->blank_timer != NULL) {
-        wl_event_source_remove(shell->blank_timer);
+        recon_timer_destroy(shell->blank_timer);
         shell->blank_timer = NULL;
     }
     /*
@@ -4396,7 +4409,7 @@ void recon_shell_destroy(struct recon_shell *shell) {
      * years and then closes on somebody once.
      */
     if (shell->slide_timer != NULL) {
-        wl_event_source_remove(shell->slide_timer);
+        recon_timer_destroy(shell->slide_timer);
         shell->slide_timer = NULL;
     }
 
@@ -4463,10 +4476,7 @@ void recon_shell_raise(struct recon_shell *shell) {
         return;
     }
     /* The desktop stays at the bottom, above only the wallpaper. */
-    recon_desktop_lower(shell->desktop, shell->server->background_buffer != NULL
-        ? &shell->server->background_buffer->node
-        : (shell->server->background_rect != NULL
-            ? &shell->server->background_rect->node : NULL));
+    recon_desktop_lower(shell->desktop);
     recon_panel_raise_to_top(shell->taskbar);
     if (shell->menu_open) {
         recon_panel_raise_to_top(shell->menu);
@@ -4573,21 +4583,15 @@ static void set_desktop_visible(struct recon_shell *shell, bool visible) {
         tip_hide(shell);
     }
 
-    struct wlr_scene_node *desktop = recon_desktop_node(shell->desktop);
-    if (desktop != NULL) {
-        wlr_scene_node_set_enabled(desktop, visible);
-    }
+    recon_desktop_set_visible(shell->desktop, visible);
 
     for (int i = 0; i < shell->app_count; i++) {
-        struct wlr_scene_node *node = recon_appwin_node(shell->apps[i]);
-        if (node == NULL) {
-            continue;
-        }
         /* A window that was minimized stays hidden when the desktop comes
          * back: signing in should not open things nobody opened. */
         bool showing = visible && recon_appwin_is_open(shell->apps[i]) &&
             !recon_appwin_is_minimized(shell->apps[i]);
-        wlr_scene_node_set_enabled(node, showing);
+
+        recon_appwin_set_visible(shell->apps[i], showing);
     }
 
     recon_damage_all(shell->server);
@@ -4913,7 +4917,7 @@ static int adopt_window(struct recon_shell *shell, struct recon_appwin *win) {
         }
     }
     if (shell->app_count >= (int)(sizeof(shell->apps) / sizeof(shell->apps[0]))) {
-        wlr_log(WLR_ERROR, "ReconOS: no room for another window");
+        recon_ui_say(true, "ReconOS: no room for another window");
         return -1;
     }
 
@@ -4994,7 +4998,7 @@ void recon_shell_open_help(struct recon_shell *shell) {
      * which is worse, because it looks like an answer.
      */
     if (topic != NULL && topic[0] != '\0' && !recon_help_topic_exists(topic)) {
-        wlr_log(WLR_ERROR, "ReconOS: no help topic called '%s' -- opening at "
+        recon_ui_say(true, "ReconOS: no help topic called '%s' -- opening at "
             "the beginning instead", topic);
         topic = NULL;
     }
@@ -5053,7 +5057,7 @@ void recon_shell_open_named(struct recon_shell *shell, const char *title) {
          */
         recon_error_raisef(NULL, RECON_ERR_J001, "%s: %s", title,
             recon_modules_last_error());
-        wlr_log(WLR_ERROR, "ReconOS: cannot open '%s': %s", title,
+        recon_ui_say(true, "ReconOS: cannot open '%s': %s", title,
             recon_modules_last_error());
         return;
     }
@@ -6074,14 +6078,14 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         return true;
     }
 
-    struct wlr_scene_node *node = topmost_node(shell, lx, ly);
+    struct recon_panel *on_top = topmost_panel(shell, lx, ly);
 
     /*
      * A window under the pointer offers what can be done to the window. Right
      * click should answer everywhere rather than only in the two places that
      * happen to have something interesting to say.
      */
-    int app_index = appwin_index_for_node(shell, node);
+    int app_index = appwin_index_for_panel(shell, on_top);
     if (app_index >= 0) {
         struct recon_appwin *win = shell->apps[app_index];
 
@@ -6128,7 +6132,7 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
     }
 
     /* The desktop, on an icon or on empty space. */
-    if (node == recon_desktop_node(shell->desktop)) {
+    if (on_top == recon_desktop_panel(shell->desktop)) {
         const char *name = recon_desktop_item_at(shell->desktop, lx, ly);
         if (name != NULL) {
             shell->context_kind = RECON_CONTEXT_DESKTOP_ITEM;
@@ -6375,7 +6379,7 @@ static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
      * limits this to the Latin range, and is the same limit every other
      * typed-into thing in ReconOS currently has.
      */
-    if (sym >= 0x20 && sym <= 0x7E && (modifiers & WLR_MODIFIER_CTRL) == 0) {
+    if (sym >= 0x20 && sym <= 0x7E && (modifiers & RECON_MOD_CTRL) == 0) {
         if (typed + 1 < sizeof(shell->menu_filter)) {
             shell->menu_filter[typed] = (char)sym;
             shell->menu_filter[typed + 1] = '\0';
@@ -6705,13 +6709,21 @@ static void toggle_menu(struct recon_shell *shell) {
 /* Convert layout coordinates to panel-local, returning false if outside. */
 static bool point_in_panel(struct recon_panel *panel, double lx, double ly,
         int *px, int *py) {
-    struct wlr_scene_node *node = recon_panel_node(panel);
-    if (node == NULL || !node->enabled) {
+    if (panel == NULL || !recon_panel_is_enabled(panel)) {
         return false;
     }
 
-    int local_x = (int)lx - node->x;
-    int local_y = (int)ly - node->y;
+    /*
+     * Asked of the panel rather than read off a scene node. It is the same
+     * two numbers: `recon_panel_set_position` is what put them there, and
+     * `recon_panel_position` is what reads them back on either presentation.
+     */
+    int x = 0, y = 0;
+
+    recon_panel_position(panel, &x, &y);
+
+    int local_x = (int)lx - x;
+    int local_y = (int)ly - y;
     if (local_x < 0 || local_y < 0 ||
             local_x >= recon_panel_width(panel) ||
             local_y >= recon_panel_height(panel)) {
@@ -6736,7 +6748,7 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
             point_in_panel(shell->programs, lx, ly, &px, &py)) {
         return true;
     }
-    if (appwin_index_for_node(shell, topmost_node(shell, lx, ly)) >= 0) {
+    if (appwin_index_for_panel(shell, topmost_panel(shell, lx, ly)) >= 0) {
         return true;
     }
     if (shell->security_open && shell->security != NULL &&
@@ -7090,8 +7102,8 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
      * Then whichever built-in window the scene graph says is actually on top
      * here -- not merely one whose rectangle covers the point.
      */
-    struct wlr_scene_node *node = topmost_node(shell, lx, ly);
-    int index = appwin_index_for_node(shell, node);
+    struct recon_panel *on_top = topmost_panel(shell, lx, ly);
+    int index = appwin_index_for_panel(shell, on_top);
     if (index >= 0) {
         /*
          * Which window held focus before the click was offered, by identity
@@ -7142,7 +7154,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
             return true;
         }
         uint32_t hit = recon_hit_test(shell->taskbar, px, py);
-        wlr_log(WLR_DEBUG, "ReconOS: taskbar click at %d,%d -> hit %u (%d buttons)",
+        recon_ui_say(false, "ReconOS: taskbar click at %d,%d -> hit %u (%d buttons)",
             px, py, hit, shell->button_count);
 
         if (hit == HIT_APPS_BUTTON) {
@@ -7207,7 +7219,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
      * nothing in front of it wanted -- and only when the scene agrees nothing
      * is drawn over it there.
      */
-    if (node == recon_desktop_node(shell->desktop)) {
+    if (on_top == recon_desktop_panel(shell->desktop)) {
         struct recon_desktop_action action;
         if (recon_desktop_handle_click(shell->desktop, lx, ly, pressed, &action)) {
             perform_desktop_action(shell, &action);

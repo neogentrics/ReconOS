@@ -23,6 +23,17 @@
 struct wlr_scene_tree;
 struct wlr_scene_buffer;
 
+/*
+ * Named here so that every declaration of it is the same type. A struct
+ * introduced inside a parameter list is scoped to that parameter list -- which
+ * the freestanding check reported, and which the ordinary build does not,
+ * because wlroots' own header is on its path and declares it properly.
+ *
+ * An incomplete type in a prototype compiles anywhere, which is what lets this
+ * header be included by files that have never heard of a compositor.
+ */
+struct wlr_scene;
+
 /* --- Colors --- */
 
 /*
@@ -301,6 +312,65 @@ int recon_panel_width(const struct recon_panel *panel);
 int recon_panel_height(const struct recon_panel *panel);
 
 /* The panel's node, for scene ordering and hit-test identification. */
+/* Whether it is being shown. What `recon_panel_set_enabled` last said. */
+bool recon_panel_is_enabled(const struct recon_panel *panel);
+
+/*
+ * Put it behind everything else.
+ *
+ * The counterpart of `recon_panel_raise_to_top`, and it does nothing on a
+ * framebuffer for the same reason that does: there is no z-order there to move
+ * within, only the order things are committed in.
+ */
+void recon_panel_lower_to_bottom(struct recon_panel *panel);
+
+/*
+ * Which of these is genuinely drawn on top at this point, or -1.
+ *
+ * **Not the same question as which one contains the point.** A maximized
+ * window contains every point on the screen and would claim clicks meant for
+ * windows stacked above it, which is the bug this exists to prevent.
+ *
+ * `panels` is in the caller's own front-to-back order. The answer may be -1
+ * even when one of them contains the point: under a compositor, something the
+ * caller does not own -- a client's window -- can be above all of them, and a
+ * shell that claimed the click anyway would steal it.
+ */
+int recon_panel_topmost_of(struct recon_panel *const *panels, int count,
+    double lx, double ly);
+
+/*
+ * Answer that question better than the default walk.
+ *
+ * The default walks `panels` front-to-back and takes the first that contains
+ * the point, which is exactly right where the caller is the only authority on
+ * stacking -- a framebuffer, where `src/recon_ui_fb.c` says *"what is in front
+ * of what is decided by the order things are committed"*.
+ *
+ * A compositor knows more: it can see windows the caller never passed in.
+ * `recon_ui_hit_test_to_wlroots` installs that, beside the log hook and for
+ * the same reason.
+ */
+void recon_ui_set_hit_test(int (*fn)(struct recon_panel *const *panels,
+    int count, double lx, double ly));
+
+/*
+ * Say something, through whatever log has been installed.
+ *
+ * It was internal while the drawing layer was the only thing that complained
+ * -- about a font it could not find, a size it could not fit. `recon_shell.c`
+ * says things too, and used `wlr_log` to do it, which is what kept seven
+ * thousand lines of shell behind a compositor header for the sake of eight
+ * complaints.
+ *
+ * Does nothing when nobody has installed a log, which is right for a library
+ * and is why `main.c` installs one before anything draws.
+ */
+void recon_ui_say(bool error, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
+
+void recon_ui_hit_test_to_wlroots(struct wlr_scene *scene);
+
 struct wlr_scene_node *recon_panel_node(struct recon_panel *panel);
 
 /*

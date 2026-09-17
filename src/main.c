@@ -3138,6 +3138,20 @@ int main(int argc, char **argv) {
     server.scene = wlr_scene_create();
 
     /*
+     * How the shell finds out which window is genuinely on top.
+     *
+     * The default walks the caller's own front-to-back order, which is exactly
+     * right where the caller is the only authority on stacking -- a
+     * framebuffer. A compositor knows more: the scene holds windows the shell
+     * never passed in, so a click over a client has to go to the client rather
+     * than to the built-in window underneath it.
+     *
+     * Installed here rather than beside the log hook because it needs the
+     * scene, and the scene is a line old.
+     */
+    recon_ui_hit_test_to_wlroots(server.scene);
+
+    /*
      * The four layers, created in the order they stack. Nothing is added to
      * the scene root after this: everything joins one of these, and that
      * choice is the whole of what decides where it sits.

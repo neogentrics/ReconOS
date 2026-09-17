@@ -1053,6 +1053,12 @@ struct recon_panel *recon_appwin_panel(struct recon_appwin *win) {
     return win != NULL ? win->panel : NULL;
 }
 
+void recon_appwin_set_visible(struct recon_appwin *win, bool visible) {
+    if (win != NULL) {
+        recon_panel_set_enabled(win->panel, visible);
+    }
+}
+
 void recon_appwin_raise(struct recon_appwin *win) {
     if (win != NULL && win->open && !win->minimized) {
         recon_panel_raise_to_top(win->panel);

@@ -75,9 +75,25 @@ void recon_desktop_reload(struct recon_desktop *desktop);
 void recon_desktop_refresh(struct recon_desktop *desktop);
 
 /* Keep the desktop above the wallpaper and below everything else. */
-void recon_desktop_lower(struct recon_desktop *desktop,
-    struct wlr_scene_node *background);
+void recon_desktop_lower(struct recon_desktop *desktop);
 
+
+/*
+ * Show the desktop, or stop showing it.
+ *
+ * What "show the desktop" hides is every *window*; this is the thing behind
+ * them, and it is hidden when a full-screen window is up so that nothing is
+ * drawn where nobody can see it.
+ */
+void recon_desktop_set_visible(struct recon_desktop *desktop, bool visible);
+
+/* What it draws on, for the handful of things that have to compare panels. */
+struct recon_panel *recon_desktop_panel(struct recon_desktop *desktop);
+
+/*
+ * **Defined in `src/recon_desktop_wlr.c`**, which is not built for ReconOS.
+ * Nothing on that side has a scene graph to hand a node to.
+ */
 struct wlr_scene_node *recon_desktop_node(struct recon_desktop *desktop);
 
 bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double ly,

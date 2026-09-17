@@ -229,6 +229,13 @@ static void wlr_raise_to_top(void *state) {
     }
 }
 
+static void wlr_lower_to_bottom(void *state) {
+    struct wlr_scene_buffer *scene_buffer = state;
+    if (scene_buffer != NULL) {
+        wlr_scene_node_lower_to_bottom(&scene_buffer->node);
+    }
+}
+
 static void wlr_set_enabled(void *state, bool enabled) {
     struct wlr_scene_buffer *scene_buffer = state;
     if (scene_buffer != NULL) {
@@ -248,6 +255,7 @@ static const struct recon_panel_present WLR_PRESENT = {
     .set_position = wlr_set_position,
     .position = wlr_position,
     .raise_to_top = wlr_raise_to_top,
+    .lower_to_bottom = wlr_lower_to_bottom,
     .set_enabled = wlr_set_enabled,
     .destroy = wlr_destroy,
 };
@@ -306,4 +314,57 @@ static void wlr_log_hook(bool error, const char *message) {
 
 void recon_ui_log_to_wlroots(void) {
     recon_ui_set_log(wlr_log_hook);
+}
+
+/*
+ * --- Which window is genuinely on top ---
+ *
+ * The scene graph is the only thing that knows, and the reason it is worth
+ * asking rather than checking rectangles is that **a maximized window contains
+ * every point on the screen**. Testing containment would have it claim clicks
+ * meant for windows stacked above it.
+ *
+ * And it knows something the caller cannot: the scene holds windows the shell
+ * never passed in -- a client's toplevel. So this can answer **-1 for a point
+ * one of the given panels does contain**, which is not a failure to find one.
+ * It is the correct answer, and dropping it would send a click meant for a
+ * client to a built-in window underneath it.
+ *
+ * That is the whole reason this is a hook rather than the default. Where there
+ * is no compositor there are no clients, and the caller's own order is the
+ * answer -- see `recon_panel_topmost_of`.
+ */
+static struct wlr_scene *g_scene;
+
+static int wlr_hit_test(struct recon_panel *const *panels, int count,
+        double lx, double ly) {
+    if (g_scene == NULL) {
+        return -1;
+    }
+
+    double sx, sy;
+    struct wlr_scene_node *on_top =
+        wlr_scene_node_at(&g_scene->tree.node, lx, ly, &sx, &sy);
+
+    if (on_top == NULL) {
+        return -1;
+    }
+
+    for (int i = 0; i < count; i++) {
+        if (panels[i] != NULL && recon_panel_node(panels[i]) == on_top) {
+            return i;
+        }
+    }
+
+    /*
+     * Something is on top here and it is not one of these. A client window,
+     * the cursor, a layer this shell does not own -- the caller gets -1 and
+     * should let it have the click.
+     */
+    return -1;
+}
+
+void recon_ui_hit_test_to_wlroots(struct wlr_scene *scene) {
+    g_scene = scene;
+    recon_ui_set_hit_test(scene != NULL ? wlr_hit_test : NULL);
 }

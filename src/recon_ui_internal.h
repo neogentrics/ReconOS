@@ -63,6 +63,7 @@ struct recon_panel_present {
     void (*set_position)(void *state, int x, int y);
     void (*position)(void *state, int *x, int *y);
     void (*raise_to_top)(void *state);
+    void (*lower_to_bottom)(void *state);
     void (*set_enabled)(void *state, bool enabled);
 
     /* Let go of whatever `state` is. The pixels are not yours. */
@@ -111,6 +112,20 @@ struct recon_panel {
      */
     uint32_t hot;
     uint32_t held;
+
+    /*
+     * Whether it is being shown.
+     *
+     * Kept here rather than asked of the presentation, because neither
+     * presentation can answer it: wlroots stores it on a node this side does
+     * not read, and the framebuffer keeps it in its own state. One bool in the
+     * shared struct is cheaper than a sixth vtable entry that both sides would
+     * implement by remembering what they were told.
+     *
+     * A panel starts shown, which is what every caller assumes -- one made and
+     * then never enabled would be a window that opened invisibly.
+     */
+    bool enabled;
 };
 
 /*
@@ -133,6 +148,6 @@ struct recon_panel *recon_panel_wrap(int width, int height,
  * goes to whoever set a hook and nowhere otherwise.
  */
 void recon_ui_set_log(void (*log)(bool error, const char *message));
-void recon_ui_say(bool error, const char *format, ...);
+/* recon_ui_say is declared in the public header now; see recon_ui.h. */
 
 #endif /* RECON_UI_INTERNAL_H */

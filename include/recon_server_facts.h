@@ -111,6 +111,17 @@ struct recon_panel *recon_server_system_panel(struct recon_server *server,
     int width, int height);
 
 /*
+ * And one for the shell's own chrome -- the task bar, the menu, the tips.
+ *
+ * A third layer rather than a flag, because the layers are what the compositor
+ * stacks by and the shell has three kinds of thing in three places: behind
+ * windows, among them, and above them all. Which layer is a compositor idea,
+ * which is why the caller should be naming the *kind* instead.
+ */
+struct recon_panel *recon_server_chrome_panel(struct recon_server *server,
+    int width, int height);
+
+/*
  * The loop to wait on.
  *
  * `include/recon_loop.h` is what a program does with it, and this is where one

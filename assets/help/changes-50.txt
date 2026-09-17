@@ -1,69 +1,52 @@
-Asked for as "redesign the entire layout of the browser -- it doesn't have a
-lot of buttons and features". It had three: back, forward and reload, with an
-address bar. Everything below is what a window with one page in it turns into
-when it can hold several.
+Joshua added a checkout of mozilla-central alongside the Netscape one, for
+features Netscape did not have. Measured before being used, the same as last
+time: parser/html is 36 C++ files, servo/components/style is 277 Rust
+files, layout/ is C++, and js/src is 825 C++ files. ReconOS is C11. None of
+it is takeable as code, for a different reason than Netscape's -- that tree was
+too old, this one is in two languages this does not build.
 
-Tabs. The structural change, and the one everything else sits on. A window
-was a page: one document, one history, one set of fetches. It is now a window
-that *owns* pages, and the split is exactly at the toolbar -- the tab owns the
-document and the work, the window owns the chrome around it.
+The obvious portable thing was the named character reference table: the
+specification has 2,231 and this has 24. So that was measured too, across six
+real pages -- gaming.recontowers.com, recontowers.com, Hacker News, a Wikipedia
+article, gnu.org and LWN. 1,251 named entities used, 100% of them already
+covered. The comment in the table calling its 24 entries "the fraction that
+appears in prose" turned out to be exactly right, and importing the other 2,207
+would have bought nothing.
 
-The part worth writing down is that every fetch is handed the tab, not the
-window. A page finishing in a background tab lands in its own tab instead of
-overwriting whatever is in front of you, and the same rule stops a background
-page rewriting the address bar or the window's title. Twelve to a window, each
-one heap-allocated -- an image table and a history is a quarter of a megabyte,
-and twelve of those inside the window struct would be three megabytes of
-window whether or not anybody opened a second tab.
+What the tree was actually worth is the html5lib tree-construction suite --
+1,556 pieces of markup, MIT-licensed plain data, written by people whose
+purpose was to break HTML parsers. Their expected output is a DOM tree and this
+parser deliberately builds none, so the answers cannot be compared. What can be
+checked is everything that must hold whatever the answer is: that it returns,
+that every block's runs are inside the run table, that every link index names a
+link that exists, and that every byte of every run can be read back.
 
-Closing the last tab empties it rather than closing the window. A browser that
-vanishes when you close a tab is a browser people lose work in.
+That is 14,204 checks, and it is the first suite in this project written by
+somebody other than whoever wrote the code it tests -- which is the failure
+BG-162 records.
 
-A toolbar with the controls a browser has. Home, and a stop that is the
-same button as reload -- one question, "is this page still coming?", whose
-answer is never both, where two buttons would leave one of them always dead.
+It found a bug on its first run (BG-167). add_rule sets four of a block's
+six fields, and the missing one is source, the index of the block's picture.
+The array is calloced, so the value was not garbage -- it was zero, and zero
+is not "no picture", it is "the picture at link zero". Every <hr> on the web
+claimed to be an image whose address was the page's first link. Nothing acted
+on it, because every reader checks the kind first; it was simply untrue, with
+nothing arranged to notice. Nobody writes a test asking whether a horizontal
+rule has a picture.
 
-A padlock that says only what it knows. Closed for TLS, open for plain
-HTTP, and absent before anything has loaded. It is deliberately not a claim
-about the site: "the connection was encrypted" is the only thing this can
-actually know, and dressing that up as "this page is safe" would be a lie told
-by the browser rather than by the site. Drawn rather than typed, because the
-system font has the arrows, the star, the house and the triple bar this
-toolbar uses and does not have U+1F512 -- and a security indicator that is
-sometimes invisible is worse than none, since its absence is what says "not
-secure".
+And find on page was searching the screen rather than the page (BG-166).
+Shipped last version, and wrong from the start: the match test sat below
+put_word's off-screen early return, so the count was of matches already
+visible. "1 of 2" meant two on this screenful, and searching for a word further
+down found nothing at all. Every test of it had used a word visible in the
+first screenful -- the same fault as BG-162, in a different place. Whether a
+word matches is a fact about the document; everything below that return is
+about the screen. Next now takes you to the match, a third of the way down
+the window rather than at the very edge, and only when it is not already
+visible.
 
-Bookmarks, kept in /Users/Shared/Web/bookmarks.txt as url<tab>label --
-a tab because a title has spaces in it and an address does not, so the split
-needs no quoting and no escape rules to get wrong. The star adds and removes:
-one control answering one question, where a separate remove would be a second
-control that is only ever right when the first is wrong. The bar turns itself
-on when the first bookmark is kept, because a bookmark you cannot see is one
-you will not believe was saved.
-
-Find on page, with the matches marked *behind* the words rather than by
-recolouring them -- a page already uses colour to mean things, and a match
-that recolours a word competes with whatever the page was saying. The current
-match takes the accent and the others a wash of it, so "which one am I on"
-reads without counting. The count comes out of the same pass that draws the
-page: counting separately means walking the document again with a second idea
-of what a word is, and the two disagree the moment one is changed.
-
-Zoom, per tab, 50% to 250%. It multiplies whatever the kind and the
-stylesheet settled on rather than replacing it, so a heading at 150% is half
-again as big as *that heading*. The percentage appears in the status bar only
-when it is not 100%, and clicking it puts it back -- a number that is always
-there is a number that never means anything.
-
-A menu, and the keys: Ctrl+T, Ctrl+W, Ctrl+F, Ctrl+D, Ctrl+L, Ctrl+R,
-Ctrl+plus, Ctrl+minus, Ctrl+0, F3, Escape. The shortcuts are read before any
-field sees the key -- letting the address bar have Ctrl+T first would type a
-"t" instead of opening a tab. Entries that cannot do anything are drawn and
-greyed rather than hidden: a menu whose entries come and go is one nobody can
-learn the shape of, and "why is this grey" has an answer where "where did it
-go" does not.
-
-The tab strip and the menu rows both go through recon_widget -- the tab look
-and the menu highlight already existed there, which is what that layer is for.
+recon_html_run_count and recon_html_link_count exist because the corpus
+test needed to bounds-check an index and there was no way to ask how big the
+tables were.
 
 ---

@@ -9,6 +9,83 @@ way for the two to disagree.
 
 ---
 
+## v0.4.59 — which window is on top
+
+`src/recon_shell.c` is seven thousand two hundred lines and mentioned a
+compositor twenty-one times. **It mentions one zero times now**, and what is
+left holding it off a freestanding build is a single idea: a window that
+belongs to somebody else.
+
+### Most of the twenty-one were not questions at all
+
+Seven were `wlr_log`, which `recon_ui_say` has answered since v0.4.44 — the
+shell was behind a wayland header for the sake of eight complaints. One was
+`WLR_MODIFIER_CTRL`, which `RECON_MOD_CTRL` has answered since v0.4.51.
+
+Several more were a scene node fetched from a window and handed straight back
+to `wlr_scene_node_set_enabled`. The panel seam has had `set_enabled` all
+along; **the node was travelling through seven thousand lines for no reason.**
+`recon_appwin_set_visible` and `recon_desktop_set_visible` say the thing
+instead.
+
+And `point_in_panel` read a node's `x`, `y` and `enabled` — the same two
+numbers `recon_panel_position` already reads back on either presentation, plus
+a bool the panel now remembers when it is told.
+
+### One of them was a real question
+
+*"Which of my windows is genuinely drawn on top at this point?"* That is not
+the same as which one contains it: **a maximized window contains every point on
+the screen** and would claim clicks meant for windows stacked above it.
+
+`recon_panel_topmost_of` asks it, and the answer differs by more than
+implementation:
+
+- **wayland knows the whole scene**, including windows the shell never passed
+  in — a client's. That is why it can answer *"none of yours"* for a point one
+  of your panels does contain, and why dropping it would send a click meant for
+  a client to a built-in window underneath.
+- **the framebuffer has no z-order at all**, and says so: *"what is in front of
+  what is decided by the order things are committed, by whoever is doing the
+  committing."* There the shell **is** the authority, and walking its own
+  front-to-back list is not an approximation — it is the answer.
+
+So the default is the walk and a compositor installs something better, which is
+exactly the shape `recon_ui_set_log` already uses and is installed in the same
+place.
+
+### Checked two ways, because a hit test is a thing you can see
+
+57 checks on the default walk — that the front one wins where they overlap,
+that reversing the list reverses the answer, that a hidden panel does not claim
+the point. And two photographs of a live desktop: a click inside the Calculator
+lands on the button under it, and a click on the Recycle Bin **behind** the
+Calculator selects the bin and takes focus off the window.
+
+### And the freestanding check caught one the build let through
+
+`struct wlr_scene` was named only inside a parameter list, which scopes it to
+that parameter list and makes every declaration of it a different type. The
+ordinary build never noticed — wlroots' own header is on its path and declares
+it properly. The check that compiles with nothing on the path did, and the
+count dropped from 62 to 33 until it was fixed. That is the second time this
+week that check has been stricter than the build and right to be.
+
+### What is left, and it is one idea
+
+38 references to `recon_toplevel` and `server->toplevels`: **the windows the
+shell does not own.** The task bar shows them, clicks reach them, and on
+ReconOS there are none — applications are loaded into the compositor, which is
+the `addr-space` row on the board and a decision that has already been made.
+
+So the shell is one abstraction from building with no Linux under it, and that
+abstraction is the same one that row is about. Written down rather than
+started.
+
+**62 of 85 sources build with no libc under them.**
+
+---
+
 ## v0.4.58 — waiting, as its own thing
 
 `scripts/port-blockers.sh` said it in one line last version: six files, 8,155

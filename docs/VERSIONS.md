@@ -38,6 +38,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.59** | **Which window is on top.** `recon_shell.c` went from twenty-one compositor mentions to none. Most were a scene node fetched only to be handed straight back; one was a real question, and its answer differs by more than implementation — a compositor sees windows the shell never passed in. Checked by 57 checks and two photographs. |
 | **0.4.58** | **Waiting, as its own thing.** Six files and 8,155 lines used exactly one thing from the compositor, and now do not: `include/recon_loop.h`, with two implementations. 62 of 85 sources build with no libc under them. 14 of 14 mutations caught — and one of them deleted a guard that was guarding against a failure the code could not have, and costing a real one. |
 | **0.4.57** | **What is left of the port, measured.** `scripts/port-blockers.sh` reports what stops each source that does not build freestanding and how many lines it holds. `recon_appwin.c` came off wlroots — 1,629 lines held by one forwarding function — and the report named the next piece in one line: six files and 8,155 lines are behind the **event loop**, and nothing else. |
 | **0.4.56** | **The desktop program runs**, against a machine made of `malloc` and a table of keystrokes. It was the only file in its directory nothing could execute — and the one that decides between a desktop and a black screen. The kernel calls went behind a seam, for the fourth time in this project; the ReconOS side is six pass-throughs. |

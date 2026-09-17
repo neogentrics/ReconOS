@@ -195,11 +195,21 @@ static void screen_destroy(void *state) {
     free(state);
 }
 
+/*
+ * Nothing, and deliberately nothing, for the same reason as raising: there is
+ * no z-order here to move within. A panel that asked to go to the back has
+ * asked the wrong thing to do it -- whoever commits decides.
+ */
+static void screen_lower_to_bottom(void *state) {
+    (void)state;
+}
+
 static const struct recon_panel_present SCREEN_PRESENT = {
     .commit = screen_commit,
     .set_position = screen_set_position,
     .position = screen_position,
     .raise_to_top = screen_raise_to_top,
+    .lower_to_bottom = screen_lower_to_bottom,
     .set_enabled = screen_set_enabled,
     .destroy = screen_destroy,
 };

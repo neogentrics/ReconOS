@@ -692,6 +692,10 @@ struct recon_panel *recon_panel_wrap(int width, int height,
     panel->present = present;
     panel->present_state = state;
 
+    /* Shown, because a window that opened invisibly would be a window
+     * somebody has to enable before it exists. */
+    panel->enabled = true;
+
     panel->pixels = calloc((size_t)width * height, sizeof(uint32_t));
     if (panel->pixels == NULL) {
         /*
@@ -771,11 +775,78 @@ void recon_panel_raise_to_top(struct recon_panel *panel) {
     }
 }
 
-void recon_panel_set_enabled(struct recon_panel *panel, bool enabled) {
+void recon_panel_lower_to_bottom(struct recon_panel *panel) {
     if (panel != NULL && panel->present != NULL &&
-            panel->present->set_enabled != NULL) {
+            panel->present->lower_to_bottom != NULL) {
+        panel->present->lower_to_bottom(panel->present_state);
+    }
+}
+
+void recon_panel_set_enabled(struct recon_panel *panel, bool enabled) {
+    if (panel == NULL) {
+        return;
+    }
+
+    /*
+     * Remembered here as well as told to the presentation, because neither
+     * presentation can be asked afterwards: wlroots keeps it on a node this
+     * side does not read, and the framebuffer keeps it in its own state.
+     */
+    panel->enabled = enabled;
+
+    if (panel->present != NULL && panel->present->set_enabled != NULL) {
         panel->present->set_enabled(panel->present_state, enabled);
     }
+}
+
+bool recon_panel_is_enabled(const struct recon_panel *panel) {
+    return panel != NULL && panel->enabled;
+}
+
+/*
+ * How the topmost panel at a point is found, when something knows better than
+ * the walk below. NULL until a presentation installs one.
+ */
+static int (*g_hit_test)(struct recon_panel *const *panels, int count,
+    double lx, double ly);
+
+void recon_ui_set_hit_test(int (*fn)(struct recon_panel *const *panels,
+        int count, double lx, double ly)) {
+    g_hit_test = fn;
+}
+
+int recon_panel_topmost_of(struct recon_panel *const *panels, int count,
+        double lx, double ly) {
+    if (panels == NULL || count <= 0) {
+        return -1;
+    }
+    if (g_hit_test != NULL) {
+        return g_hit_test(panels, count, lx, ly);
+    }
+
+    /*
+     * Front to back, first hit wins.
+     *
+     * Not an approximation of what a compositor would say. Where this is the
+     * answer -- a framebuffer -- the caller *is* the authority on stacking:
+     * `src/recon_ui_fb.c` says what is in front of what is decided by the
+     * order things are committed, by whoever is doing the committing. This
+     * reads that order back.
+     *
+     * A hidden panel is skipped rather than claiming the point. A window that
+     * is not on the screen cannot be clicked, and the alternative -- letting
+     * it answer and having the caller check afterwards -- is the same check
+     * written at every call site instead of once here.
+     */
+    for (int i = 0; i < count; i++) {
+        if (panels[i] == NULL || !recon_panel_is_enabled(panels[i])) {
+            continue;
+        }
+        if (recon_panel_contains(panels[i], lx, ly)) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 void recon_panel_position(const struct recon_panel *panel, int *x, int *y) {

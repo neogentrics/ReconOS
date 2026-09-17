@@ -784,18 +784,29 @@ void recon_desktop_resize(struct recon_desktop *desktop, int width, int height) 
  * It is the backdrop: nothing should ever be behind it, and nothing except
  * the wallpaper should be under it.
  */
-void recon_desktop_lower(struct recon_desktop *desktop,
-        struct wlr_scene_node *background) {
-    if (desktop == NULL || desktop->panel == NULL) {
-        return;
+/*
+ * The wallpaper is no longer this function's business.
+ *
+ * It used to take the wallpaper's scene node and lower that too, which meant
+ * every caller had to reach into the compositor to fetch one -- and the caller
+ * is `recon_shell.c`, seven thousand lines with nothing else to do with a
+ * scene graph. The wallpaper sits below the desktop either way; whoever owns
+ * it can say so, and on a framebuffer there is nothing to say.
+ */
+void recon_desktop_lower(struct recon_desktop *desktop) {
+    if (desktop != NULL) {
+        recon_panel_lower_to_bottom(desktop->panel);
     }
-    struct wlr_scene_node *node = recon_panel_node(desktop->panel);
-    if (node != NULL) {
-        wlr_scene_node_lower_to_bottom(node);
+}
+
+void recon_desktop_set_visible(struct recon_desktop *desktop, bool visible) {
+    if (desktop != NULL) {
+        recon_panel_set_enabled(desktop->panel, visible);
     }
-    if (background != NULL) {
-        wlr_scene_node_lower_to_bottom(background);
-    }
+}
+
+struct recon_panel *recon_desktop_panel(struct recon_desktop *desktop) {
+    return desktop != NULL ? desktop->panel : NULL;
 }
 
 struct wlr_scene_node *recon_desktop_node(struct recon_desktop *desktop) {
