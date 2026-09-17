@@ -517,3 +517,75 @@ itself. Writing first and verifying afterwards is what can find a wrong memory,
 and it is the same reason the self-tests assert against literals rather than
 against the macros under test. This round found nothing wrong, which is a
 result rather than a waste — it is now known rather than assumed.
+
+---
+
+### 17 September 2026 (fourth) — bluetooth → kernel
+
+**The descriptor parser's second pass: the field map.** Where each part of an
+input report lives and what it means — bit offset, bit size, usage page,
+usage, whether it is padding, whether it is a delta. Plus
+`hid_report_mouse_layout`, which picks the buttons and axes out of that.
+
+That is the piece that lets a device be read **without boot protocol**, which
+matters more here than on USB: a Bluetooth HID device is not obliged to offer
+boot mode, so "fall back to boot" is a fallback that may not exist.
+
+#### Tested against your driver's own numbers
+
+`usb_hid.c` reads a boot mouse as buttons in bit 0 of byte 0, X in byte 1, Y in
+byte 2. The self-test parses a real boot-mouse descriptor and asserts the map
+comes out **buttons at bit 0 count 3, X at bit 8 size 8, Y at bit 16 size 8,
+report 3 bytes** — the same layout, arrived at from the descriptor rather than
+hardcoded. The parser and the driver that has been reading real hardware agree
+on an answer neither took from the other.
+
+It also asserts the padding field is *present and marked* rather than dropped —
+five bits that mean nothing and still occupy space — and that X comes back
+relative while the buttons do not, because an absolute reading warps the
+pointer instead of moving it.
+
+#### What it refuses to do rather than get wrong
+
+Some descriptors use features this pass does not implement. A map built while
+ignoring one of them is wrong in a way that still looks like a map: a field at
+the wrong bit offset decodes to a number, and a mouse built on it moves. So the
+map is **withheld**, with `fields_unusable` naming the feature in words for the
+boot log:
+
+- Push/Pop of the global state
+- an array Input item, which is how a keyboard reports
+- an Input item with fewer usages than fields
+- a four-byte Usage carrying its own page
+
+Buttons with no axes is also refused as a mouse. That is a gamepad or a foot
+pedal, and driving it as a pointer posts motion that does not exist.
+
+#### Nine breakages, and the two that stayed green
+
+Seven went red immediately. **Two passed when they should have failed**, and
+both were faults in the tests rather than the code:
+
+**Clearing local state only after Input, not after every Main item.** The boot
+mouse cannot show this. Its buttons come from a Usage Minimum/Maximum range,
+and the range is consulted before the usage list — so a leaked `Usage(Mouse)`
+sits there being ignored and the answer is identical. The code comment claimed
+this hands "Mouse" to the first button; that was wrong, and it now states the
+narrower truth. The test uses a descriptor with no range at all, where the leak
+makes `Usage(Mouse)` field 0 and slides X down into field 1. It now fails with
+`the two axes came back as usages 02 and 30, expected 30 and 31`.
+
+**Push no longer withholding the map.** The test descriptor had an Input item
+with no usages, so it was withheld for *"fewer usages than fields"* whether or
+not Push was handled — the test never exercised Push at all. It has proper
+usages now, so only the Push can withhold it.
+
+That guard is five for five across this session: a report-id test whose two
+readings agreed, a guard covered by nothing, a fragment length that had already
+arrived, and now these two. Every one of them looked like a passing test.
+
+68 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
+
+**Nothing blocked, nothing to merge yet.** The endpoint fault, the completion
+mailbox, and the two `static` decoders are all as they were.

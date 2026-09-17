@@ -80,14 +80,91 @@ static void note_report_id(struct hid_report_info *info, u8 id)
 	info->report_ids[info->report_id_count++] = id;
 }
 
+/* --- the two halves of the state, and why they are not one ----------------
+ *
+ * **Global items persist until changed. Local items are cleared after every
+ * Main item.** That is the rule the whole second pass turns on, and getting it
+ * backwards does not fail -- it produces a map.
+ *
+ * Concretely: a descriptor says Usage(X), Usage(Y), then Input. Those two
+ * usages belong to that one Input item and are gone afterwards. Report Size
+ * and Report Count, set before them, are still in force for the *next* Input
+ * item too. A parser that keeps the usages around hands X and Y to a later
+ * field that is really a wheel; a parser that clears the sizes asks for
+ * zero-bit fields and every offset after that is wrong.
+ *
+ * So `local` is wiped at the bottom of every Main item and `global` is not.
+ */
+struct hid_local {
+	u16 usages[HID_MAX_FIELDS];
+	unsigned usage_count;
+	bool usage_min_max_valid;
+	u16 usage_min;
+	u16 usage_max;
+};
+
+static void local_clear(struct hid_local *l)
+{
+	l->usage_count = 0;
+	l->usage_min_max_valid = false;
+	l->usage_min = 0;
+	l->usage_max = 0;
+}
+
+static void withhold(struct hid_report_info *info, const char *why)
+{
+	/* First reason wins. The later ones are usually consequences of the
+	 * first, and a message naming the third thing that went wrong sends
+	 * the reader to the wrong place. */
+	if (info->fields_usable) {
+		info->fields_usable = false;
+		info->fields_unusable = why;
+	}
+}
+
+/* The usage for field `n` of a Variable Input item.
+ *
+ * Three shapes, and the third is the one worth naming: an explicit list of
+ * usages, a minimum-to-maximum range (which is how a row of buttons is
+ * written), or fewer usages than fields. The last case is a real descriptor
+ * pattern and this pass does not claim to know the rule for it, so it returns
+ * false and the caller withholds the map rather than inventing a usage.
+ */
+static bool usage_for(const struct hid_local *l, u32 n, u16 *usage)
+{
+	if (l->usage_min_max_valid) {
+		u32 u = (u32)l->usage_min + n;
+
+		if (u > l->usage_max)
+			return false;
+
+		*usage = (u16)u;
+		return true;
+	}
+
+	if (n < l->usage_count) {
+		*usage = l->usages[n];
+		return true;
+	}
+
+	return false;
+}
+
 bool hid_report_parse(const u8 *desc, u32 len, struct hid_report_info *info)
 {
 	u32 at = 0;
 	u32 report_size = 0;
 	u32 report_count = 0;
+	u32 bit_offset = 0;
+	u16 usage_page = 0;
 	unsigned depth = 0;
+	struct hid_local local;
 
 	kmemset(info, 0, sizeof(*info));
+	local_clear(&local);
+
+	/* Usable until something says otherwise. */
+	info->fields_usable = true;
 
 	while (at < len) {
 		u8  prefix = desc[at];
@@ -125,8 +202,49 @@ bool hid_report_parse(const u8 *desc, u32 len, struct hid_report_info *info)
 
 		info->items++;
 
-		if (type == HID_ITEM_GLOBAL) {
+		if (type == HID_ITEM_LOCAL) {
 			switch (tag) {
+			case HID_LOCAL_USAGE:
+				/* A four-byte Usage carries the page in its
+				 * top half. Taking the whole thing as a usage
+				 * gives a number that is never matched and a
+				 * field that silently means nothing. */
+				if (dlen == 4)
+					withhold(info, "a usage with its own "
+						       "page in it");
+				else if (local.usage_count < HID_MAX_FIELDS)
+					local.usages[local.usage_count++] =
+						(u16)item_value(data, dlen);
+				else
+					info->fields_truncated = true;
+				break;
+
+			case HID_LOCAL_USAGE_MINIMUM:
+				local.usage_min = (u16)item_value(data, dlen);
+				local.usage_min_max_valid = true;
+				break;
+
+			case HID_LOCAL_USAGE_MAXIMUM:
+				local.usage_max = (u16)item_value(data, dlen);
+				break;
+
+			default:
+				break;
+			}
+		} else if (type == HID_ITEM_GLOBAL) {
+			switch (tag) {
+			case HID_GLOBAL_USAGE_PAGE:
+				usage_page = (u16)item_value(data, dlen);
+				break;
+			case HID_GLOBAL_PUSH:
+			case HID_GLOBAL_POP:
+				/* Saving and restoring the global state. Not
+				 * implemented, and everything after a Push is
+				 * built on a state this walker no longer
+				 * tracks -- so the map goes, rather than the
+				 * offsets being quietly wrong from here on. */
+				withhold(info, "Push/Pop of the global state");
+				break;
 			case HID_GLOBAL_REPORT_SIZE:
 				report_size = item_value(data, dlen);
 				break;
@@ -149,7 +267,15 @@ bool hid_report_parse(const u8 *desc, u32 len, struct hid_report_info *info)
 			info->main_items++;
 
 			switch (tag) {
-			case HID_MAIN_INPUT:
+			case HID_MAIN_INPUT: {
+				u8  flags = dlen ? (u8)item_value(data, dlen)
+						 : 0;
+				bool constant = (flags & HID_INPUT_CONSTANT)
+						!= 0;
+				bool variable = (flags & HID_INPUT_VARIABLE)
+						!= 0;
+				u32 n;
+
 				/* Size times count, in bits, and the padding
 				 * items count too: an Input item marked
 				 * constant is filler with no usage, and it
@@ -157,7 +283,57 @@ bool hid_report_parse(const u8 *desc, u32 len, struct hid_report_info *info)
 				 * walker that skipped them would compute a
 				 * report shorter than the device sends. */
 				info->input_bits += report_size * report_count;
+
+				if (!variable && !constant) {
+					/* An array: the report carries a list
+					 * of which usages are active rather
+					 * than one value per usage, which is
+					 * how a keyboard sends its keys. A
+					 * different shape entirely, and
+					 * pretending otherwise would place
+					 * fields that are not there. */
+					withhold(info, "an array Input item, "
+						       "which is how keyboards "
+						       "report");
+				}
+
+				for (n = 0; n < report_count; n++) {
+					struct hid_field *f;
+					u16 usage = 0;
+
+					if (info->field_count >=
+					    HID_MAX_FIELDS) {
+						info->fields_truncated = true;
+						break;
+					}
+
+					/* Padding has no usage and is still
+					 * placed, because everything after it
+					 * sits at an offset that counts
+					 * it. */
+					if (!constant && variable &&
+					    !usage_for(&local, n, &usage))
+						withhold(info,
+							 "an Input item with "
+							 "fewer usages than "
+							 "fields");
+
+					f = &info->fields[info->field_count++];
+					f->bit_offset = bit_offset +
+							n * report_size;
+					f->bit_size   = report_size;
+					f->usage_page = constant ? 0
+								 : usage_page;
+					f->usage      = constant ? 0 : usage;
+					f->constant   = constant;
+					f->relative   = (flags &
+							 HID_INPUT_RELATIVE)
+							!= 0;
+				}
+
+				bit_offset += report_size * report_count;
 				break;
+			}
 
 			case HID_MAIN_COLLECTION:
 				depth++;
@@ -179,6 +355,28 @@ bool hid_report_parse(const u8 *desc, u32 len, struct hid_report_info *info)
 			default:
 				break;
 			}
+
+			/* **After every Main item, without exception.**
+			 *
+			 * Not only after an Input: a Collection is a Main item
+			 * too, and the Usage that names it -- Usage(Mouse)
+			 * before Collection(Application) -- must not still be
+			 * sitting in the list when the next Input comes to
+			 * take its usages.
+			 *
+			 * Worth being exact about when it bites, because it is
+			 * narrower than it looks and this comment first said
+			 * otherwise. An Input whose usages come from a
+			 * Usage Minimum/Maximum range is unaffected: the range
+			 * is consulted before the list, so a leaked usage sits
+			 * there unread. It bites an Input that takes usages
+			 * from the list -- the leaked one becomes field zero
+			 * and everything real shifts down by one. A boot
+			 * mouse's buttons use the range and its axes use the
+			 * list, so only the axes could show it, and only if
+			 * the leak survived the Input before them. The test
+			 * for this uses a descriptor with no range at all. */
+			local_clear(&local);
 		}
 
 		at += 1u + dlen;
@@ -200,6 +398,80 @@ bool hid_report_parse(const u8 *desc, u32 len, struct hid_report_info *info)
 		info->input_bits = 0;
 		info->input_bytes = 0;
 	}
+
+	return true;
+}
+
+bool hid_report_mouse_layout(const struct hid_report_info *info,
+			     struct hid_mouse_layout *out)
+{
+	unsigned i;
+	bool have_x = false, have_y = false;
+	u32 last_button_bit = 0;
+
+	kmemset(out, 0, sizeof(*out));
+
+	/* A map that was withheld is not a map to read. Checked first, because
+	 * every loop below would otherwise run over a half-built one and
+	 * produce a layout that looks complete. */
+	if (!info->fields_usable || !info->field_count)
+		return false;
+
+	for (i = 0; i < info->field_count; i++) {
+		const struct hid_field *f = &info->fields[i];
+
+		if (f->constant)
+			continue;
+
+		if (f->usage_page == HID_PAGE_BUTTON && f->usage) {
+			/* Buttons are one bit each and consecutive. The first
+			 * one fixes the offset; the rest only have to still be
+			 * adjacent, and a gap means this is not the simple row
+			 * this can describe. */
+			if (!out->buttons_count) {
+				out->buttons_offset = f->bit_offset;
+				out->buttons_count = 1;
+				last_button_bit = f->bit_offset;
+			} else if (f->bit_offset == last_button_bit +
+						   f->bit_size) {
+				out->buttons_count++;
+				last_button_bit = f->bit_offset;
+			}
+
+			continue;
+		}
+
+		if (f->usage_page != HID_PAGE_GENERIC_DESKTOP)
+			continue;
+
+		switch (f->usage) {
+		case HID_USAGE_X:
+			out->x_offset = f->bit_offset;
+			out->x_size = f->bit_size;
+			have_x = true;
+			break;
+		case HID_USAGE_Y:
+			out->y_offset = f->bit_offset;
+			out->y_size = f->bit_size;
+			have_y = true;
+			break;
+		case HID_USAGE_WHEEL:
+			out->wheel_offset = f->bit_offset;
+			out->wheel_size = f->bit_size;
+			out->have_wheel = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	/* Buttons alone are not a mouse -- that is a gamepad or a foot pedal,
+	 * and driving it as a pointer would post motion that does not exist. */
+	if (!have_x || !have_y)
+		return false;
+
+	out->report_bytes = (info->input_bits + 7u) / 8u;
+	out->found = true;
 
 	return true;
 }
@@ -255,7 +527,10 @@ static const u8 boot_mouse[] = {
 
 bool hid_report_self_test(void)
 {
-	struct hid_report_info info;
+	/* Static rather than automatic: the struct now carries a 32-field map
+	 * and this function holds two at once, which is most of a kilobyte on a
+	 * stack that has other plans. A boot-time self-test runs once. */
+	static struct hid_report_info info;
 	bool ok = true;
 
 	/* --- 0, 1, 2, 4 -------------------------------------------------- */
@@ -314,7 +589,7 @@ bool hid_report_self_test(void)
 	 */
 	{
 		u8 shifted[sizeof(boot_mouse) + 5];
-		struct hid_report_info after;
+		static struct hid_report_info after;
 
 		shifted[0] = 0x07;		/* Usage Page, four bytes */
 		shifted[1] = 0x01;
@@ -443,7 +718,7 @@ bool hid_report_self_test(void)
 	 */
 	{
 		u8 with_long[sizeof(boot_mouse) + 7];
-		struct hid_report_info after;
+		static struct hid_report_info after;
 
 		with_long[0] = HID_LONG_ITEM_PREFIX;
 		with_long[1] = 4;		/* four bytes of data */
@@ -493,6 +768,312 @@ bool hid_report_self_test(void)
 				      "accepted\n");
 				ok = false;
 			}
+		}
+	}
+
+	/* --- the field map, against a layout already known ---------------
+	 *
+	 * `usb_hid.c` reads a boot mouse as: buttons in bit 0 of byte 0, X in
+	 * byte 1, Y in byte 2. That driver has been doing it against real
+	 * hardware, so those offsets are an answer from outside this file --
+	 * buttons at bit 0, X at bit 8, Y at bit 16.
+	 */
+	if (!hid_report_parse(boot_mouse, sizeof(boot_mouse), &info)) {
+		kputs("  hidrep: the boot mouse descriptor was refused on the "
+		      "second pass\n");
+		ok = false;
+	} else if (!info.fields_usable) {
+		kprintf("  hidrep: the field map was withheld for a plain "
+			"boot mouse: %s\n",
+			info.fields_unusable ? info.fields_unusable
+					     : "no reason given");
+		ok = false;
+	} else {
+		struct hid_mouse_layout m;
+
+		/* Three buttons, one padding field, two axes. */
+		if (info.field_count != 6) {
+			kprintf("  hidrep: the mouse came to %u fields, "
+				"expected 6 -- three buttons, one padding, "
+				"two axes\n", info.field_count);
+			ok = false;
+		}
+
+		if (!hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: a boot mouse descriptor did not "
+			      "yield a mouse layout\n");
+			ok = false;
+		} else {
+			if (m.buttons_offset != 0 || m.buttons_count != 3) {
+				kprintf("  hidrep: buttons at bit %u count "
+					"%u, expected bit 0 count 3 -- "
+					"usb_hid.c reads them from bit 0 of "
+					"byte 0\n", m.buttons_offset,
+					m.buttons_count);
+				ok = false;
+			}
+
+			if (m.x_offset != 8 || m.x_size != 8) {
+				kprintf("  hidrep: X at bit %u size %u, "
+					"expected bit 8 size 8 -- that is "
+					"byte 1, which is where usb_hid.c "
+					"reads it\n", m.x_offset, m.x_size);
+				ok = false;
+			}
+
+			if (m.y_offset != 16 || m.y_size != 8) {
+				kprintf("  hidrep: Y at bit %u size %u, "
+					"expected bit 16 size 8\n",
+					m.y_offset, m.y_size);
+				ok = false;
+			}
+
+			if (m.have_wheel) {
+				kputs("  hidrep: a wheel was found on a "
+				      "three-button boot mouse that has "
+				      "none\n");
+				ok = false;
+			}
+
+			if (m.report_bytes != 3) {
+				kprintf("  hidrep: the mouse report is %u "
+					"bytes, expected 3\n",
+					m.report_bytes);
+				ok = false;
+			}
+		}
+
+		/* The padding field must be *present* and marked, not dropped.
+		 * Dropping it would leave the map correct only because the
+		 * axes' offsets were computed separately. */
+		{
+			unsigned i, constants = 0;
+
+			for (i = 0; i < info.field_count; i++)
+				if (info.fields[i].constant)
+					constants++;
+
+			if (constants != 1) {
+				kprintf("  hidrep: %u padding fields, "
+					"expected 1 -- the five bits after "
+					"the buttons are real estate even "
+					"though they mean nothing\n",
+					constants);
+				ok = false;
+			}
+		}
+
+		/* The axes are relative on a mouse and the buttons are not.
+		 * Reading a relative axis as absolute would warp the pointer
+		 * rather than move it. */
+		{
+			unsigned i;
+
+			for (i = 0; i < info.field_count; i++) {
+				const struct hid_field *f = &info.fields[i];
+
+				if (f->usage_page == HID_PAGE_GENERIC_DESKTOP &&
+				    f->usage == HID_USAGE_X && !f->relative) {
+					kputs("  hidrep: X read as absolute; "
+					      "a mouse reports deltas, and an "
+					      "absolute reading warps the "
+					      "pointer instead of moving "
+					      "it\n");
+					ok = false;
+				}
+
+				if (f->usage_page == HID_PAGE_BUTTON &&
+				    f->relative) {
+					kputs("  hidrep: a button read as "
+					      "relative\n");
+					ok = false;
+				}
+			}
+		}
+	}
+
+	/* --- the usages must not leak past their Main item ---------------
+	 *
+	 * Usage(Mouse) names the collection, and a Collection is a Main item,
+	 * so that usage must be gone before the next Input asks for one.
+	 *
+	 * **The boot mouse above cannot show this, and the first version of
+	 * this test wrongly claimed it could.** Its buttons come from a Usage
+	 * Minimum/Maximum range, and `usage_for` consults the range before the
+	 * list -- so a leaked Usage(Mouse) is sitting there being ignored, and
+	 * a walker that clears local state only after Input gives the same
+	 * answer. Breaking the clear on purpose left this test green.
+	 *
+	 * The descriptor below has no range. Its Input takes two usages from
+	 * the list, so a leaked Usage(Mouse) becomes field 0, X slides into
+	 * field 1, and Y falls off the end.
+	 */
+	{
+		static const u8 leaky[] = {
+			0x05, 0x01,	/* Usage Page (Generic Desktop) */
+			0x09, 0x02,	/* Usage (Mouse) -- names the next */
+			0xA1, 0x01,	/* Collection (Application)     */
+			0x09, 0x30,	/*   Usage (X)                  */
+			0x09, 0x31,	/*   Usage (Y)                  */
+			0x75, 0x08,	/*   Report Size (8)            */
+			0x95, 0x02,	/*   Report Count (2)           */
+			0x81, 0x06,	/*   Input (Data,Var,Rel)       */
+			0xC0		/* End Collection               */
+		};
+
+		if (!hid_report_parse(leaky, sizeof(leaky), &info)) {
+			kputs("  hidrep: a two-axis descriptor was refused\n");
+			ok = false;
+		} else if (!info.fields_usable) {
+			kprintf("  hidrep: a two-axis descriptor was withheld: "
+				"%s\n", info.fields_unusable
+					? info.fields_unusable : "no reason");
+			ok = false;
+		} else if (info.field_count != 2) {
+			kprintf("  hidrep: %u fields, expected 2\n",
+				info.field_count);
+			ok = false;
+		} else if (info.fields[0].usage != HID_USAGE_X ||
+			   info.fields[1].usage != HID_USAGE_Y) {
+			kprintf("  hidrep: the two axes came back as usages "
+				"%02x and %02x, expected 30 and 31 -- "
+				"Usage(Mouse) named the collection and "
+				"survived into the Input item\n",
+				info.fields[0].usage, info.fields[1].usage);
+			ok = false;
+		}
+	}
+
+	/* And the boot mouse's own usages, which its range does cover. */
+	{
+		unsigned i;
+
+		if (hid_report_parse(boot_mouse, sizeof(boot_mouse), &info) &&
+		    info.fields_usable) {
+			for (i = 0; i < info.field_count; i++) {
+				const struct hid_field *f = &info.fields[i];
+
+				if (f->usage_page == HID_PAGE_GENERIC_DESKTOP &&
+				    f->usage == HID_USAGE_MOUSE) {
+					kprintf("  hidrep: field %u came back "
+						"as Usage(Mouse), which names "
+						"the collection -- a local "
+						"usage survived its Main "
+						"item\n", i);
+					ok = false;
+				}
+			}
+
+			/* And the buttons must be 1, 2, 3 in order, from the
+			 * Usage Minimum/Maximum range rather than from a
+			 * list. */
+			if (info.field_count >= 3) {
+				if (info.fields[0].usage != 1 ||
+				    info.fields[1].usage != 2 ||
+				    info.fields[2].usage != 3) {
+					kprintf("  hidrep: the buttons are "
+						"usages %u %u %u, expected 1 "
+						"2 3 from the minimum-maximum "
+						"range\n",
+						info.fields[0].usage,
+						info.fields[1].usage,
+						info.fields[2].usage);
+					ok = false;
+				}
+			}
+		}
+	}
+
+	/* --- a feature this pass does not implement withholds the map ----
+	 *
+	 * **This descriptor has to be otherwise valid, and the first version
+	 * was not.** It had an Input item with no usages at all, so it was
+	 * withheld for "fewer usages than fields" whether or not Push was
+	 * handled -- and deleting the Push handling on purpose left the test
+	 * green. It has proper usages now, so the only thing that can withhold
+	 * it is the Push.
+	 */
+	{
+		static const u8 with_push[] = {
+			0x05, 0x01,		/* Usage Page (Generic Desktop) */
+			0xA1, 0x01,		/* Collection (Application) */
+			0xA4,			/*   Push                   */
+			0x09, 0x30,		/*   Usage (X)              */
+			0x09, 0x31,		/*   Usage (Y)              */
+			0x75, 0x08,		/*   Report Size (8)        */
+			0x95, 0x02,		/*   Report Count (2)       */
+			0x81, 0x06,		/*   Input                  */
+			0xB4,			/*   Pop                    */
+			0xC0
+		};
+
+		if (!hid_report_parse(with_push, sizeof(with_push), &info)) {
+			kputs("  hidrep: a descriptor using Push was refused "
+			      "outright; it parses, its map is just not "
+			      "trustworthy\n");
+			ok = false;
+		} else if (info.fields_usable) {
+			kputs("  hidrep: a descriptor using Push produced a "
+			      "field map, and every offset after the Push is "
+			      "built on state this walker does not track\n");
+			ok = false;
+		} else if (!info.fields_unusable) {
+			kputs("  hidrep: the map was withheld with no reason "
+			      "attached, which a boot log cannot act on\n");
+			ok = false;
+		}
+	}
+
+	/* --- an array Input item is a keyboard, not a pointer ------------- */
+	{
+		static const u8 keyboard_ish[] = {
+			0xA1, 0x01,
+			0x75, 0x08,
+			0x95, 0x06,
+			0x81, 0x00,		/* Input (Data, Array) */
+			0xC0
+		};
+
+		if (!hid_report_parse(keyboard_ish, sizeof(keyboard_ish),
+				      &info)) {
+			kputs("  hidrep: an array Input item was refused "
+			      "outright\n");
+			ok = false;
+		} else if (info.fields_usable) {
+			kputs("  hidrep: an array Input item produced a "
+			      "field map; an array carries a list of active "
+			      "usages, not one value per field\n");
+			ok = false;
+		}
+	}
+
+	/* --- buttons with no axes are not a mouse ------------------------- */
+	{
+		static const u8 buttons_only[] = {
+			0xA1, 0x01,
+			0x05, 0x09,		/* Usage Page (Button) */
+			0x19, 0x01,
+			0x29, 0x04,
+			0x95, 0x04,
+			0x75, 0x01,
+			0x81, 0x02,
+			0x95, 0x01,
+			0x75, 0x04,
+			0x81, 0x01,		/* padding */
+			0xC0
+		};
+		struct hid_mouse_layout m;
+
+		if (!hid_report_parse(buttons_only, sizeof(buttons_only),
+				      &info)) {
+			kputs("  hidrep: a buttons-only descriptor was "
+			      "refused\n");
+			ok = false;
+		} else if (hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: four buttons and no axes was read "
+			      "as a mouse, and driving it as one posts "
+			      "motion that does not exist\n");
+			ok = false;
 		}
 	}
 

@@ -73,6 +73,50 @@
  * `report_ids_truncated` says so rather than the number quietly being wrong. */
 #define HID_MAX_REPORT_IDS	8
 
+/* --- the second pass: what each part of a report means -------------------- */
+
+/* The two usage pages a pointing device lives on. */
+#define HID_PAGE_GENERIC_DESKTOP	0x01
+#define HID_PAGE_BUTTON			0x09
+
+/* On the Generic Desktop page. */
+#define HID_USAGE_MOUSE			0x02
+#define HID_USAGE_X			0x30
+#define HID_USAGE_Y			0x31
+#define HID_USAGE_WHEEL			0x38
+
+/* Local item tags. Usage is Local, usage *page* is Global -- which is the
+ * distinction that makes the state machine below have two halves. */
+#define HID_LOCAL_USAGE			0x0
+#define HID_LOCAL_USAGE_MINIMUM		0x1
+#define HID_LOCAL_USAGE_MAXIMUM		0x2
+
+/* The bits of an Input item's own data byte. Only three matter here.
+ *
+ * Constant means padding with no usage -- and it still occupies its bits, so
+ * a walker that skips it puts every field after it at the wrong offset.
+ * Variable means one value per field; its opposite, an array, is how keyboards
+ * report and is not handled by this pass. */
+#define HID_INPUT_CONSTANT		0x01
+#define HID_INPUT_VARIABLE		0x02
+#define HID_INPUT_RELATIVE		0x04
+
+/* How many fields of an input report this will describe. A boot mouse needs
+ * six -- three buttons, a padding field, and two axes -- and a five-button
+ * mouse with a wheel needs ten. Beyond this the map stops filling and
+ * `fields_truncated` says so. */
+#define HID_MAX_FIELDS			32
+
+/* One piece of an input report. */
+struct hid_field {
+	u32 bit_offset;
+	u32 bit_size;
+	u16 usage_page;
+	u16 usage;
+	bool constant;		/* padding: occupies bits, means nothing */
+	bool relative;		/* a delta, like a mouse axis */
+};
+
 struct hid_report_info {
 	/* The answer `bt_hid.c` needs. */
 	bool uses_report_id;
@@ -94,7 +138,52 @@ struct hid_report_info {
 	unsigned main_items;
 	unsigned collection_depth_max;
 	unsigned long_items;
+
+	/* --- the field map, which is the second pass ---------------------
+	 *
+	 * Where each piece of the input report lives and what it means. Only
+	 * filled when `fields_usable` -- see below, and check that before
+	 * reading any of it.
+	 */
+	struct hid_field fields[HID_MAX_FIELDS];
+	unsigned field_count;
+	bool fields_truncated;
+
+	/* **False means the map is incomplete, not that parsing failed.**
+	 *
+	 * Some descriptors use features this pass does not implement, and a
+	 * map built while ignoring one of them is wrong in a way that still
+	 * looks like a map -- a field at the wrong bit offset decodes to a
+	 * number, and a mouse built on it moves. So the map is withheld
+	 * rather than guessed, and `fields_unusable` says which feature did
+	 * it, in words, for the boot log.
+	 */
+	bool fields_usable;
+	const char *fields_unusable;
 };
+
+/* What a mouse needs out of all that: where the buttons are and where the
+ * axes are. */
+struct hid_mouse_layout {
+	bool found;
+
+	u32 buttons_offset;	/* bit offset of the first button */
+	u32 buttons_count;	/* one bit each, consecutive */
+
+	u32 x_offset, x_size;	/* bits */
+	u32 y_offset, y_size;
+
+	bool have_wheel;
+	u32 wheel_offset, wheel_size;
+
+	u32 report_bytes;
+};
+
+/* Picks a mouse out of a parsed descriptor. False when the descriptor does not
+ * describe one, when the field map was withheld, or when the axes are missing
+ * -- a device with buttons and no X is not a mouse this can drive. */
+bool hid_report_mouse_layout(const struct hid_report_info *info,
+			     struct hid_mouse_layout *out);
 
 /* Walks a descriptor. False means the bytes are not a well-formed descriptor
  * -- an item running past the end, or a collection nesting that never closes
