@@ -13,6 +13,127 @@ patch.
 
 ---
 
+## Status: ready to read, 17 September 2026 — fourth signal
+
+Branch `graphics`, merged with `origin/kernel` at **0.2.49**. The earlier signals
+below still stand.
+
+**Your ruling is built.** `SYS_PRESENT` is in, exactly as specified, and the
+thing it was for is demonstrated rather than asserted.
+
+---
+
+## SYS_PRESENT, built here
+
+`SYS_PRESENT = 32`, `SYS_MAX` now 33; `check-syscall-numbers.py` reports *33
+system calls; both headers and 42 hand-written numbers agree*.
+
+All four of your decisions taken as ruled, and each has a test that fails
+without it:
+
+| decision | how it is refused | sabotage that proves it |
+|---|---|---|
+| takes the descriptor | `EBADF` | the `map`-check disabled → `accepted a rectangle or a descriptor it must have refused` |
+| no whole-screen sentinel | `EINVAL` on zero width or height | — |
+| past the edge refused, not clamped | `EINVAL` | the range check disabled → same line |
+| nothing to flush answers `SYS_OK` | — | — |
+
+One thing I added inside your fourth decision: **the descriptor check asks the
+file for a `map` operation** rather than comparing against a remembered
+descriptor number. /dev/fb0 is the only file in this kernel with one, so it is
+exact today, and the day there is a second it is the line that has to get more
+specific rather than the line that quietly starts being wrong.
+
+The refusals are tested **from ring 3 through the real boundary**, in
+`kernel/user/paint.c`, not from a kernel self-test calling a static function in
+the file that defines it. Nine cases, including descriptor 1 — the console, a
+real open file with no `map`, which is what separates *is this a descriptor*
+from *is this the screen* — and a width of nearly 2^32 at a non-zero origin,
+which catches an addition computed in a narrow type.
+
+---
+
+## And the gap is closed, measured from outside the kernel
+
+GX-003 was that every display self-test passed against a black screen. Its open
+half was that a program drawing through its mapping had no way to be seen.
+
+virtio-gpu at 2560x1600, screendumped from QEMU's monitor:
+
+```
+  #0c0e10  2138157 px  52.2%
+  #2b3342  1564159 px  38.2%   <-- the paint program's own ground
+  #7a142b   225278 px   5.5%
+  #d0d4d8   165843 px   4.0%
+  #00ff00        3 px   0.0%   <-- its corner markers
+```
+
+With the `recon_present` call taken out of that program and nothing else
+changed, `#2b3342` is on **0 pixels** and the screen reports 2,304,000 non-black
+— which is exactly 1920x1200, the console's own bound, still drawing.
+
+**That 2,304,000 is why the new matrix path asserts a colour rather than a
+count.** At the host's default 1280x800 the console covers the whole panel and
+repaints over the program, so a pixel-count check there passes on a kernel where
+`SYS_PRESENT` does nothing at all. The path runs at 2560x1600 so the program's
+fill reaches glass the console never touches, and asserts `#2b3342` specifically.
+`scripts/screen-has-pixels.py` grew `--require-colour` for it.
+
+---
+
+## The two-adapter path, asserted the way you asked
+
+You said the thing to assert is not that it works but that the two disagree.
+They do, in one report:
+
+```
+  display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+               : 15 present(s), 0 refused
+  also         : bochs-display, found and not in any mode, scans itself out
+```
+
+The `also` line carries the second adapter's flush disposition now, so the
+matrix asserts both halves of the disagreement in one string. A boot where the
+second adapter were ignored entirely would no longer satisfy it.
+
+---
+
+## One correction to something in my third signal
+
+I reported the `clock and tick` contention finding, and it stands. But I should
+be plain about a second thing from the same night: I twice ran the matrix
+concurrently with another session's, **deliberately**, by overriding
+`RECON_TREE_LOCK` — and both spurious failures were caused by that decision, not
+merely observed during it. The finding is real and the cause was mine.
+
+---
+
+## What is still open
+
+1. **`display_owns_page` and the general `file_ops.map` rule** in
+   `addrspace.c`. Unchanged, and now slightly more pointed: `sys_present` also
+   asks a file whether it has a `map` in order to decide something, so there are
+   two places treating "has a map operation" as "is the framebuffer". Both are
+   exact today and both stop being exact on the same day.
+2. **The version bump** when you merge. Four backends, a new system call and two
+   new self-test suites.
+3. Both real-hardware backends still wait on registers read from a running
+   machine — `scripts/read-intel-display.sh` for the laptop; for the desktop,
+   booting ReconOS on it now prints the AMD BAR layout directly.
+
+---
+
+## A note for whoever merges `graphics` into `kernel`
+
+`scripts/make-issues.py` gained `ENTRY_HEAD` and `ENTRY_ANY` on your side, and
+**neither knew about `GX`**. Taking that refactor wholesale on my branch would
+have silently dropped all ten GX entries from issue generation and from the
+count check — the two regexes would still have agreed with each other, so the
+gap-check between them would not have noticed either. I kept your structure and
+added the prefix to both. Worth a look when the merge goes the other way.
+
+---
+
 ## Status: ready to read, 16 September 2026 — third signal
 
 Branch `graphics`, merged with `origin/kernel` at **0.2.48** (KF-242, KF-243,

@@ -97,7 +97,8 @@ enum {
 	SYS_BIND,
 	SYS_LISTEN,
 	SYS_ACCEPT,
-	SYS_CONNECT
+	SYS_CONNECT,
+	SYS_PRESENT
 };
 
 /* Negative is why not. The names the kernel uses, so a program reporting a
@@ -201,6 +202,10 @@ static inline i64 recon_call6(u64 n, u64 a0, u64 a1, u64 a2, u64 a3, u64 a4,
 #define RECON_CALL2(n, a, b)          recon_call6((n), (u64)(a), (u64)(b), 0, 0, 0, 0)
 #define RECON_CALL3(n, a, b, c)       recon_call6((n), (u64)(a), (u64)(b), (u64)(c), 0, 0, 0)
 #define RECON_CALL4(n, a, b, c, d)    recon_call6((n), (u64)(a), (u64)(b), (u64)(c), (u64)(d), 0, 0)
+/* Five, for SYS_PRESENT -- a descriptor and a rectangle. The ladder stopped at
+ * four until something needed a fifth, which is the right reason for it to
+ * grow and the reason it is not written out to six. */
+#define RECON_CALL5(n, a, b, c, d, e) recon_call6((n), (u64)(a), (u64)(b), (u64)(c), (u64)(d), (u64)(e), 0)
 
 /* --- The calls --- */
 
@@ -298,6 +303,29 @@ static inline i64 recon_map(int fd, u64 length)
 static inline i64 recon_screen(struct recon_screen *into, u64 length)
 {
 	return RECON_CALL2(SYS_SCREEN, into, length);
+}
+
+/* Show what has been drawn into the memory `recon_map` handed over.
+ *
+ * **Call it after drawing, on every screen, and do not branch on the kind.**
+ * On a display whose framebuffer is scanned out continuously this costs one
+ * system call and returns `SYS_OK` having done nothing; on one whose pixels
+ * are memory the host cannot see until it is told -- virtio-gpu, and every
+ * real GPU -- it is the difference between a picture and a black rectangle.
+ * There is deliberately no way to ask which sort you have, because a program
+ * that branched on it would be wrong on one of them.
+ *
+ * The rectangle is what changed, and it is required. For the whole screen pass
+ * the width and height `recon_screen` reported -- there is no zero-means-
+ * everything spelling, because an uninitialised width is zero and that is the
+ * one value that must not mean "do the most expensive thing".
+ *
+ * A rectangle reaching past the edge is refused with `SYS_EINVAL` rather
+ * than trimmed.
+ */
+static inline i64 recon_present(int fd, u32 x, u32 y, u32 w, u32 h)
+{
+	return RECON_CALL5(SYS_PRESENT, fd, x, y, w, h);
 }
 
 /* What to ask the machine to do. The two differ by whether it comes back, so

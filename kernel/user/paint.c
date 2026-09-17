@@ -41,6 +41,8 @@
 #define BAD_MAP         63	/* SYS_MAP refused */
 #define BAD_GEOMETRY    64	/* the numbers do not describe a screen */
 #define BAD_READBACK    65	/* a pixel did not come back */
+#define BAD_PRESENT     66	/* SYS_PRESENT refused */
+#define BAD_PRESENT_REFUSAL 67	/* SYS_PRESENT accepted what it must refuse */
 
 /*
  * The two the compiler is allowed to call without being asked.
@@ -234,7 +236,89 @@ int main(void)
 		}
 	}
 
-	recon_say(1, "paint: a C program drew on the screen\n");
+	/* **What it must refuse, asked from ring 3 through the real boundary.**
+	 *
+	 * Each of these is one of the four decisions the call's shape was ruled
+	 * on, and each is checked here rather than in a kernel self-test because
+	 * the thing worth testing is the syscall entry -- the argument order, the
+	 * descriptor check and the range arithmetic -- not a static function
+	 * called from inside the file that defines it.
+	 */
+	{
+		/* A descriptor that is not the screen. 999 was never opened, so
+		 * this is the ordinary bad-descriptor case. */
+		if (recon_present(999, 0, 0, 1, 1) != SYS_EBADF)
+			return BAD_PRESENT_REFUSAL;
+
+		/* **A descriptor that is open and is not a framebuffer.**
+		 *
+		 * Descriptor 1 is the console, which this program has been
+		 * writing to all along. It is a real open file with no `map`, so
+		 * it is the case that separates "is this a descriptor" from "is
+		 * this the screen" -- and a kernel that only checked the first
+		 * would present pixels for a program that had never mapped
+		 * anything. */
+		if (recon_present(1, 0, 0, 1, 1) != SYS_EBADF)
+			return BAD_PRESENT_REFUSAL;
+
+		/* Zero width. There is no whole-screen sentinel precisely so
+		 * that this is refused rather than silently granted the most
+		 * expensive call in the interface. */
+		if (recon_present((int)fd, 0, 0, 0, 1) != SYS_EINVAL)
+			return BAD_PRESENT_REFUSAL;
+
+		if (recon_present((int)fd, 0, 0, 1, 0) != SYS_EINVAL)
+			return BAD_PRESENT_REFUSAL;
+
+		/* Past the right edge, and past the bottom. Refused rather than
+		 * clamped -- the same answer SYS_MAP gives a length longer than
+		 * the file. */
+		if (recon_present((int)fd, screen.width, 0, 1, 1) != SYS_EINVAL)
+			return BAD_PRESENT_REFUSAL;
+
+		if (recon_present((int)fd, 0, 0, screen.width + 1, 1)
+		    != SYS_EINVAL)
+			return BAD_PRESENT_REFUSAL;
+
+		if (recon_present((int)fd, 0, screen.height, 1, 1) != SYS_EINVAL)
+			return BAD_PRESENT_REFUSAL;
+
+		if (recon_present((int)fd, 0, 0, 1, screen.height + 1)
+		    != SYS_EINVAL)
+			return BAD_PRESENT_REFUSAL;
+
+		/* **The one that catches an addition that wraps.** A width of
+		 * nearly 2^32 added to an origin of zero is past the screen; a
+		 * kernel that computed `x + w` in a narrow type and compared the
+		 * result would find it comfortably inside. */
+		if (recon_present((int)fd, 1, 0, 0xFFFFFFFFu, 1) != SYS_EINVAL)
+			return BAD_PRESENT_REFUSAL;
+
+		/* And one that must be *accepted*, so the refusals above are
+		 * known to be refusing something rather than everything. */
+		if (recon_present((int)fd, 0, 0, 1, 1) != SYS_OK)
+			return BAD_PRESENT;
+	}
+
+	/* **And ask for it to be shown, which is not the same as drawing it.**
+	 *
+	 * Every read-back above passed on a virtio-gpu whose screen was
+	 * entirely black (GX-003): those pages are ordinary memory, so reading
+	 * back what was just written proves the store landed and nothing about
+	 * whether anybody can see it. This is the call that makes the
+	 * difference, and it is made unconditionally -- on a display that scans
+	 * itself out it costs one system call and does nothing, and a program
+	 * that branched on which sort it had would be wrong on one of them.
+	 *
+	 * The whole screen, spelled with the width and height SYS_SCREEN gave
+	 * us, because there is no zero-means-everything. */
+	if (recon_present((int)fd, 0, 0, screen.width, screen.height) != SYS_OK) {
+		recon_close((int)fd);
+		return BAD_PRESENT;
+	}
+
+	recon_say(1, "paint: a C program drew on the screen and asked for it "
+			 "to be shown\n");
 	recon_close((int)fd);
 	return OK;
 }

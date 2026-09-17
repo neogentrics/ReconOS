@@ -240,6 +240,28 @@ check_for() {
 # `scripts/screen-has-pixels.py` drives QEMU's monitor and counts non-black
 # pixels in a screendump. It adds its own -serial, -monitor and -display, so the
 # command passed in must not carry them.
+# The same, plus a colour that must be on the screen.
+#
+# `check_screen` answers "is anything there". This answers "is *this* there",
+# which is a different and harder question -- and the only one that can fail on
+# a machine whose console already covers the panel. Used for the path that
+# proves a program's own pixels, drawn through a mapping and presented with
+# SYS_PRESENT, reach the display.
+check_screen_colour() {
+	local name=$1 marker=$2 colour=$3; shift 3
+	local log="$WORK/$(echo "$name" | tr ' /' '__').screen.log"
+
+	printf '%-46s' "$name"
+
+	if python3 "$ROOT/scripts/screen-has-pixels.py" --marker "$marker" 			--min-pixels 1000 --require-colour "$colour" 			-- "$@" >"$log" 2>&1; then
+		echo "ok -- $(tail -n 1 "$log")"
+	else
+		echo "FAILED -- $log"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$name")
+	fi
+}
+
 check_screen() {
 	local name=$1; shift
 	local log="$WORK/$(echo "$name" | tr ' /' '__').screen.log"
@@ -862,6 +884,28 @@ check_for "reports its screen is 1280x800, and that is the mode it is in" \
 # QEMU instead, and it has been shown to fail: with the driver's flush stubbed
 # to report success without sending anything, it reports nought non-black pixels
 # on a kernel whose own self-tests all pass.
+
+# **A program draws through its mapping and asks for it to be shown.**
+#
+# The path SYS_PRESENT exists for, and the one GX-003 left open: a mapping is
+# the kernel getting out of the way, and on virtio-gpu getting out of the way
+# means the pixels are never seen. The console worked; a program did not.
+#
+# Two things make this assert something. The screen is **2560x1600**, larger
+# than the 1920x1200 the console bounds itself to, so the paint program's fill
+# reaches glass the console never touches -- at the host's default 1280x800 the
+# console covers the panel and repaints over the program, and the check would
+# pass on a kernel where SYS_PRESENT did nothing at all.
+#
+# And it asserts a **colour**, not a pixel count: #2b3342 is the ground the
+# paint program fills with. With the present call taken out of that program the
+# screen still reports 2,304,000 non-black pixels, because the console is still
+# drawing -- what disappears is the program's own colour, and 0 of it is what
+# this check then reports.
+check_screen_colour "  PVH, a program presents what it mapped" \
+	"asked for it to be shown" 2b3342:100000 \
+	qemu-system-x86_64 -m 1024M -vga none \
+		-device virtio-gpu-pci,xres=2560,yres=1600 -kernel "$X64_ELF"
 check_screen "  PVH, virtio-gpu really shows pixels" \
 	qemu-system-x86_64 -m 1024M -vga none -device virtio-gpu-pci \
 		-kernel "$X64_ELF"
@@ -910,11 +954,14 @@ check_for "13 model(s) known, recognition and refusal both checked" \
 # desktop, which has a Radeon RX 6600 on the bus and Raphael graphics in the
 # processor package.
 #
-# Asserted on the second adapter's line rather than on the boot succeeding: the
-# summary named only the primary for as long as nobody looked, while the suspend
-# line two rows below listed both (GX-009). A boot with one adapter satisfies
-# every other question this rig asks.
-check_for "also         : bochs-display" \
+# **Asserted on the two disagreeing, not on the machine booting.** A boot with
+# one adapter satisfies every other question this rig asks, and a boot with two
+# where the second was ignored entirely would satisfy a check that only looked
+# for its name. So the line asserted carries the second adapter *and* its flush
+# disposition: virtio-gpu is primary and reports its present count, while the
+# Bochs adapter beside it reports that it scans itself out. One report, two
+# backends, and they say different things about the same question (GX-009).
+check_for "also         : bochs-display, found and not in any mode, scans itself out" \
 	"  PVH, two display adapters at once" \
 	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
 		-device virtio-gpu-pci -kernel "$X64_ELF"

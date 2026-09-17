@@ -632,6 +632,26 @@ Checked against the entries by `python scripts/make-issues.py --check`.
   other self-test still passes. Restored, both go green. A check that cannot
   fail looks exactly like one that passes.
 
+- **The open half is closed, 17 September 2026.** The fix above made the
+  *console* visible on virtio-gpu and left a program drawing through its own
+  `/dev/fb0` mapping invisible, because a mapping is the kernel getting out of
+  the way and on that device getting out of the way means nobody ever sees the
+  pixels. `SYS_PRESENT` is the door, ruled by the kernel session and built here.
+
+  Measured from outside the kernel, at 2560x1600 so the program's fill reaches
+  glass the console's 1920x1200 bound never touches:
+
+  ```
+  with    recon_present   #2b3342 on 1,564,159 px -- the program's own ground
+  without recon_present   #2b3342 on         0 px, and 2,304,000 non-black
+                          pixels, which is the console alone
+  ```
+
+  That second row is why the matrix path asserts a **colour** rather than a
+  pixel count: at the host's default 1280x800 the console covers the whole panel
+  and repaints over the program, so a count check passes on a kernel where
+  `SYS_PRESENT` does nothing whatever.
+
 ---
 
 ### GX-001 — A program that maps the screen and exits gives the screen to the page allocator

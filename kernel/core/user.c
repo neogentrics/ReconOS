@@ -596,6 +596,85 @@ static i64 sys_map(u64 fd, u64 length, u64 a2, u64 a3, u64 a4, u64 a5)
 }
 
 /* What the screen is. See SYS_SCREEN in user.h for why pitch is the point. */
+/* Show what the program has drawn into the memory SYS_MAP gave it.
+ *
+ * **The door onto a room that was already furnished.** `display_flush` has
+ * taken a damage rectangle, dispatched it to the backend and counted the
+ * result since the virtio-gpu driver landed; the console and `/dev/fb0`'s
+ * `write` have both been calling it. The one caller that could not was the one
+ * that needs it most -- a program holding a mapping, for which the kernel is
+ * deliberately not involved again.
+ *
+ * On an adapter whose framebuffer is a scanned-out aperture that absence cost
+ * nothing, which is why it went unnoticed: the pixels were already on the glass.
+ * On virtio-gpu the program drew a full screen and a screendump showed black
+ * (GX-003).
+ *
+ * See SYS_PRESENT in user.h for why it takes a descriptor, why the rectangle is
+ * required, and why a display with nothing to flush answers SYS_OK.
+ */
+static i64 sys_present(u64 fd, u64 x, u64 y, u64 w, u64 h, u64 a5)
+{
+	struct process *p = caller();
+	struct file *f;
+	struct fb_info info;
+	int err;
+
+	(void)a5;
+
+	if (!p)
+		return SYS_EPERM;
+
+	f = fd_get(p, (int)fd);
+	if (!f) {
+		refusals++;
+		return SYS_EBADF;
+	}
+
+	/* **The descriptor has to be the screen's**, and `map` is what says so.
+	 *
+	 * A program that never mapped /dev/fb0 asking to present is asking to
+	 * show pixels it does not own. Asked of the file's operations rather
+	 * than by comparing against a remembered descriptor number: /dev/fb0 is
+	 * the only file in this kernel with a `map`, and the day there is a
+	 * second one this is the line that has to get more specific rather than
+	 * the line that quietly starts being wrong. */
+	if (!f->ops || !f->ops->map) {
+		refusals++;
+		return SYS_EBADF;
+	}
+
+	err = fbdev_describe(&info);
+	if (err != SYS_OK)
+		return err;
+
+	/* **Refused, not clamped**, and the arithmetic is done so that it cannot
+	 * wrap: each edge is compared against the screen rather than added to
+	 * the origin first. `x + w` past the end of a u64 compares as
+	 * comfortably inside, which is the shape every range check in this
+	 * kernel is written to avoid.
+	 *
+	 * A zero width or height lands here too, and deliberately: there is no
+	 * whole-screen sentinel, because an uninitialised width is zero and a
+	 * program that forgot to set one should be told so rather than handed
+	 * the most expensive call in the interface. */
+	if (!w || !h ||
+	    x >= info.width || y >= info.height ||
+	    w > (u64)info.width - x || h > (u64)info.height - y) {
+		refusals++;
+		return SYS_EINVAL;
+	}
+
+	/* **True where there was nothing to do**, which is three of the four
+	 * backends. `display_flush` answers the same for "this display scans
+	 * itself out" as for "the flush worked", because to the caller those
+	 * are the same outcome -- the pixels are on the screen. */
+	if (!display_flush((u32)x, (u32)y, (u32)w, (u32)h))
+		return SYS_EIO;
+
+	return SYS_OK;
+}
+
 static i64 sys_screen(u64 buf, u64 len, u64 a2, u64 a3, u64 a4, u64 a5)
 {
 	struct fb_info info;
@@ -1107,6 +1186,7 @@ const struct personality personality_recon = {
 		[SYS_LIST]     = sys_list,
 		[SYS_MAP]      = sys_map,
 		[SYS_SCREEN]   = sys_screen,
+		[SYS_PRESENT]  = sys_present,
 		[SYS_POWER]    = sys_power,
 		[SYS_SOCKET]   = sys_socket,
 		[SYS_BIND]     = sys_bind,
@@ -1646,6 +1726,10 @@ bool user_c_program_test(void)
 		{ 64, "the screen's numbers do not describe a screen" },
 		{ 65, "a pixel did not read back -- the mapping is not the"
 		      " screen, or pitch was not honoured" },
+		{ 66, "SYS_PRESENT refused -- the pixels were drawn and the"
+		      " screen was not told to show them" },
+		{ 67, "SYS_PRESENT accepted a rectangle or a descriptor it"
+		      " must have refused" },
 	};
 
 	u64 exits_before  = exits;

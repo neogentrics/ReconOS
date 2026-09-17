@@ -819,13 +819,25 @@ void display_print_summary(void)
 		if (d == primary)
 			continue;
 
-		if (d->mode.width && d->mode.height)
-			kprintf("  also         : %s, %ux%u, not the one being "
-				"drawn on\n", d->name, d->mode.width,
-				d->mode.height);
-		else
-			kprintf("  also         : %s, found and not in any mode\n",
-				d->name);
+		/* **And whether it would need presenting**, which is the half the
+		 * kernel session asked to see asserted. Two adapters in one machine
+		 * is only worth booting if the two are shown to *disagree* in the
+		 * way they are supposed to -- a report that merely proves the
+		 * machine came up would read the same with the second adapter
+		 * ignored entirely, which is the failure it exists to catch. */
+		{
+			const char *tells = (d->ops && d->ops->flush)
+					? "has to be told to present"
+					: "scans itself out";
+
+			if (d->mode.width && d->mode.height)
+				kprintf("  also         : %s, %ux%u, %s, not the one "
+					"being drawn on\n", d->name, d->mode.width,
+					d->mode.height, tells);
+			else
+				kprintf("  also         : %s, found and not in any "
+					"mode, %s\n", d->name, tells);
+		}
 	}
 }
 

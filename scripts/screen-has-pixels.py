@@ -82,16 +82,15 @@ def parse_ppm(path):
     px = data[i:]
 
     nonblack = 0
-    colours = set()
+    counts = {}
     end = min(len(px), width * height * 3) - 2
     for k in range(0, max(end, 0), 3):
-        t = px[k:k + 3]
+        t = bytes(px[k:k + 3])
         if t != b"\x00\x00\x00":
             nonblack += 1
-        if len(colours) < 64:
-            colours.add(bytes(t))
+        counts[t] = counts.get(t, 0) + 1
 
-    return width, height, nonblack, len(colours)
+    return width, height, nonblack, len(counts), counts
 
 
 def run(qemu_cmd, marker, timeout, settle):
@@ -170,6 +169,9 @@ def main():
     ap.add_argument("--marker", required=True,
                     help="serial line to wait for before looking at the screen")
     ap.add_argument("--min-pixels", type=int, default=1000)
+    ap.add_argument("--require-colour", default=None,
+                    help="RRGGBB[:N] -- a colour that must be on the screen, "
+                         "and how many pixels of it at least")
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--settle", type=float, default=1.5)
     ap.add_argument("qemu", nargs=argparse.REMAINDER)
@@ -187,7 +189,29 @@ def main():
         print("  serial log: %s" % serial)
         return 2
 
-    w, h, nonblack, colours = parse_ppm(shot)
+    w, h, nonblack, colours, counts = parse_ppm(shot)
+
+    # **A colour, not a count**, where the caller asks for one.
+    #
+    # Counting non-black pixels says the screen is not blank. It cannot say
+    # *whose* pixels they are, and where the console covers the whole panel
+    # that is the entire question: with SYS_PRESENT taken out of the paint
+    # program this screen still reports 2,304,000 non-black pixels, because the
+    # console is still drawing. What disappears is the program's own ground
+    # colour. So the check that can actually fail is the one that names it.
+    if args.require_colour:
+        spec = args.require_colour.split(":")
+        want = bytes.fromhex(spec[0])
+        need = int(spec[1]) if len(spec) > 1 else 1
+        got = counts.get(want, 0)
+
+        if got < need:
+            print("#%s is on %d pixel(s) and this asks for at least %d -- what "
+                  "was drawn through the mapping did not reach the display"
+                  % (want.hex(), got, need))
+            print("  screendump: %s" % shot)
+            print("  serial log: %s" % serial)
+            return 1
 
     if nonblack < args.min_pixels:
         print("the screen is %dx%d and %d pixel(s) are not black, which is "
