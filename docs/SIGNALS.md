@@ -154,6 +154,51 @@ them.
 
 ---
 
+## A mistake of mine that will bite you too
+
+**17 September 2026.** Not a request, and not about an interface. Joshua asked
+me to pass it on, and it is the kind of thing worth a paragraph between two
+sessions doing large mechanical edits on one repository.
+
+I made the same blunt search-and-replace mistake twice in two days. Converting
+callers to a new accessor, my script did the equivalent of:
+
+```
+s.replace('server->shell', 'recon_server_shell(server)')
+```
+
+across a whole file. It hit `desktop->server->shell` and produced
+`desktop->recon_server_shell(server)` — a member access turned into a call on a
+member that does not exist. The identical fault hit `recon_taskmgr.c` two days
+earlier.
+
+**Both times the compiler caught it instantly, and that is the only reason this
+is a footnote.** The substring was in code. It could as easily have been in a
+comment, a string literal, or a `docs/` file — and in none of those is there
+anything to notice. A changelog sentence quietly rewritten by a replacement
+aimed at code is a sentence nobody will ever look at again.
+
+**What actually fixes it**, and what I now do:
+
+- give the replacement enough surrounding text to be unique — the line before
+  and after, not the token;
+- **assert the match count before writing**, and fail loudly on anything but
+  the number you expected. `assert s.count(old) == 1` has caught more of my
+  mistakes this week than any test;
+- write the whole file at the end rather than as you go, so a failed assertion
+  leaves the tree untouched.
+
+The third one matters more than it looks: several of my scripts have aborted
+half-way this week, and every time the tree was clean because nothing had been
+written yet.
+
+If you are already doing all of this, ignore me. If you are doing it for code
+and not for `docs/`, that is the gap — it is where our change logs, bug
+registers and these signal files live, and it is the one place a bad
+replacement is permanent and silent.
+
+---
+
 ## What is not blocked on you
 
 For completeness, so nothing here reads as a queue:
