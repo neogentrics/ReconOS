@@ -694,3 +694,35 @@ None.
   executable name, turning `recon_server_serve_tests` into `server_serve` while
   the table correctly says `server_http_serve`. An invented mapping is a fourth
   list with extra steps. It reads CMake's own `add_test(NAME ...)` now.
+
+### VF-025 -- an upload endpoint that had never been shown to keep anything
+
+- **Found in** the test rig rather than the code, 17 September 2026. **Found
+  by** rebuilding a disk that had been lost, and noticing what became testable
+  again.
+- **What it was** `POST /api/upload` has existed since 0.15.0 and had been
+  verified in every way except the one that matters: **nothing had ever checked
+  that an uploaded file was still there after a reboot.** Every test of it ran
+  inside one boot, where a write that never reached the volume and a write that
+  did look identical.
+- **Why** The 16 GB disk the check needs lived in `/tmp`, which is shared with
+  the other sessions on this machine and is cleaned without warning. It
+  disappeared twice on 17 September, taking every reference boot log with it --
+  and the second loss sent a diagnosis down the wrong path for four boots,
+  because the logs that would have shown a workstation kernel booting instead of
+  a server were gone too (VF-023).
+- **So the answer was not a test, it was somewhere durable to put the disk.**
+  `scripts/server-disk.sh` builds the role, makes the image under
+  `kernel/build/` where nothing else reaches, installs onto it and prints the
+  line to boot it with. Regenerated rather than committed.
+- **Now measured, across two boots on one volume:** upload answers 201, the same
+  name answers 409 in the same boot, the machine is restarted with a **new token
+  and a new boot**, the web root reports *already there* rather than being
+  written again, the same name still answers 409 -- and a name never used
+  answers 201. The file survived, the layout was not clobbered, and the refusal
+  to overwrite held across a restart.
+- **Why it belongs here** *Accepted* and *kept* are different claims, and only
+  one of them had evidence for two versions. A durability property tested inside
+  a single boot is not tested at all -- and the reason it went untested was not
+  difficulty but a missing disk, which is the least interesting possible cause
+  and cost the most time.

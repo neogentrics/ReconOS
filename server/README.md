@@ -29,7 +29,7 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.21.1 |
+| **Version** | 0.21.2 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
 | **Checks** | 736 across eighteen suites, by `scripts/server-tests.sh` |
@@ -132,6 +132,30 @@ net: eth0 is 10.0.2.15, via 10.0.2.2
 ```
 
 `curl http://127.0.0.1:8080/` from the host reaches it.
+
+### With a volume, for the four things that need one
+
+Most of this role runs from a diskless boot — the web server, the resolver, the
+clock and the guard all work with no disk at all. Four things do not, and they
+are the four easiest to leave untested: **serving a file** off the volume,
+**`/console.css`** without which the console renders unstyled, an **upload**
+landing somewhere rather than being accepted and dropped, and whether any of it
+**survives a reboot**.
+
+```bash
+./scripts/server-disk.sh
+```
+
+It builds the server role, makes a 16 GB image under `kernel/build/` and runs
+the installer onto it, then prints the QEMU line to boot it with. Regenerated
+rather than committed, and **not** kept in `/tmp`: that is shared with the other
+sessions on this machine and is cleaned without warning — an image and every
+reference boot log went with it twice on 17 September, and the second time the
+loss sent a diagnosis down the wrong path for four boots.
+
+Sixteen gigabytes is not a round number picked for comfort. At one gigabyte the
+installer answers *there is room for ReconOS but not for a separate partition to
+install programs into* and lays down nothing.
 
 ### The suites
 
@@ -255,6 +279,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.21.2** | **The upload endpoint had never been shown to keep anything.** It has existed since 0.15.0 and was verified every way except the one that matters: no test had ever checked that a file was still there after a reboot — and inside one boot, a write that reached the volume and one that did not look identical. The cause was not difficulty, it was a missing disk: the 16 GB image lived in `/tmp`, which is shared with the other sessions here and cleaned without warning, and it vanished twice in one day. `scripts/server-disk.sh` now builds it under `kernel/build/` where nothing else reaches. Measured across two boots on one volume: 201, then 409 for the same name, then a **restart with a new token**, the web root reporting *already there* rather than rewritten, the same name still 409, and an unused name 201. Accepted and kept are different claims. VF-025. |
 | **0.21.1** | **The README claimed 736 checks and its own table summed to 735.** The userland session sent word, through Joshua, about blunt search-and-replace edits — and named the gap as doing the careful thing for code and not for `docs/`. Adding the table up took a minute: one row said 93 where the suite had grown to 94, a number quoted in the README, the board and three commit messages. My code edits all asserted their match count; the documentation edits beside them did not, **so the discipline was applied where a compiler would have caught the mistake anyway and dropped where nothing would.** `scripts/server-tests.sh` now checks the README against the run it just did — every row, the total, the suite count — and that uncovered a latent fault of its own: the runner had been parsing CRLF target names out of `CMakeLists.txt` since the day it was written, carrying a trailing carriage return that only mattered once a second reader compared it against text. Also: `/api/status` now reports the clock, which the dashboard had been showing alone for a version — in a structure whose stated purpose is that the two cannot disagree. VF-024. |
 | **0.21.0** | **The console works in a browser again, and had not since 0.17.0.** The dashboard has offered a rename form since long before there was a guard; the moment `POST /api/name` became guarded, that form answered 401 to every submission — on the one page a person actually looks at. Three versions of testing missed it because every check was `curl -H`, which is the client that *can* send a header. **Testing the API is not testing the console.** Fixed by accepting the token from a form field as well: the policy hook now gets the request body, which it needed and did not have. A token in a **query string** is still refused — that is logged, sent in `Referer` and kept in history, while a POST body is none of those. The dashboard also shows what the machine has learned to do: services running, the clock offset with its real uncertainty, and whether writes are guarded. VF-022, VF-023. |
 | **0.20.0** | **This machine knows how wrong its clock is — and found out its clock cannot say.** An NTP client, the same connected-datagram shape as the resolver, and the supervisor's long-awaited **second service**: adding it changed nothing in the main loop, which is what that shape was built for. It resolves `time.cloudflare.com` with this role's own resolver, which is the first thing here to use one built capability to reach another. **The danger is in believing the reply** — a clock is what every expiry is read against, so the server must echo the exact 64-bit timestamp sent, the same shape as the DNS identifier. Watched failing at 9 of 41 against a parser that takes the server's word, and every one of the nine returned `NTP_OK` where a refusal belonged. Then the line it printed said **round trip 0 ms** to a server thousands of kilometres away, which cannot be true: `SYS_WALLTIME` is declared in nanoseconds and counts whole seconds. The broken number was the one nobody was looking at; the number under test was the one hiding it. VF-021. |
