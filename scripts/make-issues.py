@@ -218,6 +218,10 @@ AREA = {
     'KF-242': 'kernel',
     'KF-243': 'kernel',
     'KF-244': 'network',
+    'KF-245': 'startup',
+    'KF-246': 'storage',
+    'KF-247': 'docs',
+    'KF-248': 'kernel',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
@@ -263,6 +267,19 @@ def is_fixed(body):
     the only form that can say a thing this register needs to say. *Half fixed*
     reads as open, because it is -- KF-127 says exactly that and means it.
     """
+    # The third state, and it is matched as a whole phrase on purpose.
+    #
+    # Some entries are neither open nor fixed: KF-225 is a question that was
+    # asked and answered, recorded so nobody re-derives it, with nothing
+    # broken. Before this it read as open for ever -- the checker said so on
+    # every run, which is how a check trains people to ignore it.
+    #
+    # `not a bug` in full, never a prefix. `startswith('not')` would swallow
+    # **Status:** not fixed and quietly close the issue for a live fault, which
+    # is the one mistake this function must not make.
+    if re.search(r'\*\*Status:\*\*\s*\**\s*not a bug\b', body, re.I):
+        return True
+
     said = re.search(r'\*\*Status:\*\*\s*\**\s*([A-Za-z]+)', body)
     if said:
         return said.group(1).lower().startswith('fix')
@@ -306,27 +323,76 @@ def existing_titles():
     return titles
 
 
+# An entry heading, and every way one has actually been typed.
+#
+# `--` was added after fourteen entries written that way were *not seen* --
+# not skipped with a warning, not counted as unparsed, not reported at all. A
+# bare `-` is added now after twenty-one more went the same way (KF-247). That
+# is the same fault twice, so the spellings are written once here and used by
+# everything in this file that needs to know what an entry looks like.
+#
+# The separator is matched *after* the number, never inside it. A pattern
+# allowing a bare `-` with optional spaces on either side will happily match
+# the hyphen in `KF-246` itself, given the chance -- and the chance is a regex
+# that does not say where to start.
+ENTRY_HEAD = r'### (' + PREFIX + r'-\d+) *(?:—|–|--|-) *'
+
+# What an entry heading is when you are only counting them. Deliberately
+# looser than ENTRY_HEAD; the gap between the two is what the check below
+# measures.
+ENTRY_ANY = r'^### (' + PREFIX + r'-\d+)'
+
+
 def parse(path):
     text = io.open(path, encoding='utf-8').read()
     # Everything from the first entry on; the preamble is not an entry.
-    blocks = re.split(r'\n### (' + PREFIX + r'-\d+ *(?:—|–|--) )', text)
+    blocks = re.split('\n' + ENTRY_HEAD, text)
     entries = []
     for i in range(1, len(blocks), 2):
-        head = blocks[i]
+        num = blocks[i]
         rest = blocks[i + 1]
         title_line, _, body = rest.partition('\n')
         # A trailing "---" or a following "## " heading ends the entry.
         body = re.split(r'\n---\n|\n## ', body)[0].strip()
         entries.append({
-            'id': head[:6],
-            # The heading may have been typed with `--`. Every issue
-            # title on GitHub uses an em dash, so one form reaches the
-            # filer however the entry was written.
-            'title': re.sub(r' *(?:—|–|--) *',
-                            ' — ', (head + title_line).strip(),
-                            count=1),
+            'id': num,
+            # However the separator was typed, the title carries an em dash:
+            # every issue title on GitHub has one, so a heading written four
+            # different ways still finds its own issue instead of filing a
+            # second one beside it.
+            'title': '%s — %s' % (num, title_line.strip()),
             'body': body,
         })
+
+    # --- the check this file was missing twice ---------------------------
+    #
+    # Both faults above were invisible for one reason: **the filer counted the
+    # entries its own parser had found**, so the count could never disagree
+    # with the parser. "302 entries" was true of the parser and false of the
+    # file, and no green run could have said so.
+    #
+    # Counting a second way is the fix, and it is not the same as a stricter
+    # parser -- a stricter parser has the identical blind spot pointed
+    # somewhere else. It refuses rather than warns, because a warning inside a
+    # run that prints three hundred lines is a warning nobody reads.
+    #
+    # `check_open` below has always split on ENTRY_ANY. So the two halves of
+    # this one file have disagreed about what an entry *is* for as long as
+    # both have existed, and neither could see the other.
+    headings = re.findall(ENTRY_ANY, text, flags=re.M)
+    if len(headings) != len(entries):
+        found = set(e['id'] for e in entries)
+        lost = [h for h in headings if h not in found]
+        raise SystemExit(
+            '%s has %d entry headings and %d of them parse.\n'
+            'Unparsed, and so invisible to every issue this script files:\n'
+            '  %s\n'
+            'The heading separator must be an em dash, an en dash, `--` or '
+            '`-`.\n'
+            'Refused rather than warned about: a register nobody can see all '
+            'of\nis not a smaller register, it is a wrong one.'
+            % (path, len(headings), len(entries), '\n  '.join(lost)))
+
     return entries
 
 

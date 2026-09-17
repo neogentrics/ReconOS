@@ -198,9 +198,27 @@ BOOLEAN gfx_available(const struct reconboot_framebuffer *fb)
 }
 
 /* One frame of the menu, with `selected` highlighted and `seconds` left on the
- * clock. Drawn in full each time rather than patched, because a partial redraw
- * that gets its arithmetic wrong leaves the previous frame's text underneath
- * the new one, and nobody looking at the result can tell which is which. */
+ * clock. **Drawn in full**, and that is now the exception rather than the rule.
+ *
+ * This comment used to argue that a full redraw was right *every* time --
+ * because a partial one that gets its arithmetic wrong leaves the previous
+ * frame's text underneath the new one, and nobody can tell which is which. The
+ * reasoning is sound and it was applied too widely: the countdown called this
+ * once a second to change one digit, and clearing an uncached framebuffer is
+ * slow enough to see, so the menu blinked black on every tick (KF-245).
+ *
+ * `gfx_menu_countdown` repaints the one row that changes. It answers the
+ * objection above rather than ignoring it: it does not compute a layout of its
+ * own, it uses the one this function recorded, and it clears the whole width of
+ * the content block so no digit of a longer number survives a shorter one. */
+/* Where `gfx_menu_draw` last put the status line.
+ *
+ * Only that one row changes while the clock runs, and repainting the whole
+ * screen to change a digit is what made the menu flash once a second on the
+ * first machine anybody watched it on. (KF-245) */
+static UINT32 status_row, status_left, status_x0, status_x1;
+static BOOLEAN status_ready;
+
 void gfx_menu_draw(unsigned count, const char *const *labels,
 		   unsigned selected, unsigned seconds, BOOLEAN paused)
 {
@@ -284,6 +302,19 @@ void gfx_menu_draw(unsigned count, const char *const *labels,
 
 	fill(x0, (first + count + 6) * LINE_H, x1 - x0, 1, rule);
 
+	/* Where the status line ended up, so that the countdown can repaint
+	 * that row alone without recomputing a layout it did not choose.
+	 *
+	 * Remembered rather than recalculated because the arithmetic above --
+	 * `first`, `count + 7`, the centring -- is this function's, and a
+	 * second copy of it elsewhere is a second thing to get wrong when the
+	 * layout changes. (KF-245) */
+	status_row  = first + count + 7;
+	status_left = left;
+	status_x0   = x0;
+	status_x1   = x1;
+	status_ready = TRUE;
+
 	/* **The status line is drawn here, in this font, on this surface.**
 	 * It used to be a `print` to the firmware's console -- which owns these
 	 * same pixels, draws at its own size, and puts it wherever its cursor
@@ -302,6 +333,53 @@ void gfx_menu_draw(unsigned count, const char *const *labels,
 		draw_text(left, first + count + 8,
 			  "a number chooses, any key waits", dim);
 	}
+}
+
+/* Repaint the countdown, and nothing else.
+ *
+ * **The menu flashed once a second and this is why.** `gfx_menu_draw` opens
+ * with `fill(0, 0, width, height, paper)` -- it clears the whole screen and
+ * redraws every element -- and the countdown called it once a second to change
+ * one digit. Over an uncached framebuffer that clear is slow enough to see, so
+ * the panel blinked black between the wipe and the redraw, on every tick, on
+ * the one screen a person is actually looking at while deciding what to boot.
+ *
+ * Joshua noticed it on the Gateway and asked whether it was normal. It was not.
+ *
+ * One row is cleared here rather than one screen. The bar is the width of the
+ * content block, so a shorter number leaves no digits of the longer one behind
+ * -- clearing only the glyphs that changed would turn `10` into `1` with a
+ * stale `0` beside it.
+ *
+ * Falls back to a full draw if the layout is not known, which happens only if
+ * this is called before anything has been drawn. Refusing would be a countdown
+ * that silently stops counting. (KF-245)
+ */
+void gfx_menu_countdown(unsigned count, const char *const *labels,
+			unsigned seconds)
+{
+	UINT32 ink    = pack(0xD8, 0xDC, 0xE0);
+	UINT32 dim    = pack(0x70, 0x78, 0x80);
+	UINT32 accent = pack(0xE0, 0xA8, 0x40);
+	UINT32 paper  = pack(0x0C, 0x0E, 0x10);
+
+	(void)ink;
+
+	if (!screen.ready)
+		return;
+
+	if (!status_ready) {
+		gfx_menu_draw(count, labels, 0, seconds, FALSE);
+		return;
+	}
+
+	fill(status_x0, status_row * LINE_H - 3,
+	     status_x1 - status_x0, LINE_H, paper);
+
+	draw_text(status_left, status_row, "starting in", dim);
+	draw_dec(status_left + 12, status_row, seconds, accent);
+	draw_text(status_left + 14, status_row,
+		  seconds == 1 ? "second" : "seconds", dim);
 }
 
 /* Says what happened, once, on the serial console -- which is where the

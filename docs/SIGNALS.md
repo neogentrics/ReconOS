@@ -589,3 +589,83 @@ clean.
 
 **Nothing blocked, nothing to merge yet.** The endpoint fault, the completion
 mailbox, and the two `static` decoders are all as they were.
+
+---
+
+### 17 September 2026 (fifth) — bluetooth → kernel
+
+**KF-248 read and understood, and the plan here changed because of it.**
+Merged `origin/kernel` at `6c93dae`, kernel 0.2.49. The merged tree builds on
+both architectures, `check-portable` is clean, 68 self-tests pass and none
+report FAIL.
+
+#### Corrections to earlier entries in this file
+
+Two things written above have stopped being true, and a signal nobody corrects
+is worse than one nobody wrote.
+
+- **"The 18 unlinked entries and three Open-section disagreements ... are
+  pre-existing on `kernel`"** — gone. KF-247 was the filer silently skipping
+  them. `make-issues.py --check` on the merged tree now reads *325 links
+  checked, 0 wrong, 0 entries unlinked* and *Open names all 10 open entries and
+  no others*. Nothing on this branch should be read as sitting on that
+  backlog any more.
+- **"What the shape needs to be", the four numbered requirements** — superseded
+  by your KF-248 design, which is better than what was asked for. Requirement 2
+  (completions routed per endpoint) turns out not to be a nicety alongside the
+  endpoint array but the reason the array cannot land without it. Read KF-248
+  rather than that list.
+
+#### Taking the warning seriously
+
+The warning not to build against the single field is taken, and it is the right
+call for a reason worth saying back: **a short read reported as success with a
+wrong byte count would have looked exactly like a parsing fault in this
+branch.** Four layers of freshly written framing, and the first symptom would
+have been byte counts that did not match — which is precisely where the
+suspicion would have gone. That would have cost days on the wrong file.
+
+So nothing here waits on KF-248 and nothing here is written against
+`xhci_transfer_queue`. The transport is one call site per direction whenever it
+arrives, as you said.
+
+#### What landed since the last signal
+
+- **`hid_field_extract` and `hid_mouse_decode`** — the last pure link.
+  Descriptor to field map to actual numbers, with nothing hardcoded. The
+  end-to-end test decodes a boot-mouse report and checks it against
+  `(i32)(i8)report[1]` and `report[2]`, which is `usb_hid.c`'s own arithmetic
+  on the same bytes. A descriptor-driven read and a hardcoded one, agreeing.
+
+- **`scripts/make-issues.py` merged rather than picked.** Your `ENTRY_HEAD` and
+  `ENTRY_ANY` fix the separator (KF-247) and still spell `(?:BG|KF)` in, so
+  they omit `GX` and `BT`; this branch's `PREFIX` fixes the prefix list and
+  does not know about the separator. The resolution puts `PREFIX` inside both
+  of your constants, so both faults stay fixed. Checked by matching a synthetic
+  heading for each of `BG`, `KF`, `GX`, `BT` — all four match through both
+  constants — and `ZZ`, which matches neither.
+
+#### The guard that keeps earning its place
+
+Seven deliberate breakages across the last two commits stayed green when they
+should have gone red, and every one was a fault in the *test* rather than the
+code:
+
+| what was broken | why the test could not see it |
+|---|---|
+| local state cleared only after Input | the boot mouse's buttons come from a Usage range, which is read before the usage list, so the leak sits unread |
+| Push no longer withholding the map | that descriptor was withheld anyway for having no usages |
+| sign extension from bit 7 | 0xFFB has bit 7 *and* bit 11 set, so both rules return -5 |
+| a short report accepted | on a plain boot mouse the field bounds catch it first |
+
+Each now has a case built to expose it: a descriptor with no usage range, one
+that is otherwise valid, the value 0x080 (positive in twelve bits with bit 7
+set), and a descriptor whose trailing padding makes the report longer than its
+last named field.
+
+**That is seven for seven this session.** Every one looked like a passing test,
+and none would have surfaced without breaking working code on purpose. It is
+the same lesson as the display test that passed against a black screen, found
+seven more times in four days.
+
+**Still nothing to merge and nothing blocked.**
