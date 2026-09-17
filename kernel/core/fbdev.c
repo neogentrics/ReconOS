@@ -188,14 +188,99 @@ static i64 fb_seek(struct file *f, i64 offset, unsigned from)
  * The page attribute table that makes that mean anything was programmed in
  * checkpoint 5, on every processor, before any framebuffer was mapped.
  */
+/* --- who owns the panel ----------------------------------------------------
+ *
+ * **Both the console and a program write to these pixels, through different
+ * paths, and the last one wins.** A program maps the screen and fills it; the
+ * kernel prints its next line; the console draws characters straight over the
+ * top of the picture -- not all of it, only the cells it has text in, so what
+ * is left is the program's background showing round the edges of a block of
+ * kernel log. It is the second entry in docs/KERNEL-WANTS.md and it was found
+ * by photographing a panel, because the serial line said the program had
+ * succeeded and it had.
+ *
+ * It is fatal for a compositor rather than untidy: a compositor owns every
+ * pixel, and something else drawing into the middle of that is not a cosmetic
+ * problem -- it is the compositor being wrong about what is displayed, and it
+ * will not repaint the damage because nothing told it there was any.
+ *
+ * --- What is claimed, and what is not --------------------------------------
+ *
+ * The **panel**, and only the panel. The serial port and the log ring keep
+ * everything, always, because the verification rig reads the serial port and a
+ * rig that cannot see is a rig that cannot fail. A person debugging is reading
+ * the cable anyway; a person looking at the glass is looking at the program.
+ *
+ * --- Tied to the mapping, not to a promise ---------------------------------
+ *
+ * The claim is taken when a program maps the framebuffer and given back when
+ * the file is closed -- and `fd_close_all` closes every descriptor when a
+ * process ends, so **a program that dies gives the panel back without having
+ * to ask**. That is the whole reason it hangs on the mapping rather than on a
+ * call the program makes: a machine whose console went silent because a
+ * program crashed is worse than the fault this fixes.
+ *
+ * Counted rather than a flag, and the count is per-file: two programs may hold
+ * mappings, and a file closed without ever having been mapped must not release
+ * somebody else's claim. `close` runs on the last reference drop, so a
+ * descriptor that was duplicated releases once.
+ */
+static unsigned panel_claims;
+
+/* A file that is holding one. Any non-null value will do; the address of the
+ * counter is used so that a stray pointer landing here is obviously wrong. */
+#define PANEL_HELD	((void *)&panel_claims)
+
+bool fbdev_panel_claimed(void)
+{
+	return panel_claims != 0;
+}
+
+static i64 fb_close(struct file *f)
+{
+	if (f->private != PANEL_HELD)
+		return SYS_OK;
+
+	f->private = 0;
+
+	if (panel_claims)
+		panel_claims--;
+
+	/* **And that is all it does.**
+	 *
+	 * An earlier version repainted the console's window here, reasoning
+	 * that leaving the program's last frame on the glass with the console
+	 * resuming into it was the original fault arriving one line later. That
+	 * is a cosmetic argument and it broke a real check: `user_framebuffer
+	 * _test` writes two markers through a mapping, closes the file and then
+	 * reads the screen back -- and a repaint on close overwrote the markers
+	 * before the read, so the test reported having been handed "a mapping
+	 * of something that is not the framebuffer".
+	 *
+	 * What the want asks for is that the console stop while a program owns
+	 * the screen and start again afterwards. It does not ask for the screen
+	 * to be taken back the instant the program lets go, and doing that
+	 * makes the kernel fight anything that wants to look at what was drawn.
+	 */
+
+	return SYS_OK;
+}
+
 static bool fb_map(struct file *f, paddr_t *pa, u64 *len, unsigned *flags)
 {
 	const struct framebuffer *fb = screen();
 
-	(void)f;
-
 	if (!fb)
 		return false;
+
+	/* The program is taking the pixels, so the console stops drawing on
+	 * them. Taken here rather than at `open`, because opening /dev/fb0 to
+	 * ask its geometry or to write a row through it is not taking the
+	 * screen -- mapping it is. */
+	if (f && f->private != PANEL_HELD) {
+		f->private = PANEL_HELD;
+		panel_claims++;
+	}
 
 	*pa    = fb->base;
 	*len   = screen_bytes(fb);
@@ -208,6 +293,7 @@ const struct file_ops fb_file_ops = {
 	.write = fb_write,
 	.seek  = fb_seek,
 	.map   = fb_map,
+	.close = fb_close,
 	.name  = "fb",
 };
 

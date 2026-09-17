@@ -18,4 +18,13 @@ extern const struct file_ops fb_file_ops;
  * which is the ordinary answer on a serial-only machine and not a failure. */
 int fbdev_describe(struct fb_info *out);
 
+/* Whether a program currently holds the screen through a mapping.
+ *
+ * The console asks this before drawing on the panel. It keeps writing to the
+ * serial port and the log ring regardless -- those are the instruments, and a
+ * rig that cannot see is a rig that cannot fail. See core/fbdev.c for why the
+ * claim hangs on the mapping's lifetime rather than on anything the program
+ * promises. */
+bool fbdev_panel_claimed(void);
+
 #endif /* RECON_KERNEL_FBDEV_H */

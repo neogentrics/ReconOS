@@ -66,6 +66,7 @@
 #define MAPPING_REFUSED      63
 #define SCREEN_MAKES_NO_SENSE 64
 #define MACHINE_UNREADABLE   65
+#define PRESENT_REFUSED      66
 
 /*
  * Say something on the serial line.
@@ -521,6 +522,42 @@ int main(void)
 	canvas.pitch = screen.pitch;
 
 	recon_screen_draw(&canvas, &facts);
+
+	/*
+	 * And ask for it to be shown.
+	 *
+	 * Drawing is not showing. On a display whose framebuffer is scanned out
+	 * continuously -- the EFI framebuffer, the Bochs adapter, real Intel and
+	 * AMD silicon -- the two are the same thing and this call returns having
+	 * done nothing. On virtio-gpu the pixels are memory the host cannot see
+	 * until it is told, so without this the first screen is a black
+	 * rectangle on a machine reporting every self-test passing. That is
+	 * GX-003, and this program is the one place it would have mattered most:
+	 * it is what somebody standing in front of the machine actually reads.
+	 *
+	 * Unconditional, and there is deliberately no way to ask which sort of
+	 * display this is -- a program that branched on it would be wrong on one
+	 * of them.
+	 *
+	 * The whole screen, spelled out, because there is no zero-means-
+	 * everything: an uninitialised width is zero, and that is the one value
+	 * which must not mean "do the most expensive thing".
+	 */
+	if (recon_present((int)fd, 0, 0, screen.width, screen.height) != SYS_OK) {
+		return PRESENT_REFUSED;
+	}
+
+	/*
+	 * And say so on the serial line, which is the only place this can be
+	 * said -- the screen now belongs to this program and the console has
+	 * stopped drawing on it.
+	 *
+	 * It is the marker the verification rig waits for before photographing
+	 * the panel. "the heap:" above is printed *before* the drawing, so a rig
+	 * keyed on that one screendumps a machine that has not drawn yet and
+	 * reports a blank screen as a fault in the display.
+	 */
+	say("the first screen is up\n");
 
 	/*
 	 * And stay.

@@ -2,6 +2,7 @@
 #include <recon/kernel/klog.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/fbcon.h>
+#include <recon/kernel/fbdev.h>
 #include <recon/kernel/kstring.h>
 
 #include <recon/kernel/lock.h>
@@ -69,7 +70,20 @@ void kputc(char c)
 	 * the instrument. And the gate is closed only around the closing
 	 * summaries -- everything a driver says while starting, which is where
 	 * every refusal is printed, reaches the panel regardless. */
-	if (!screen_quiet)
+	/* **And not while a program holds the screen.**
+	 *
+	 * A program that has mapped /dev/fb0 owns those pixels until it gives
+	 * them back, and the console drawing into the middle of its picture is
+	 * the second entry in docs/KERNEL-WANTS.md. The serial port and the
+	 * ring above are untouched by this, which is the whole trade: the
+	 * person debugging is reading the cable, the person looking at the
+	 * glass is looking at the program.
+	 *
+	 * Asked every character rather than latched, because the claim ends
+	 * when a file closes -- including when a process dies and
+	 * `fd_close_all` closes it for them -- and the console has to notice
+	 * that without being told. */
+	if (!screen_quiet && !fbdev_panel_claimed())
 		fbcon_putc(c);
 }
 

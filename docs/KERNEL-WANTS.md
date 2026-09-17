@@ -184,6 +184,40 @@ arrived at.
 
 ---
 
+## ~~The console and a program both own the screen~~ — answered, 17 September 2026
+
+> **Answered in kernel 0.2.49 on the `graphics` branch.** The console stops
+> drawing to the **panel** while a program holds `/dev/fb0` through a mapping,
+> and keeps writing to the serial port and the log ring throughout — those are
+> the instruments, and a rig that cannot see is a rig that cannot fail.
+>
+> **Tied to the mapping, not to a promise**, which is what this entry asked for:
+> the claim is taken in `fb_map` and given back in `fb_close`, and
+> `fd_close_all` closes every descriptor when a process ends — so a program that
+> *dies* hands the panel back without having to ask. Counted, and counted
+> per-file, so two programs may hold mappings and a file closed without ever
+> having been mapped cannot release somebody else's claim.
+>
+> **What it deliberately does not do is repaint.** A first version took the
+> screen back the instant the program let go, on the argument that the console
+> resuming into a program's last frame was this same fault one line later. That
+> is cosmetic, and it broke a real check: `user_framebuffer_test` writes two
+> markers through a mapping, closes the file and reads the screen back, and the
+> repaint overwrote them first. The console starting again is what was asked
+> for; taking the glass back the same instant was not.
+>
+> **And the arrangement in `core/main.c` is still an arrangement.** This entry
+> is right that starting the program as the last statement with nothing printed
+> after it holds only while there is one program. What has changed is that a
+> print after that line is now harmless rather than invisible damage — the
+> matrix asserts it, on a 7680x4320 panel where the console's own 1920x1200
+> window has somewhere to show: the first screen's colour must be **present**
+> and the console's paper must be **absent**. With the claim disabled the init
+> panel still covers 64% of the glass and 2,126,664 pixels of console paper sit
+> on top of it, which is why the check asserts both directions.
+>
+> The rest of this entry is what it said before it was answered.
+
 ## The console and a program both own the screen
 
 **Where:** `kernel/user/paint.c`, the first ReconOS program written in C, on

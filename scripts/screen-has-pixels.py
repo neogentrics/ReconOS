@@ -169,6 +169,9 @@ def main():
     ap.add_argument("--marker", required=True,
                     help="serial line to wait for before looking at the screen")
     ap.add_argument("--min-pixels", type=int, default=1000)
+    ap.add_argument("--forbid-colour", default=None,
+                    help="RRGGBB[:N] -- a colour that must NOT be on the "
+                         "screen, or at most N pixels of it")
     ap.add_argument("--require-colour", default=None,
                     help="RRGGBB[:N] -- a colour that must be on the screen, "
                          "and how many pixels of it at least")
@@ -199,6 +202,29 @@ def main():
     # program this screen still reports 2,304,000 non-black pixels, because the
     # console is still drawing. What disappears is the program's own ground
     # colour. So the check that can actually fail is the one that names it.
+    # **And a colour that must be absent**, which is a different question
+    # again.
+    #
+    # "Is the program's picture there" and "is the console on top of it" are
+    # both true at once when the console draws into the middle of a program's
+    # screen -- which is the whole of the fault in docs/KERNEL-WANTS.md, and it
+    # is why a require-colour check alone passes on a kernel that has it. With
+    # the panel claim disabled the init screen still covers 64% of the glass;
+    # what appears is 2,126,664 pixels of console paper sitting on top of it.
+    if args.forbid_colour:
+        spec = args.forbid_colour.split(":")
+        unwanted = bytes.fromhex(spec[0])
+        allowed = int(spec[1]) if len(spec) > 1 else 0
+        got = counts.get(unwanted, 0)
+
+        if got > allowed:
+            print("#%s is on %d pixel(s) of the screen and at most %d is "
+                  "allowed -- something drew over the program that owns it"
+                  % (unwanted.hex(), got, allowed))
+            print("  screendump: %s" % shot)
+            print("  serial log: %s" % serial)
+            return 1
+
     if args.require_colour:
         spec = args.require_colour.split(":")
         want = bytes.fromhex(spec[0])

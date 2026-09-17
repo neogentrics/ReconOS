@@ -13,6 +13,109 @@ patch.
 
 ---
 
+## Status: ready to read, 17 September 2026 — fifth signal
+
+Branch `graphics`, on `origin/kernel` 0.2.49. The fourth signal below is
+unchanged and still accurate; this adds the want it made possible, and a bug in
+my own driver that had been there since the day it was written.
+
+---
+
+## The console and a program no longer both own the screen
+
+**The second entry in `docs/KERNEL-WANTS.md` is answered**, and it only became
+answerable once `SYS_PRESENT` existed — a program that cannot show what it drew
+is not yet in a position to be given the screen.
+
+The console stops drawing to the **panel** while a program holds `/dev/fb0`
+through a mapping. The serial port and the log ring keep everything, always:
+they are the instruments, and a rig that cannot see is a rig that cannot fail.
+
+**Tied to the mapping, not to a promise**, which is what the entry asked for.
+The claim is taken in `fb_map` and given back in `fb_close`, and `fd_close_all`
+closes every descriptor when a process ends — so a program that *dies* hands the
+panel back without having to ask. Counted per-file, so two programs may hold
+mappings and a file closed without ever having been mapped cannot release
+somebody else's claim.
+
+**What it deliberately does not do is repaint**, and I got that wrong first.
+My first version took the screen back the instant the program let go, arguing
+that a console resuming into a program's last frame was the same fault one line
+later. That is cosmetic, and it broke `user_framebuffer_test`: that test writes
+two markers through a mapping, closes the file, then reads the screen back — and
+the repaint overwrote them before the read, so the test reported having been
+handed "a mapping of something that is not the framebuffer". An existing check
+caught my addition. The console *starting again* is what was asked for; taking
+the glass back the same instant was not.
+
+The matrix asserts it **both ways round**, because one way is not enough: with
+the claim disabled the init panel still covers 64% of the glass, and what
+appears on top is 2,126,664 pixels of console paper. So the path requires the
+first screen's own colour to be **present** and the console's paper to be
+**absent**, on a 7680x4320 panel where the console's 1920x1200 window has
+somewhere to show. `screen-has-pixels.py` grew `--forbid-colour` for it.
+
+**`core/main.c`'s arrangement is still an arrangement**, and the want is right
+that it holds only while there is one program. What changed is that a print
+after that line is now harmless rather than invisible damage.
+
+---
+
+## GX-011, and it is mine
+
+**`gpu_command` waited for *a* completion rather than its own, and had been one
+behind since the driver was written.**
+
+The first screen drew, presented, and reported success; the host went on showing
+the console. Every counter agreed: `16 transfer(s), 16 flush(es), 0 refused,
+0 timed out`. Instrumenting the framebuffer at the moment of the present showed
+the right pixels at the right address.
+
+Printing what it submitted against what it collected:
+
+```
+transfer to host  collected head 1  having submitted 2
+resource flush    collected head 2  having submitted 0
+transfer to host  collected head 0  having submitted 3
+```
+
+Every command was returning on its predecessor's answer and reading a response
+buffer the device had not written for it.
+
+**It survived because every command is small, synchronous and almost always
+succeeds** — returning early on the previous answer is indistinguishable from
+returning on your own when both say OK, and the device still executed
+everything. It stopped being indistinguishable the moment a sixteen-megabyte
+transfer was followed immediately by the flush that shows it: the flush returned
+before the transfer had happened.
+
+**The counters were true and useless.** A count of commands sent says the driver
+did its half. It cannot say the device finished before the driver moved on, and
+no counter in that driver could have. The check had to come from outside the
+kernel — the same conclusion as GX-003, reached from the other end.
+
+Worth your eye on `virtio_blk.c` and `virtio_net.c`: I have not read them for
+this, and the shape is a general one — a synchronous driver that breaks out of
+its wait on the first completion rather than on its own.
+
+---
+
+## Two files I touched that are not mine
+
+Flagging rather than burying:
+
+- **`userland/init/recon_init.c`** — it draws the first screen and never
+  presented it, so on virtio-gpu the machine's own start-up screen was a black
+  rectangle while every self-test passed. It presents now, and says `the first
+  screen is up` on the serial line afterwards, which is the marker the matrix
+  waits for. The old marker was `the heap:`, which init prints *before* it
+  draws — a rig keyed on that photographs a machine that has not drawn yet, and
+  I lost an hour to exactly that.
+- **`userland/include/recon.h`** — `SYS_PRESENT`, its wrapper, and a
+  `RECON_CALL5` the ladder had stopped short of.
+
+---
+
 ## Status: ready to read, 17 September 2026 — fourth signal
 
 Branch `graphics`, merged with `origin/kernel` at **0.2.49**. The earlier signals

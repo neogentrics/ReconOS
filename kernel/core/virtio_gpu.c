@@ -271,7 +271,30 @@ static bool gpu_command(struct virtio_gpu *g, const void *cmd, u32 cmd_len,
 
 		if (virtqueue_collect(&g->q, &done, 0)) {
 			virtqueue_release(&g->q, done);
-			break;
+
+			/* **Wait for this command's own completion, not for
+			 * any completion.** (GX-011)
+			 *
+			 * This broke out of the loop on the first chain the
+			 * device finished, whatever it was -- so a driver that
+			 * had ever got one behind stayed one behind for the
+			 * life of the machine, each command returning on its
+			 * predecessor's answer and reading a response buffer
+			 * the device had not written for it.
+			 *
+			 * It survived for as long as it did because every
+			 * command here is small, synchronous and almost always
+			 * succeeds: returning early on the previous answer
+			 * looks identical to returning on your own when both
+			 * say OK. It stopped looking identical the moment a
+			 * sixteen-megabyte transfer was followed straight away
+			 * by the flush that shows it -- the flush returned
+			 * before the transfer had happened, and the screen
+			 * kept whatever was on it. */
+			if (done == head)
+				break;
+
+			continue;
 		}
 
 		if (time_monotonic_ns() > deadline) {

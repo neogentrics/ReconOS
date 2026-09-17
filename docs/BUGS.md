@@ -178,6 +178,92 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ## Fixed
 
+### GX-011 — The virtio-gpu driver waited for *a* completion rather than its own, and had been one behind since it was written
+
+- **Found in** kernel 0.2.49, on 17 September 2026, by a screen that would not
+  update — and found only because something else was built on top of it. The
+  first screen program drew its panel, presented it, and reported success; the
+  host went on showing the console. Every counter agreed the work had been
+  done:
+
+  ```
+    virtio-gpu   : 16 transfer(s), 16 flush(es), 0 refused, 0 timed out
+  ```
+
+  Instrumenting the framebuffer at the moment of the present showed the right
+  pixels in the right place:
+
+  ```
+  INSTRUMENT present: base=0x05d99000 pitch=10240 px0=ff141821 px_mid=ff1c2130
+  ```
+
+  `ff141821` is the first screen's own background. The data was there, the
+  command was sent, the device answered, and the glass kept the console.
+
+- **Was** `gpu_command` broke out of its wait on the first chain the device
+  finished, whatever it was:
+
+  ```c
+  if (virtqueue_collect(&g->q, &done, 0)) {
+          virtqueue_release(&g->q, done);
+          break;                    /* <- whosever completion that was */
+  }
+  ```
+
+  Printing what it submitted against what it collected showed the driver was
+  **permanently one command behind**, and had been for the life of every boot:
+
+  ```
+  transfer to host  collected head 1  having submitted 2
+  resource flush    collected head 2  having submitted 0
+  transfer to host  collected head 0  having submitted 3
+  resource flush    collected head 3  having submitted 1
+  ```
+
+  So every command returned on its predecessor's answer, and read a response
+  buffer the device had not written for it. The *type* field it then checked
+  belonged to the previous command.
+
+- **Why it survived from the day the driver was written.** Every command it
+  sends is small, synchronous, and almost always succeeds. Returning early on
+  the previous answer is indistinguishable from returning on your own when both
+  say `OK` — and the device still executes everything submitted, so modes were
+  set, resources were created, and the console drew. The counters counted real
+  commands. Nothing was wrong except *when* each call returned.
+
+  It stopped being indistinguishable the moment a **sixteen-megabyte transfer
+  was followed immediately by the flush that shows it**. The flush returned
+  before the transfer had happened, so the host was told to display a surface
+  that had not been updated yet, and the screen kept what was already on it.
+  Small console bursts had never exposed it because the next burst's transfer
+  covered the same rectangle a moment later.
+
+- **Cost** a day's worth of wrong hypotheses, all of them ruled out by
+  measurement rather than by argument: the screendump timing, the write-combining
+  fence, a stale build, the mode sweep moving the framebuffer, and a repaint of
+  my own. Each was checked and discarded. The thing that found it was printing
+  the number the decision was made from — which is the rule this project already
+  has for exactly this.
+
+- **Fixed in** kernel 0.2.49 on `graphics`. `gpu_command` releases each chain it
+  collects and keeps waiting until the head it gets back is the head it
+  submitted. Every command in this driver is synchronous and one-at-a-time, so
+  collecting anything else means the driver had already drifted.
+
+- **Shown to fail before being believed.** The instrument above is the
+  demonstration: with the old code it prints a mismatch on every command pair,
+  and the first screen does not appear on virtio-gpu. With the fix it prints
+  nothing and the panel is on the glass — 34.8% of it the program's background
+  colour, asserted by name in the matrix.
+
+- **What it says about the counters.** `16 transfer(s), 16 flush(es), 0 refused,
+  0 timed out` was true and useless. A count of commands sent says the driver
+  did its half; it cannot say the device finished before the driver moved on,
+  and no counter in this driver could have. The check that found it had to come
+  from outside — the same conclusion as GX-003, arrived at from the other end.
+
+---
+
 ### GX-010 — The attach path of both hardware backends had no test, and the first test written for it could not fail
 
 - **Found in** kernel 0.2.48, on 16 September 2026, by noticing that everything

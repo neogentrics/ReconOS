@@ -247,6 +247,28 @@ check_for() {
 # a machine whose console already covers the panel. Used for the path that
 # proves a program's own pixels, drawn through a mapping and presented with
 # SYS_PRESENT, reach the display.
+# The same again, plus a colour that must be *absent*.
+#
+# For the panel-ownership check. "Is the program's picture there" and "is the
+# console drawing on top of it" are both true at once when the console writes
+# into the middle of a program's screen, so a require-colour check alone passes
+# on a kernel that has the fault. The forbidden colour is the console's own
+# paper.
+check_screen_without() {
+	local name=$1 marker=$2 want=$3 forbid=$4; shift 4
+	local log="$WORK/$(echo "$name" | tr ' /' '__').screen.log"
+
+	printf '%-46s' "$name"
+
+	if python3 "$ROOT/scripts/screen-has-pixels.py" --marker "$marker" 			--min-pixels 1000 --require-colour "$want" 			--forbid-colour "$forbid" -- "$@" >"$log" 2>&1; then
+		echo "ok -- $(tail -n 1 "$log")"
+	else
+		echo "FAILED -- $log"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$name")
+	fi
+}
+
 check_screen_colour() {
 	local name=$1 marker=$2 colour=$3; shift 3
 	local log="$WORK/$(echo "$name" | tr ' /' '__').screen.log"
@@ -902,6 +924,30 @@ check_for "reports its screen is 1280x800, and that is the mode it is in" \
 # screen still reports 2,304,000 non-black pixels, because the console is still
 # drawing -- what disappears is the program's own colour, and 0 of it is what
 # this check then reports.
+# **The console stops drawing while a program owns the screen.**
+#
+# The second entry in docs/KERNEL-WANTS.md, found on 14 September by
+# photographing a panel because the serial line said the program had succeeded
+# and it had. A program maps /dev/fb0 and fills it; the kernel prints its next
+# line; the console draws characters straight over the picture -- not all of it,
+# only the cells it has text in, so what is left is the program's background
+# showing round the edges of a block of kernel log.
+#
+# Asserted both ways round, because one way round is not enough: the first
+# screen's own colour must be **present**, and the console's paper must be
+# **absent**. With the claim disabled this screen still shows the init panel
+# across 64% of the glass -- what appears on top of it is 2,126,664 pixels of
+# console paper, and a check that only asked whether the program had drawn
+# would pass.
+#
+# The Bochs adapter rather than virtio-gpu, and at 7680x4320: the console bounds
+# itself to 1920x1200, so on a panel this size the two areas are distinguishable
+# and the console's intrusion has somewhere to show.
+check_screen_without "  PVH, the console leaves a program alone" \
+	"the first screen is up" 141821:100000 0c0e10 \
+	qemu-system-x86_64 -m 1024M -device VGA,vgamem_mb=256 \
+		-kernel "$X64_ELF"
+
 check_screen_colour "  PVH, a program presents what it mapped" \
 	"asked for it to be shown" 2b3342:100000 \
 	qemu-system-x86_64 -m 1024M -vga none \
