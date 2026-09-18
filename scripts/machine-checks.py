@@ -452,6 +452,98 @@ def the_status_line():
        "501 carries its phrase", status)
 
 
+def conditional_requests():
+    """
+    Read a thing, get a validator, and use it both ways.
+
+    This is the property that lets two programs share a machine without one
+    of them losing a change it never knew it made. It is checked here rather
+    than only in a host suite because the tag is computed from state the
+    machine holds, and the whole point is that it changes when the machine
+    does.
+    """
+    # Put the name somewhere known first, so the tag below is this check's.
+    request = ("POST /api/name HTTP/1.1\r\nHost: m16\r\n"
+               "Authorization: Bearer %s\r\n"
+               "Content-Type: application/json\r\n"
+               "Content-Length: 15\r\nConnection: close\r\n\r\n"
+               '{"name":"M50"}\n' % TOKEN)
+    raw(request)
+
+    status, lines, body = parts(get("/api/name"))
+    ok(status.startswith("HTTP/1.1 200"), "the name can be read", status)
+    ok(b'"M50"' in body, "and is what was set", body[:40])
+
+    tag = header(lines, "ETag")
+    ok(tag is not None and tag.startswith('"'),
+       "and comes with a validator, in quotes", "%r" % tag)
+    if not tag:
+        return
+
+    # The same tag back: nothing to send.
+    status, lines2, body2 = parts(get("/api/name", 'If-None-Match: %s\r\n' % tag))
+    ok(status == "HTTP/1.1 304 Not Modified",
+       "asking again with that validator is 304, with its phrase", status)
+    ok(body2 == b"", "and carries no body", "%d bytes" % len(body2))
+    ok(header(lines2, "ETag") == tag,
+       "and the validator again, so the next request can be conditional too",
+       header(lines2, "ETag"))
+
+    # A tag from somebody else's read: the body comes.
+    status, _, body3 = parts(get("/api/name", 'If-None-Match: "not-the-one"\r\n'))
+    ok(status.startswith("HTTP/1.1 200"),
+       "a validator that does not match gets the body", status)
+    ok(b'"M50"' in body3, "and it is the current one")
+
+    # A write against the view just read: allowed.
+    request = ("POST /api/name HTTP/1.1\r\nHost: m16\r\n"
+               "Authorization: Bearer %s\r\nIf-Match: %s\r\n"
+               "Content-Type: application/json\r\n"
+               "Content-Length: 15\r\nConnection: close\r\n\r\n"
+               '{"name":"M51"}\n' % (TOKEN, tag))
+    status, _, _ = parts(raw(request))
+    ok(status.startswith("HTTP/1.1 200"),
+       "a write against the view that was read is allowed", status)
+
+    # The same write again, with the tag that is now stale.
+    request = ("POST /api/name HTTP/1.1\r\nHost: m16\r\n"
+               "Authorization: Bearer %s\r\nIf-Match: %s\r\n"
+               "Content-Type: application/json\r\n"
+               "Content-Length: 15\r\nConnection: close\r\n\r\n"
+               '{"name":"M52"}\n' % (TOKEN, tag))
+    status, _, _ = parts(raw(request))
+    ok(status == "HTTP/1.1 412 Precondition Failed",
+       "and the same write again is 412, because the name has moved", status)
+
+    status, _, body4 = parts(get("/api/name"))
+    ok(b'"M51"' in body4,
+       "so the refused write changed nothing", body4[:40])
+
+    # A weak tag never guards a write, whatever it says.
+    request = ("POST /api/name HTTP/1.1\r\nHost: m16\r\n"
+               "Authorization: Bearer %s\r\nIf-Match: W/%s\r\n"
+               "Content-Type: application/json\r\n"
+               "Content-Length: 15\r\nConnection: close\r\n\r\n"
+               '{"name":"M53"}\n' % (TOKEN, header(parts(get("/api/name"))[1],
+                                                   "ETag")))
+    status, _, _ = parts(raw(request))
+    ok(status == "HTTP/1.1 412 Precondition Failed",
+       "a weak validator does not guard a write, even when it matches",
+       status)
+
+    # And no header at all is still an unconditional write, which is what the
+    # console's own form sends.
+    request = ("POST /api/name HTTP/1.1\r\nHost: m16\r\n"
+               "Authorization: Bearer %s\r\n"
+               "Content-Type: application/x-www-form-urlencoded\r\n"
+               "Content-Length: 8\r\nConnection: close\r\n\r\nname=M54"
+               % TOKEN)
+    status, _, _ = parts(raw(request))
+    ok(status.startswith("HTTP/1.1 200"),
+       "and a write with no precondition still works, as the console's "
+       "form sends none", status)
+
+
 def main():
     global PORT, TOKEN
 
@@ -462,7 +554,8 @@ def main():
 
     for check in (it_answers, host_is_required, the_guard, json_in,
                   chunked_bodies, a_body_larger_than_one_read,
-                  a_form_field_past_its_bound, negotiation,
+                  a_form_field_past_its_bound, conditional_requests,
+                  negotiation,
                   compression, files_off_the_volume, the_status_line,
                   keep_alive, two_hundred_connections):
         try:

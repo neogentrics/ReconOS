@@ -95,17 +95,35 @@ void http_etag_format(char *into, size_t room, unsigned long length,
 
 /* One tag from a list: skips whitespace and an optional `W/`, then reads a
  * quoted string. Returns where it stopped, or NULL at the end. */
-static const char *next_tag(const char *at, const char **start, size_t *len)
+static const char *next_tag(const char *at, const char **start, size_t *len,
+                            int *weak)
 {
 	while (*at == ' ' || *at == '\t' || *at == ',')
 		at++;
 	if (!*at)
 		return 0;
 
-	/* A weak tag. `If-None-Match` compares weakly, so the marker is
-	 * stepped over rather than being part of what is compared. */
-	if (at[0] == 'W' && at[1] == '/')
+	/*
+	 * A weak tag.
+	 *
+	 * Stepped over rather than compared, and **reported**, because the two
+	 * headers that use this want opposite things. `If-None-Match` compares
+	 * weakly: `W/"x"` and `"x"` are the same representation for the purpose
+	 * of *have I already got this*. `If-Match` compares strongly, because
+	 * it guards a write, and a weak tag says only that two bodies are
+	 * equivalent -- not that they are the same bytes anybody may safely
+	 * overwrite.
+	 *
+	 * One walker with a flag rather than two walkers, for the reason this
+	 * project keeps naming: two readers of one grammar drift.
+	 */
+	if (weak)
+		*weak = 0;
+	if (at[0] == 'W' && at[1] == '/') {
+		if (weak)
+			*weak = 1;
 		at += 2;
+	}
 
 	if (*at != '"')
 		return 0;	/* not a tag; stop rather than guess */
@@ -155,9 +173,72 @@ int http_if_none_match(const char *header, const char *etag)
 		size_t len = 0;
 		size_t i;
 
-		at = next_tag(at, &start, &len);
+		at = next_tag(at, &start, &len, 0);
 		if (!at)
 			return 0;
+
+		if (len == mine_len) {
+			for (i = 0; i < len; i++)
+				if (start[i] != mine[i])
+					break;
+			if (i == len)
+				return 1;
+		}
+	}
+}
+
+/*
+ * `If-Match`, which guards a write rather than a read.
+ *
+ * See `cache.h`. Three things differ from `If-None-Match` and every one of them
+ * is in the direction of refusing:
+ *
+ *   * the comparison is **strong**, so a weak tag never matches;
+ *   * a header that does not parse is **not** a match, so the write is refused
+ *     rather than applied against a view nobody could read;
+ *   * `*` matches, because the client is saying *whatever is there now*, and
+ *     something is there.
+ */
+int http_if_match(const char *header, const char *etag)
+{
+	const char *at = header;
+	const char *mine;
+	size_t mine_len = 0;
+
+	if (!header || !etag || !*etag)
+		return 0;
+
+	{
+		const char *p = header;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (p[0] == '*')
+			return 1;
+	}
+
+	if (etag[0] != '"')
+		return 0;
+	mine = etag + 1;
+	while (mine[mine_len] && mine[mine_len] != '"')
+		mine_len++;
+	if (mine[mine_len] != '"')
+		return 0;
+
+	for (;;) {
+		const char *start = 0;
+		size_t len = 0;
+		size_t i;
+		int weak = 0;
+
+		at = next_tag(at, &start, &len, &weak);
+		if (!at)
+			return 0;
+
+		/* A weak tag is not a match here, and is stepped past rather
+		 * than ending the walk: a list may hold both kinds. */
+		if (weak)
+			continue;
 
 		if (len == mine_len) {
 			for (i = 0; i < len; i++)

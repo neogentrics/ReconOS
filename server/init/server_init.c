@@ -51,6 +51,7 @@
 #include "../http/json.h"
 #include "../http/jsonread.h"
 #include "../http/accept.h"
+#include "../http/cache.h"
 #include "../http/multipart.h"
 #include "../auth.h"
 #include "../dns.h"
@@ -815,6 +816,76 @@ static int name_wanted(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/*
+ * --- The machine's name, as something a program can read and change safely ---
+ *
+ * `POST /api/name` has existed since 0.3.0 and has always been an
+ * unconditional write: two clients that both read the name and both set it
+ * leave whichever arrived second in charge, and the first is never told its
+ * change was lost. On a machine with one administrator that is a shrug. On one
+ * being driven by a program -- which is what 0.27.0 made possible -- it is the
+ * oldest fault in shared state.
+ *
+ * So the name is a resource with a validator. `GET /api/name` answers it with
+ * an `ETag`; `POST /api/name` honours `If-Match` against the same tag and
+ * answers **412** when the client's view is stale. A client that is refused
+ * reads again and decides what it wants; nothing is lost silently.
+ *
+ * **Without an `If-Match` the write is unconditional, exactly as before.** A
+ * precondition nobody asked for is not one this server may invent: the browser
+ * form on the console sends no such header and must keep working, and VF-022
+ * is this project's entry about an API change that quietly broke that form.
+ */
+
+/*
+ * The name's validator: its length and a hash of it, which is `cache.h`'s
+ * strong-tag format.
+ *
+ * Over the name alone, not over the document that carries it. A tag computed
+ * over `{"name":"M16"}` would change if the document ever gained a field,
+ * telling every client its view was stale when the thing it cares about had
+ * not moved.
+ */
+static void name_etag(const struct server_facts *f, char *into, size_t room)
+{
+	unsigned long len = 0;
+
+	while (f->name[len])
+		len++;
+	http_etag_format(into, room, len,
+	                 http_hash(HTTP_HASH_SEED, f->name, len));
+}
+
+static int handle_get_name(const struct http_request *r, const char *body,
+                           size_t body_len, struct http_response *out,
+                           void *ctx)
+{
+	static char answer[JSON_ROOM(RECON_NAME_MAX) + 64];
+	static char tag[HTTP_ETAG_MAX];
+	struct server_facts *f = (struct server_facts *)ctx;
+	char name_room[JSON_ROOM(RECON_NAME_MAX)];
+	const char *name;
+	int n;
+
+	(void)r; (void)body; (void)body_len;
+
+	name = as_json(f->name, name_room, sizeof(name_room));
+	if (!name)
+		return HTTP_EINTERNAL;
+
+	n = snprintf(answer, sizeof(answer), "{\"name\":\"%s\"}\n", name);
+	if (n < 0 || (size_t)n >= sizeof(answer))
+		return HTTP_EINTERNAL;
+
+	name_etag(f, tag, sizeof(tag));
+	http_response_simple(out, 200, "application/json", answer, (size_t)n);
+
+	/* `serve.c` sends this, and answers 304 to a matching
+	 * `If-None-Match` -- see the field's comment in `serve.h`. */
+	out->etag = tag;
+	return HTTP_OK;
+}
+
 static int handle_set_name(const struct http_request *r, const char *body,
                            size_t body_len, struct http_response *out,
                            void *ctx)
@@ -825,6 +896,30 @@ static int handle_set_name(const struct http_request *r, const char *body,
 	char name_room[JSON_ROOM(RECON_NAME_MAX)];
 	const char *wanted = 0, *name;
 	int rc, n, answered = 0;
+
+	/*
+	 * The precondition, before the body is even read.
+	 *
+	 * Checked first because a refused write should cost the client
+	 * nothing it did not already spend, and because reading the body of a
+	 * request that will not be applied is work with no outcome.
+	 */
+	{
+		const char *asked = http_header_get(r, "if-match");
+
+		if (asked) {
+			char tag[HTTP_ETAG_MAX];
+
+			name_etag(f, tag, sizeof(tag));
+			if (!http_if_match(asked, tag)) {
+				http_response_simple(out, 412, "text/plain",
+				                     "412 Precondition Failed:"
+				                     " the name has changed"
+				                     " since you read it\n", 68);
+				return HTTP_OK;
+			}
+		}
+	}
 
 	rc = name_wanted(r, body, body_len, out, &wanted, &answered);
 	if (rc != HTTP_OK)
@@ -1578,6 +1673,8 @@ static const struct http_route ROUTES[] = {
 	{ .method = "GET", .prefix = "/api/log",
 	  .exact = 1, .handler = handle_log, .ctx = &LOGBOOK,
 	  .negotiated = 1 },
+	{ .method = "GET", .prefix = "/api/name",
+	  .exact = 1, .handler = handle_get_name, .ctx = &FACTS },
 	{ .method = "POST", .prefix = "/api/name",
 	  .exact = 1, .handler = handle_set_name, .ctx = &FACTS, .guarded = 1 },
 	{ .method = "POST", .prefix = "/api/upload",

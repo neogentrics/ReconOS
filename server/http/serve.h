@@ -70,6 +70,23 @@ struct http_response {
 	 * a list that goes untested. */
 	const char *extra_name;
 	const char *extra_value;
+
+	/*
+	 * A validator for this body, or NULL.
+	 *
+	 * Set by a handler that can cheaply say *these are the same bytes as
+	 * last time*; sent by the server as `ETag`, and **acted on** by the
+	 * server, which answers 304 to a `If-None-Match` that matches rather
+	 * than leaving each handler to remember. Same argument as the security
+	 * headers, the access log and `Vary`.
+	 *
+	 * Deliberately not set on a body that changes every time it is asked
+	 * for. `/api/status` reports how many requests have been served, so a
+	 * tag on it would differ on every read and cost a client the round trip
+	 * without ever saving one -- a validator that never matches is worse
+	 * than none, because it looks like caching.
+	 */
+	const char *etag;
 };
 
 /* --- streaming --------------------------------------------------------------

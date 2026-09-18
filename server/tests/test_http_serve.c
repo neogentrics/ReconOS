@@ -119,8 +119,26 @@ static int handle_big(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/* A resource with a validator, so the server's conditional handling can be
+ * exercised without a handler that knows anything about it. */
+static const char TAGGED[] = "a body that does not change\n";
+
+static int handle_tagged(const struct http_request *r, const char *body,
+                         size_t body_len, struct http_response *out, void *ctx)
+{
+	(void)r; (void)body; (void)body_len; (void)ctx;
+	http_response_simple(out, 200, "text/plain", TAGGED,
+	                     sizeof(TAGGED) - 1);
+	out->etag = "\"fixed\"";
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
 	{ .method = "GET", .prefix = "/big", .exact = 1, .handler = handle_big },
+	{ .method = "GET", .prefix = "/tagged", .exact = 1,
+	  .handler = handle_tagged },
+	{ .method = "POST", .prefix = "/tagged", .exact = 1,
+	  .handler = handle_tagged },
 	{ .method = "GET", .prefix = "/", .exact = 1, .handler = handle_root },
 	{ .method = "GET", .prefix = "/api/status",
 	  .exact = 1, .handler = handle_status },
@@ -815,6 +833,91 @@ int main(void)
 
 		ok(*GUARD_SAW > 0, "the policy was actually consulted");
 	}
+
+	/* --- a conditional read, answered by the server ---------------------------
+	 *
+	 * The handler sets a validator and knows nothing else about any of
+	 * this. Everything below is `serve.c` deciding, which is where it
+	 * belongs: a handler that had to remember would be a handler whose
+	 * successor forgets.
+	 */
+	exchange(port, "GET /tagged HTTP/1.1\r\nHost: m16\r\n"
+	               "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"), "a tagged body is served");
+	ok(strstr(reply, "ETag: \"fixed\"\r\n") != 0, "with its validator");
+	ok(strstr(reply, "a body that does not change") != 0, "and its body");
+
+	exchange(port, "GET /tagged HTTP/1.1\r\nHost: m16\r\n"
+	               "If-None-Match: \"fixed\"\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 304 Not Modified\r\n"),
+	   "the same validator back gets 304, with its phrase");
+	ok(strstr(reply, "a body that does not change") == 0,
+	   "and no body, which is the whole saving");
+	ok(strstr(reply, "ETag: \"fixed\"\r\n") != 0,
+	   "and the validator again, so the next request can be conditional");
+	ok(strstr(reply, "Content-Length: 0\r\n") != 0,
+	   "and a length of zero, which is what it sent");
+	/*
+	 * Matched with its CRLF and its colon, not as a bare substring.
+	 *
+	 * The first draft looked for `Content-Type` and failed against a
+	 * perfectly correct 304 -- because `X-Content-Type-Options`, which
+	 * every response here carries, contains it. The same trap the `Accept`
+	 * suite opens by describing, found in this file by falling into it.
+	 */
+	ok(strstr(reply, "\r\nContent-Type:") == 0,
+	   "and no content type, because there is no content to describe");
+
+	/* A weak tag matches for this header -- the comparison is weak, and
+	 * `cache.h` says why it is not for the other one. */
+	exchange(port, "GET /tagged HTTP/1.1\r\nHost: m16\r\n"
+	               "If-None-Match: W/\"fixed\"\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 304 Not Modified\r\n"),
+	   "a weak validator is a match for a conditional read");
+
+	exchange(port, "GET /tagged HTTP/1.1\r\nHost: m16\r\n"
+	               "If-None-Match: \"other\"\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a validator from somebody else's read gets the body");
+
+	exchange(port, "GET /tagged HTTP/1.1\r\nHost: m16\r\n"
+	               "If-None-Match: *\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 304 Not Modified\r\n"),
+	   "and a star matches anything that exists");
+
+	/* HEAD, which already sends no body -- the saving is the length it
+	 * would have promised, and a client's conditional logic working the
+	 * same on both methods. */
+	exchange(port, "HEAD /tagged HTTP/1.1\r\nHost: m16\r\n"
+	               "If-None-Match: \"fixed\"\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 304 Not Modified\r\n"),
+	   "HEAD is conditional too");
+
+	/*
+	 * And **not** on a write.
+	 *
+	 * A 304 in answer to a POST would tell a client its change was
+	 * unnecessary, which is not what the status means and not what
+	 * happened. The condition is about a representation the client already
+	 * has, and a write is not asking for one.
+	 */
+	exchange(port, "POST /tagged HTTP/1.1\r\nHost: m16\r\n"
+	               "If-None-Match: \"fixed\"\r\nContent-Length: 0\r\n"
+	               "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a POST with a matching validator is not 304");
+
+	/* A route with no validator is untouched by any of it. */
+	exchange(port, "GET / HTTP/1.1\r\nHost: m16\r\n"
+	               "If-None-Match: *\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "and a resource with no validator ignores the header entirely");
 
 	/* --- compressing a response ---------------------------------------------
 	 *

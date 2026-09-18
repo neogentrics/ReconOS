@@ -202,6 +202,7 @@ int http_host_matches(const char *pattern, const char *header);
 	X(406, "Not Acceptable")                               \
 	X(408, "Request Timeout")                              \
 	X(409, "Conflict")                                     \
+	X(412, "Precondition Failed")                          \
 	X(413, "Content Too Large")                            \
 	X(414, "URI Too Long")                                 \
 	X(415, "Unsupported Media Type")                       \

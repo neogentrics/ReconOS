@@ -41,6 +41,7 @@
 #include "serve.h"
 #include "chunked.h"
 #include "accept.h"
+#include "cache.h"
 #include "deflate.h"
 
 #include <errno.h>
@@ -420,6 +421,7 @@ void http_response_simple(struct http_response *out, int status,
 	out->close = 0;
 	out->extra_name = 0;
 	out->extra_value = 0;
+	out->etag = 0;
 }
 
 /*
@@ -482,6 +484,20 @@ static int send_response(int fd, const struct http_request *req,
 	if (encoding) {
 		int m = snprintf(head + n, sizeof(head) - (size_t)n,
 		                 "Content-Encoding: %s\r\n", encoding);
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	}
+
+	/*
+	 * The validator goes on the 304 as well as the 200.
+	 *
+	 * A 304 without one is a 304 a client cannot use for its *next*
+	 * conditional request, so the saving happens once and then stops.
+	 */
+	if (res->etag) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "ETag: %s\r\n", res->etag);
 		if (m < 0 || (size_t)(n + m) >= sizeof(head))
 			return -1;
 		n += m;
@@ -1149,6 +1165,38 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 				                     23);
 				break;
 			}
+		}
+	}
+
+	/*
+	 * A conditional read, answered here rather than in the handler.
+	 *
+	 * The handler has built the body and said what it is worth as a
+	 * validator; whether this particular client already has it is a
+	 * question about the request, and the server is holding both. Leaving
+	 * it to each handler would mean every future handler remembering, and
+	 * the one that forgets sends a body nobody needed and says nothing
+	 * about it.
+	 *
+	 * **Only on a safe method and only on a 200.** A 304 in answer to a
+	 * POST would tell a client its write was unnecessary, which is not
+	 * what it means; and a 404 or a 500 carries no representation to be
+	 * unchanged.
+	 *
+	 * The body is dropped and the length goes to zero, which is what makes
+	 * this worth anything -- `send_response` then sends a head and stops.
+	 */
+	if (res.status == 200 && res.etag
+	    && (head_only || strcmp(req->method, "GET") == 0)) {
+		const char *asked = http_header_get(req, "if-none-match");
+
+		if (asked && http_if_none_match(asked, res.etag)) {
+			res.status = 304;
+			res.body = 0;
+			res.body_len = 0;
+			/* The type goes too. A 304 carries no body, so a
+			 * `Content-Type` on it describes nothing. */
+			res.content_type = 0;
 		}
 	}
 

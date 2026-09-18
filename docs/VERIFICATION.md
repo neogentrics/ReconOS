@@ -1434,3 +1434,64 @@ an upload with no volume      ->  500 Internal Server Error
   boots spent on a kernel built for the wrong role -- and it says nothing about
   real hardware. The bare-metal procedure on the `network` branch is the answer
   to that one, and it needs a window from Joshua rather than a script.
+
+### VF-037 -- a write that could not say what it was changing
+
+- **What was wrong, and had been since 0.3.0** `POST /api/name` was an
+  unconditional write. Two clients that both read the name and both set it
+  leave whichever arrived second in charge, and **the first is never told its
+  change was lost**. With one administrator at a console that is a shrug. Once
+  0.27.0 made the API take a document, so that a program could drive it, it is
+  the oldest fault in shared state.
+- **What it needed was already written down.** `cache.h` has carried this since
+  0.11.0, in the comment on `http_if_none_match`:
+
+  > A weak tag (`W/"x"`) matches its strong form, which is what the weak
+  > comparison the standard specifies for `If-None-Match` requires -- and is
+  > the opposite of what `If-Match` would want, which is why this function
+  > names the header it is for rather than being called `etag_matches`.
+
+  A function named for its header, a year before the other header existed,
+  because the two compare differently. That is the comment doing its job.
+- **So the name became a resource with a validator.** `GET /api/name` answers
+  `{"name":"..."}` with an `ETag`; `POST /api/name` honours `If-Match` and
+  answers **412** when the client's view is stale.
+- **The tag is over the name, not over the document that carries it.** A tag
+  computed from `{"name":"M16"}` would change the day that document gained a
+  field, telling every client its view was stale when the thing it cares about
+  had not moved.
+- **The conditional read is the server's job, not the handler's.** A handler
+  sets `etag` and knows nothing else; `serve.c` turns a matching
+  `If-None-Match` into a 304 with no body, no content type and the validator
+  repeated so the *next* request can be conditional too. The same argument as
+  the security headers, `Vary` and the access log: a step every handler must
+  remember is a step the next handler will not take.
+- **Only on a safe method, and only on a 200.** A 304 in answer to a POST would
+  tell a client its write was unnecessary, which is not what the status means
+  and not what happened; a 404 carries no representation to be unchanged.
+- **Everything malformed refuses the write rather than allowing it**, which is
+  the direction that costs a client one round trip instead of costing somebody
+  their change: an unparseable header, an unterminated tag, a tag with no
+  quotes, and a weak tag that otherwise matches exactly.
+- **And no `If-Match` is still an unconditional write.** The console's own form
+  sends none, and VF-022 is this project's entry about an API change that
+  quietly broke that form for three versions while every `curl` test passed.
+- **Measured on the machine**, which is where a validator computed from the
+  machine's own state has to be checked:
+
+```
+read the name                        200, ETag "3-c1b0dd0a2a0ab8f0"
+read again with that validator       304 Not Modified, no body
+read with somebody else's validator  200, and the current name
+write with the validator that was read   200
+the same write again                 412 Precondition Failed
+read again                           the name the first write set
+a weak validator, otherwise matching 412 Precondition Failed
+no precondition at all               200, as the console's form sends none
+```
+
+- **One thing this suite found about itself.** A check asserting that a 304
+  carries no `Content-Type` failed against a perfectly correct 304, because
+  every response here carries `X-Content-Type-Options` -- which contains that
+  string. **The substring trap the `Accept` suite opens by describing**, found
+  in another file by falling into it. Matched with its CRLF and its colon now.

@@ -907,6 +907,7 @@ add_executable(recon_server_serve_tests
     server/http/chunked.c
     server/http/accept.c
     server/http/deflate.c
+    server/http/cache.c
     server/tests/test_http_serve.c)
 
 add_test(NAME server_http_serve COMMAND recon_server_serve_tests)
@@ -950,6 +951,7 @@ add_executable(recon_server_stream_tests
     server/http/chunked.c
     server/http/accept.c
     server/http/deflate.c
+    server/http/cache.c
     server/tests/test_http_stream.c)
 
 add_test(NAME server_http_stream COMMAND recon_server_stream_tests)
@@ -1065,6 +1067,7 @@ add_executable(recon_server_concurrent_tests
     server/http/chunked.c
     server/http/accept.c
     server/http/deflate.c
+    server/http/cache.c
     server/tests/test_http_concurrent.c)
 
 add_test(NAME server_http_concurrent COMMAND recon_server_concurrent_tests)

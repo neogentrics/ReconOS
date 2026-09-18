@@ -29,11 +29,11 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.30.0 |
+| **Version** | 0.31.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
-| **Checks** | 1423 across twenty-four suites, by `scripts/server-tests.sh`,
-and 44 more on a booted machine by `scripts/machine-tests.sh` |
+| **Checks** | 1453 across twenty-four suites, by `scripts/server-tests.sh`,
+and 57 more on a booted machine by `scripts/machine-tests.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -175,7 +175,7 @@ They run on the host and need no machine:
 ```
 
 Boots the server role under QEMU, waits for the line that says it is listening,
-reads the boot token off the console, and asks the machine forty-four questions
+reads the boot token off the console, and asks the machine fifty-seven questions
 over a real socket. About a minute.
 
 **It exists because every suite above was green on a server that answered twelve
@@ -203,12 +203,12 @@ project builds with, and following them left two suites unbuildable.
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 134 | one request, and every way of writing two |
-| `server_http_serve` | 94 | the server over a real socket, `serve.c` unmodified |
+| `server_http` | 135 | one request, and every way of writing two |
+| `server_http_serve` | 108 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
-| `server_http_cache` | 31 | validators, and reading an If-None-Match |
+| `server_http_cache` | 46 | validators, and the two headers that read them opposite ways |
 | `server_service` | 37 | services, their states, and the restart that has to stop |
 | `server_http_range` | 45 | asking for part of a file, and the ways that hands over the wrong part |
 | `server_http_escape` | 21 | escaping text for HTML, and the characters people forget |
@@ -316,6 +316,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.31.0** | **A program can now read the machine's name, cache it, and change it only if it is still what it read.** `POST /api/name` has been an unconditional write since 0.3.0: two clients that both read and both write leave whichever arrived second in charge, and the first is never told its change was lost. A shrug with one administrator; the oldest fault in shared state once 0.27.0 made the API drivable by a program. So the name is a resource with a validator — `GET /api/name` answers it with an `ETag`, and `POST` honours `If-Match` and answers **412** when the client's view is stale. **The server does the conditional read, not the handler**: a handler sets `etag` and knows nothing else, and `serve.c` turns a matching `If-None-Match` into a 304 with no body — the same argument as the security headers, `Vary` and the access log. `cache.h` had already written down the rule this needed: `If-None-Match` compares **weakly** and `If-Match` **strongly**, because a weak tag says two bodies are equivalent, not that they are the same bytes somebody may overwrite. One walker with a flag rather than two, and fifteen checks that every malformed header refuses the write rather than allowing it. Without an `If-Match` the write is unconditional exactly as before, because the console's own form sends none and VF-022 is this project's entry about an API change that quietly broke it. VF-037. |
 | **0.30.0** | **A suite that runs on the machine, because every other one runs on a host.** VF-034 was found by accident — 1423 checks green on a server that answered twelve requests and then went silent — and the answer to a fault found by accident is not to be more careful. `scripts/machine-tests.sh` boots the server role, waits for the line that says it is listening, reads the boot token off the console, and asks forty-four questions over a real socket: two hundred connections in a row, forty down one, a six-kilobyte body, the guard, the volume, gzip decompressed by a library this project did not write, and every status carrying its phrase **on the wire** rather than in a table. A minute, and a separate command from the suites for that reason. **Its first run failed seven checks, and two of them were faults in the checks rather than in the server** — a client that cannot reassemble a response across two reads reported two of forty against a server answering all forty, and a check that posted six kilobytes into a 512-byte form field measured the bound rather than the property. The two real ones are the same fault twice: **a status that names the wrong end of the request.** A form field past its bound answered `431 Request Header Fields Too Large`, sending a client to look at the one part of its request that was fine; an upload on a diskless boot answered `500`, which claims the server broke when the truth is that there is nowhere to put the file. 413 and 503 now. VF-036. |
 | **0.29.0** | **Responses are compressed — and the machine turned out to answer twelve requests and then stop for ever.** The compression is arithmetic against a measured constraint rather than a feature: bytes on this wire cost about a millisecond each (VF-013), and everything this server builds in memory is text. `server/http/deflate.c` — gzip, with fixed Huffman codes and a stored-block fallback whenever compressing would grow the body. On the machine: the console page 1547 → 980 bytes, the JSON log **3818 → 815**. A compressor cannot be checked by reading it, so it is checked three ways: the suite carries **its own inflater, written from RFC 1951 in the opposite shape** — reading the fixed tables by their bit patterns where the encoder writes them by their ranges — `scripts/gzip-probe.py` puts the same bytes through Python's `zlib`, and the CRC is checked against the published value for `123456789`. Five compressor faults were put back on purpose; four failed the suite loudly and **the fifth only cost bytes**, which is the kind nothing reports, so a corpus shaped like prose was added with a bound between the two numbers it produces. Then the real finding: measuring bytes out needed more than a dozen requests, and **the server answered twelve and went silent for the rest of the boot** — in 0.28.0 too, and for who knows how long, because no probe had ever opened a thirteenth connection. A packet capture showed every one of those twelve closing cleanly, four-way; the kernel's own allocator said `tcp: no free connection`. `tcp_tick` is the only thing that frees a connection out of `TIME_WAIT` and it was called from `socket_recvfrom` alone — so a server with no live connection, sitting in `accept`, never expired anything, and **the only thing that could free a slot was a connection the table was too full to accept.** One line in `socket_accept`, and the same machine now answers 200 of 200. VF-034, VF-035. |
 | **0.28.0** | **One endpoint, two representations — and two statuses that would have gone out as `Unknown`.** `docs/WEB.md` has said since 0.12.0 that the access log as JSON was *unblocked and not built* because it needed a decision about content negotiation first: two renderings of one thing drift exactly like two lists do. The decision is `server/http/accept.c` — 74 checks — and the answer is one handler, one walk over the entries, and a branch on which bytes to emit. `Accept` is the header most often handled by looking for a substring, which fails in **both** directions: `application/json` is a substring of `application/jsonrequest`, and a client sending only a wildcard matches nothing. Both silently. So: `q` orders the ranges and the header is not in preference order; `q=0` means *not acceptable*, which is the only way a client can say "anything but this"; and the **most specific** matching range decides an offer, so `text/*;q=1, text/plain;q=0` excludes plain rather than preferring it. Parameters other than `q` are checked for shape and ignored, because Chrome sends `v=b3` on every request and refusing it would answer 400 to every browser. Watched failing against four plausible implementations — and one of them survived, which is how the missing case was found: every substring check used a hostile *range* and none a hostile *offer*, so `text` matched `textual/plain` with all sixty-nine checks green. **Then the machine printed `HTTP/1.1 406 Unknown`**: the X-macro that stopped `http_reason` and its suite drifting could never catch a status missing from the table entirely, because both read the same table. `scripts/check-statuses.py` reads the other direction and found a second one the same minute — a 502 the resolver has been able to send since 0.18.0. VF-033. |

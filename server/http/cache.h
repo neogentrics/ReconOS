@@ -85,4 +85,29 @@ void http_etag_format(char *into, size_t room, unsigned long length,
  */
 int http_if_none_match(const char *header, const char *etag);
 
+/*
+ * Does an `If-Match` header allow this write?
+ *
+ * The header a client sends to say *change this only if it is still what I
+ * read*. Without it, two clients that both read a resource and both write it
+ * leave whichever arrived second in charge, and the first is never told its
+ * change was lost. With it, the second is refused **412** and can read again.
+ *
+ * Three things differ from `If-None-Match`, and every one of them refuses
+ * rather than allows:
+ *
+ *   * the comparison is **strong** -- `W/"x"` never matches, because a weak
+ *     tag says two bodies are equivalent and not that they are the same bytes
+ *     somebody may safely overwrite;
+ *   * a header that does not parse is not a match, so the write is refused
+ *     rather than applied against a view nobody could read;
+ *   * `*` matches, which is the client saying *whatever is there now* about a
+ *     resource that exists.
+ *
+ * Returns 1 when the write may proceed, 0 when it must be refused. **A caller
+ * that has no header at all must not call this**: an absent `If-Match` is an
+ * unconditional write, which is a different thing from a failed condition.
+ */
+int http_if_match(const char *header, const char *etag);
+
 #endif

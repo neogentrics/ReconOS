@@ -182,6 +182,58 @@ int main(void)
 		   "nor one that extends it");
 	}
 
+	/* --- If-Match, which guards a write ---------------------------------------
+	 *
+	 * Everything here differs from `If-None-Match` in the direction of
+	 * refusing, because a failed condition costs a client one more round
+	 * trip and a wrongly-allowed one costs somebody their change.
+	 */
+	{
+		static const char TAG[] = "\"12-abc\"";
+
+		ok(http_if_match("\"12-abc\"", TAG) == 1,
+		   "the tag a client read allows the write");
+		ok(http_if_match("*", TAG) == 1,
+		   "and so does a star, which means whatever is there now");
+		ok(http_if_match("\"12-abd\"", TAG) == 0,
+		   "a tag from an older read does not");
+		ok(http_if_match("\"12-ab\"", TAG) == 0,
+		   "nor does a prefix of the right one");
+		ok(http_if_match("\"12-abcd\"", TAG) == 0,
+		   "nor a longer one that begins with it");
+
+		/*
+		 * The strong comparison, which is the whole difference between
+		 * the two headers. `If-None-Match` takes `W/"x"` as `"x"`
+		 * because it is asking *have I already got this*. `If-Match`
+		 * guards an overwrite, and a weak tag says only that two
+		 * bodies are equivalent -- not that they are the same bytes.
+		 */
+		ok(http_if_none_match("W/\"12-abc\"", TAG) == 1,
+		   "a weak tag matches for If-None-Match");
+		ok(http_if_match("W/\"12-abc\"", TAG) == 0,
+		   "and does not for If-Match, which is the whole difference");
+
+		/* A list, and a weak one inside it, which must be stepped over
+		 * rather than ending the walk. */
+		ok(http_if_match("\"other\", \"12-abc\"", TAG) == 1,
+		   "a tag later in a list is found");
+		ok(http_if_match("W/\"12-abc\", \"12-abc\"", TAG) == 1,
+		   "and a weak one before it does not stop the search");
+		ok(http_if_match("W/\"12-abc\", \"nope\"", TAG) == 0,
+		   "while a list of only weak and wrong tags refuses");
+
+		/* Refusing rather than allowing, on everything malformed. */
+		ok(http_if_match("", TAG) == 0, "an empty header refuses");
+		ok(http_if_match("12-abc", TAG) == 0,
+		   "so does a tag with no quotes, which is not a tag");
+		ok(http_if_match("\"unterminated", TAG) == 0,
+		   "so does one that never closes");
+		ok(http_if_match(0, TAG) == 0, "and so does no header at all");
+		ok(http_if_match("*", "") == 0,
+		   "and a star against nothing is not a match");
+	}
+
 	printf("  %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
