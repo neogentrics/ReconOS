@@ -1,3 +1,52 @@
+========================================================================
+ READ THIS BEFORE BELIEVING ANY LINE BELOW
+========================================================================
+
+Taken from Neo-Gateway (GeminiLake UHD 600, 8086:3185) on 18 September 2026,
+over SSH, while the machine was running Kali with a live KDE Wayland session.
+
+Three cautions, all of them found the hard way, and two of them are traps that
+produce plausible output rather than errors.
+
+1. THE SECTION HEADED "display registers, by name" IS WORTHLESS. IGNORE IT.
+
+   It looks like a tidy row of register names. It is twenty-two failed reads.
+   `intel_reg read <NAME>` on igt 2.5 prints nothing and **exits 0** -- not for
+   an unknown name, but for any name at all:
+
+       intel_reg read PIPE_SRCSZ_A  ->  rc=0, no output
+       intel_reg read PIPEASRC      ->  rc=0, no output    (a name it prints itself)
+       intel_reg read 0x6001c       ->  rc=0, (0x0006001c): 0x055502ff
+
+   So the script's `intel_reg read "$name" | tail -1` emitted the name and no
+   value, and twenty-two of those in sequence read like a heading. A tool that
+   fails by succeeding quietly is the same shape as the faults this project
+   keeps recording; it just happens to be somebody else's.
+
+   **Read by address.** The `intel_reg dump` section at the end of this file is
+   the real data.
+
+2. THE PLANE REGISTERS DESCRIBE KDE'S BUFFER, NOT A FRAMEBUFFER A DRIVER WOULD
+   PROGRAM.
+
+   This machine is running a compositor. PLANE_CTL and PLANE_STRIDE therefore
+   describe a Y-tiled surface KDE allocated -- stride 0x2b, which is 43 in
+   128-byte units -- while `fb0` in the same file reports a stride of 5504
+   bytes. Those are two different buffers and not a contradiction, and either
+   one read as the other is a wrong answer that arithmetic will happily confirm.
+
+   Anything taken off that plane is a statement about what a compositor chose.
+
+3. THE PANEL MUST BE AWAKE OR EVERY REGISTER READS ZERO.
+
+   The first attempt at this dump returned 0x00000000 for everything including
+   PIPEASRC, because the console was blanked and the pipes were genuinely off.
+   **A dump from a blanked panel is a page of zeros that looks exactly like a
+   wrong register map.** `echo 0 > /sys/class/graphics/fb0/blank` first, and
+   check PIPEASRC decodes to the panel's real size before trusting anything.
+
+========================================================================
+
 
 ===== when and what =====
 2026-09-18T08:52:28Z
