@@ -1199,6 +1199,44 @@ static void player_describe(void *user, char *out, size_t size) {
         p->volume, p->status);
 }
 
+/*
+ * The window was closed, so stop playing.
+ *
+ * Closing a built-in application hides its window and keeps it, so
+ * `player_destroy` -- which is where `stop_playing` was -- runs at shutdown
+ * and not when somebody closes this. **So the music kept playing.** The audio
+ * stream, the decoder, the whole file in memory and the tick all stayed live,
+ * with no window on the screen and no entry in the taskbar, and the only way
+ * to stop it was to open the player again.
+ *
+ * Photographed: play, close -- `windows` says nothing is open -- then open it
+ * again, and the transport is on pause at 0:09 of 10:00. It had been counting
+ * the whole time.
+ *
+ * The first attempt at that measurement proved nothing. The tone was twelve
+ * seconds long and the run took eighteen, so the track had simply ended and
+ * the player was showing "Stopped." for its own reasons. Ten minutes of tone
+ * is what made the question answerable.
+ *
+ * `closed` and not `visibility`, which fires on minimize as well --
+ * `include/recon_appwin.h` says so. **Minimising a music player must not stop
+ * the music**; putting a window down is the most ordinary thing to do while
+ * listening to something.
+ *
+ * This is what the Stop button does, because it is the same event: somebody
+ * has finished with this.
+ */
+static void player_closed(void *user) {
+    struct recon_player *p = user;
+
+    if (p->playing < 0 && p->stream == NULL) {
+        return;
+    }
+
+    stop_playing(p);
+    set_status(p, false, "Stopped.");
+}
+
 static void player_destroy(void *user) {
     struct recon_player *p = user;
     stop_playing(p);
@@ -1218,6 +1256,7 @@ static const struct recon_appwin_impl PLAYER_IMPL = {
     .key = player_key,
     .scroll = player_scroll,
     .describe = player_describe,
+    .closed = player_closed,
     .destroy = player_destroy,
 };
 

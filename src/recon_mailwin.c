@@ -1744,6 +1744,47 @@ static void mailwin_describe(void *user, char *out, size_t size) {
         m->session != NULL ? recon_mail_status(m->session) : m->message);
 }
 
+/*
+ * The window was closed: drop the connection, and forget the password.
+ *
+ * Both of these were in `mailwin_destroy`, which a closed window does not
+ * reach -- so a mail window closed at nine in the morning held its connection
+ * to the server, and the password in this process's memory, until the machine
+ * was shut down.
+ *
+ * The password is the half the struct had already ruled on. The comment above
+ * `password` says it *"lives for as long as this window does, and goes when it
+ * does"* -- written when closing a window and destroying one were the same
+ * thing, and true of neither since. A guarantee a comment states and nothing
+ * keeps is the fault this codebase keeps finding; this is one more.
+ *
+ * **The text, not the field.** `recon_secure_erase` over the whole
+ * `struct recon_edit` would zero `masked` along with it, and a password box
+ * that has stopped drawing dots is a worse bug than the one being fixed.
+ * `anchor` is -1 for "nothing selected" and zero is a real position, so that
+ * is put back by hand rather than left at whatever a wipe makes it.
+ *
+ * Reopening asks for it again, and `connect_now` already says the right thing
+ * to an empty one -- "A password is needed." -- because that path existed for
+ * somebody who had not typed it yet. Anybody who ticked the box gets it back
+ * from the keyring, which is where a secret that outlives a window belongs.
+ *
+ * A send in flight is deliberately left alone. `stop_sending` stays in the
+ * destructor: the window is still there to be called back into, and quietly
+ * dropping somebody's outgoing mail because they closed the window is not a
+ * thing to do about a connection.
+ */
+static void mailwin_closed(void *user) {
+    struct recon_mailwin *m = user;
+
+    disconnect(m);
+
+    recon_secure_erase(m->password.text, sizeof(m->password.text));
+    m->password.length = 0;
+    m->password.caret = 0;
+    m->password.anchor = -1;
+}
+
 static void mailwin_destroy(void *user) {
     struct recon_mailwin *m = user;
     disconnect(m);
@@ -1770,6 +1811,7 @@ static const struct recon_appwin_impl MAIL_IMPL = {
     .key = mailwin_key,
     .scroll = mailwin_scroll,
     .describe = mailwin_describe,
+    .closed = mailwin_closed,
     .destroy = mailwin_destroy,
 };
 

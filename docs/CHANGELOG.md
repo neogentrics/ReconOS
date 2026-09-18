@@ -9,6 +9,71 @@ way for the two to disagree.
 
 ---
 
+## v0.4.75 — closing the Media Player did not stop the music
+
+v0.4.74 was not about cookies. The question it left is **what does an
+application do in `destroy` that it should be doing on close**, and `destroy`
+runs at shutdown because closing a built-in application hides its window.
+
+Asked of all ten built-in windows. Grepping for `save` found nothing, which is
+why this needed asking properly: the two that answer are not about saving
+anything. They are about **stopping**.
+
+### The player kept playing
+
+`player_destroy` calls `stop_playing`, and nothing else did. So closing the
+Media Player mid-track left the audio stream open, the decoder open, the whole
+file in memory and the tick running — **with no window on the screen and no
+entry in the taskbar.** The only way to stop it was to open the player again.
+
+Photographed: play, close (`windows` says nothing is open), open it again, and
+the transport is on pause at **0:09 of 10:00**. It had been counting the whole
+time.
+
+**The first attempt at that measurement proved nothing.** The tone was twelve
+seconds long and the run took eighteen, so the track had ended on its own and
+the player was showing "Stopped." for reasons that had nothing to do with the
+close. It looked exactly like a pass. Ten minutes of tone is what made the
+question answerable.
+
+`closed` and not `visibility` — which fires on minimize too, as v0.4.74 found
+out. **Minimising a music player must not stop the music**, and putting a
+window down is the most ordinary thing to do while listening to something. The
+photograph of the minimize path shows it still running at 0:07.
+
+### Mail held a connection and a password
+
+`mailwin_destroy` disconnects and erases. So a mail window closed at nine in
+the morning kept its connection to the server, and the password in this
+process's memory, until the machine was shut down.
+
+The struct had already ruled on it. The comment above `password` says it
+*"lives for as long as this window does, and goes when it does"* — written when
+closing a window and destroying one were the same thing, and true of neither
+since.
+
+**The text, not the field.** `recon_secure_erase` over the whole
+`struct recon_edit` would zero `masked` with it, and a password box that has
+stopped drawing dots is a worse bug than the one being fixed. A send in flight
+is deliberately left alone: the window is still there to be called back into,
+and dropping somebody's outgoing mail because they closed a window is not a
+thing to do about a connection.
+
+### The instrument was wrong twice, in the two ways that look like passing
+
+`scripts/player-close-shot.sh` reported three pictures written and the
+pictures said *"Nothing to play."* — because `look.sh` throws its root away
+when the password stamp does not match, so a file placed in it before the
+first run is deleted by that run. The root is settled first now, and the
+script counts the accounts the tone reached rather than leaving it to the
+photograph.
+
+Both faults were the same shape as the twelve-second tone, and as the theme
+measurement in v0.4.71: **an instrument that answers confidently about
+something it is not pointed at.**
+
+---
+
 ## v0.4.74 — closing the browser did not end the session
 
 Set two cookies: one with a day to run, one for the window only. Close the
