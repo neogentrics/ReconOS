@@ -143,6 +143,96 @@ def scan(text):
     return bad
 
 
+#
+# A control byte outside a string or character literal.
+#
+# **Narrowed twice, and both narrowings were earned.** The first version flagged
+# every byte outside printable ASCII, and the very first run produced three
+# findings that were all correct code:
+#
+#   * a section sign in a comment in `server/auth.h`, which is prose;
+#   * `\xc3\xa9` in `test_http_json.c`, which is a test **feeding the escaper a
+#     non-ASCII byte** -- a suite about refusing hostile bytes has to contain
+#     hostile bytes;
+#   * `\x01` in the same file, for the same reason.
+#
+# So bytes above ASCII are left alone entirely -- they may be prose or they may
+# be test data, and this cannot tell -- and control bytes are flagged only where
+# they cannot be data: outside a literal. That is where the fault this exists
+# for landed. A comment in `server/http/jsonread.c` said `\u0000` is valid JSON,
+# and the tool that wrote the file read the escape and put a real NUL there. It
+# compiled, because a comment is not parsed, and it sat in the source as a
+# landmine for whatever read it next.
+#
+# The same shape as the `\n`-in-a-literal fault this file was built for,
+# arriving through a different door -- and this project's memory of it is older
+# still: a heredoc once turned `\b` in a regular expression into a raw 0x08 and
+# silently removed every word boundary from it.
+#
+def stray_bytes(raw):
+    """(offset, byte) for every control byte outside a literal."""
+    out = []
+    i = 0
+    n = len(raw)
+    state = "code"      # code, line, block, string, char
+
+    while i < n:
+        b = raw[i]
+
+        if state == "code":
+            if b == 0x2F and i + 1 < n and raw[i + 1] == 0x2F:
+                state = "line"
+                i += 2
+                continue
+            if b == 0x2F and i + 1 < n and raw[i + 1] == 0x2A:
+                state = "block"
+                i += 2
+                continue
+            if b == 0x22:
+                state = "string"
+                i += 1
+                continue
+            if b == 0x27:
+                state = "char"
+                i += 1
+                continue
+        elif state == "line":
+            if b == 0x0A:
+                state = "code"
+        elif state == "block":
+            if b == 0x2A and i + 1 < n and raw[i + 1] == 0x2F:
+                state = "code"
+                i += 2
+                continue
+        else:
+            # Inside a literal: a backslash hides the next byte, and the
+            # closing quote ends it. Control bytes here may be deliberate.
+            if b == 0x5C:
+                i += 2
+                continue
+            if (state == "string" and b == 0x22) \
+                    or (state == "char" and b == 0x27):
+                state = "code"
+            i += 1
+            continue
+
+        if b in (9, 10):
+            i += 1
+            continue
+        if b == 13 and i + 1 < n and raw[i + 1] == 10:
+            i += 1
+            continue
+        if b < 32 or b == 0x7F:
+            out.append((i, b))
+        i += 1
+
+    return out
+
+
+def line_of(raw, offset):
+    return raw.count(b"\n", 0, offset) + 1
+
+
 def check(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -165,6 +255,36 @@ def main():
                     continue
                 path = os.path.join(dirpath, name)
                 looked += 1
+
+                #
+                # Bytes that are not text, before the literal scan.
+                #
+                # **Found by this happening.** A comment in
+                # `server/http/jsonread.c` said that `\u0000` is valid JSON,
+                # and the tool that wrote the file read that escape and put a
+                # real NUL byte in the source. It compiled, because the byte
+                # was inside a comment, and it sat there as a landmine for
+                # whatever read the file next -- which is the same shape as the
+                # `\n` fault this checker was built for, arriving through a
+                # different door.
+                #
+                # This project's memory of it is older than that: a heredoc
+                # once turned `\b` in a regular expression into a raw 0x08 and
+                # silently removed every word boundary from it.
+                #
+                try:
+                    with open(path, "rb") as f:
+                        raw = f.read()
+                except OSError:
+                    raw = b""
+                for offset, byte in stray_bytes(raw):
+                    rel = os.path.relpath(path, root).replace(BACKSLASH, "/")
+                    print("%s:%d: a byte that is not text -- 0x%02x at offset"
+                          " %d" % (rel, line_of(raw, offset), byte, offset))
+                    print("    an edit probably turned an escape into the byte"
+                          " it names; see the header")
+                    found += 1
+
                 for number, text in check(path):
                     rel = os.path.relpath(path, root).replace(BACKSLASH, "/")
                     print("%s:%d: string literal left open -- a patch script"
@@ -175,9 +295,9 @@ def main():
 
     if found:
         print()
-        print("%d unterminated literal(s) across %d files." % (found, looked))
+        print("%d fault(s) across %d files." % (found, looked))
         return 1
-    print("literals: %d files, none left open" % looked)
+    print("literals: %d files, none left open and no stray bytes" % looked)
     return 0
 
 

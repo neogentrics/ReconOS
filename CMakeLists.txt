@@ -1159,6 +1159,19 @@ add_executable(recon_server_chunked_tests
 
 add_test(NAME server_chunked COMMAND recon_server_chunked_tests)
 
+# Reading JSON, and every document that means two things.
+#
+# The counterpart to `json.c`, which writes. Most of the suite is documents
+# that must be refused: a trailing comma, a duplicate key, `NaN`, a leading
+# zero, a lone surrogate, a second document after the first. Each of those is
+# accepted by some parser somewhere, which is what makes a document containing
+# one mean different things to the sender and to this server.
+add_executable(recon_server_jsonread_tests
+    server/http/jsonread.c
+    server/tests/test_jsonread.c)
+
+add_test(NAME server_jsonread COMMAND recon_server_jsonread_tests)
+
 # Three answers, and the two ways of confusing them.
 #
 # KF-244 made `connect` say `SYS_OK`, `SYS_EAGAIN` or `SYS_EIO` -- established,

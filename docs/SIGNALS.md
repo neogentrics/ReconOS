@@ -434,10 +434,39 @@ settled VF-020 here when three sessions of code review had not.
 
 ---
 
+## One for everybody: a tool that reads escapes out of the file it is writing
+
+Not a request. It cost this seat nothing because it was caught, and it would
+have cost somebody a bad afternoon if it had not.
+
+A comment in `server/http/jsonread.c` said that `\u0000` is valid JSON. The
+tool writing the file read that as a Unicode escape and stored **the byte it
+names** -- a real NUL, in the source, inside a comment. It compiled. So did the
+second one, in the header beside it.
+
+This project already had a checker for the same fault in its other form: a
+patch script turning `\n` inside a C string literal into a real newline, four
+times, once inside the checker written to catch it. That checker walked every C
+source and did not look for this.
+
+It does now: **a control byte outside a string or character literal**, which is
+a place such a byte can never be data. Bytes above ASCII are deliberately left
+alone -- the first version flagged a section sign in a comment and two hostile
+bytes inside test literals, and a suite about refusing control bytes has to
+contain control bytes.
+
+Then it found a third, older than any of this work and real: a raw `0x01` in a
+comment in `test_http_json.c` where `\x01` was meant.
+
+If your branch writes source with a script, the check is fifty lines and it
+runs in milliseconds. VF-032.
+
+---
+
 ## Status of this branch
 
-**server 0.26.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the two socket fixes above. **1126 checks across twenty-one suites**, green. Both
+**server 0.27.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the two socket fixes above. **1254 checks across twenty-two suites**, green. Both
 roles build.
 
 `origin/kernel` has moved on to e01d423 since that merge and this branch has

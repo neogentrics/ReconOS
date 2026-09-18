@@ -160,7 +160,9 @@ int main(void)
 		ok(json_escape("\"", tiny, 3) == 2,
 		   "and fits in exactly the room it needs");
 
-		/* `` is six plus a terminator. */
+		/* `\x01` is six plus a terminator -- written as an escape, because
+		 * the byte itself in a comment is the fault `check-c-literals.py`
+		 * now refuses, and it was here. */
 		{
 			const char raw[] = { 0x01, '\0' };
 

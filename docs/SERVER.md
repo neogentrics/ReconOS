@@ -91,7 +91,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | Configuration clone onto unlike hardware | server | spec | discovery first |
 | Service supervisor | server | **partial** | `server/service.c` — 37 checks, and **two services** now: the web server and the clock. Adding the second changed nothing in the loop, which is what the shape was for. In-process only: **nothing can start a program**, so this is not process supervision and does not pretend to be |
 | Cron / job scheduler | server | **blocked** | no user-mode timer |
-| Structured REST / RPC management API | server | **partial** | reads and one write: `POST /api/name` renames the machine |
+| Structured REST / RPC management API | server | **partial** | `GET /api/status`, `/api/services`, `/api/log`, `/api/resolve`; `POST /api/name` and `/api/upload`. Takes **`application/json`** as well as a form since 0.27.0 — `server/http/jsonread.c`, 128 checks — so it can be driven by a program rather than only by a person. Still no schema and no discovery |
 | Hypervisor daemon | server | not started | needs VT-x from the kernel |
 | Container runtime | server | **blocked** | no namespaces, no cgroups |
 | Out-of-band IPMI / Redfish | server | not started | |

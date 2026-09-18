@@ -1060,3 +1060,88 @@ and what the machine is called now       HTTP/1.1 200 OK  "name":"M18"
   ran `twelve` to `twenty`. The twenty-first suite made it report *which this
   cannot read as a number* -- the check that exists to stop the README drifting
   failing for its own vocabulary. The map is built now rather than listed.
+
+### VF-032 -- a JSON reader, and two NUL bytes it put in its own source
+
+- **What was built** `server/http/jsonread.c`, so `POST /api/name` takes
+  `application/json` as well as a form. The board has *structured REST / RPC
+  management API* at **partial** and `docs/WEB.md` has said since 0.14.0 that
+  the JSON writer *needs a parser next*: everything this server accepted was
+  what an HTML form sends, so the API could be driven by a person and not by a
+  program.
+- **The reader is chosen by `Content-Type` and by nothing else.** Not by
+  sniffing the body: a body valid in both shapes would then mean whichever
+  reader was tried first, which is the same fault as two HTTP parsers framing
+  one message differently. A media type this cannot read is **415** rather than
+  400 -- the request is well formed and this cannot read it.
+- **Most of the 128 checks are documents that must be refused**, because JSON
+  has a specification and a much larger set of things parsers accept anyway.
+  The one worth naming is **the same key twice**: RFC 8259 leaves it undefined
+  and real parsers split between first and last, so
+  `{"role":"reader","role":"admin"}` is two documents depending on who reads
+  it -- and the reader that checked a permission may not be the one that acted.
+  Refused, and refused on the **decoded** key, so `{"a":1,"\u0061":2}` is
+  caught too; a check on the raw bytes is how a duplicate is hidden.
+- **Two narrowings that come from this machine rather than from taste.** There
+  is no floating point: the init program is built with `-mno-80387 -mno-sse`,
+  so a `double` would not survive the link. A number is kept as its **text**
+  and `json_int` refuses anything that is not an exact integer -- `1.5` and
+  `1e3` parse and are not integers, which is a different thing from being
+  invalid. And ASCII only, to stay symmetric with `json.c`, which cannot emit a
+  byte above 0x7F: a reader that accepted more would accept a value this server
+  cannot report back, failing at the reply instead of at the door.
+- **Watched failing against four lenient parsers:**
+
+```
+accepts a duplicate key                5 of 128 fail
+accepts text after the document        4 of 128 fail
+accepts a leading zero                 2 of 128 fail
+accepts a raw byte above ASCII         2 of 128 fail
+```
+
+- **Measured on the machine**, server role, against the real kernel's sockets:
+
+```
+a JSON document                  200 OK    {"name":"M20"}
+with a charset parameter         200 OK    {"name":"M21"}
+a form, as before                200 OK    {"name":"M22"}
+no content type at all           200 OK    {"name":"M23"}
+JSON with the same key twice     400       the same key twice in one object, at byte 20
+JSON with a trailing comma       400       not JSON, at byte 14
+two JSON documents               400       more than one document, at byte 14
+JSON that is an array            400       an object was expected
+JSON with no name                400       one name, as a string
+JSON with a number for a name    400       one name, as a string
+a media type this does not read  415       send a form or application/json
+```
+
+  The form and the no-content-type cases are there to show the old shape still
+  works: a management API arriving must not take the browser's away.
+
+- **And the finding this entry is named for: the tool writing the source put
+  two NUL bytes in it.** A comment said `\u0000` is valid JSON, and whatever
+  wrote the file read that as a Unicode escape and stored the byte it names.
+  One landed in `jsonread.c` and one in `jsonread.h`. Both compiled, because
+  both were inside comments, and both would have sat in the source as landmines
+  for whatever read the file next -- a diff, a search, a patch script.
+- **This is the `\n`-in-a-literal fault arriving through a different door**, and
+  `scripts/check-c-literals.py` was built for that one and did not see this one.
+  It does now: a **control byte outside a string or character literal** is a
+  fault, and the check runs with every suite.
+- **It was narrowed twice, and both narrowings were earned by its first run.**
+  The first version flagged every byte outside printable ASCII and immediately
+  produced three findings that were all correct code: a section sign in a
+  comment in `auth.h`, which is prose, and two hostile bytes inside literals in
+  `test_http_json.c` -- **a suite about refusing non-ASCII and control bytes has
+  to contain them.** So bytes above ASCII are left alone entirely, and control
+  bytes are flagged only where they cannot be data.
+- **And then it found a third, which was real.** A comment in
+  `test_http_json.c` written by an earlier session contained a raw `0x01` where
+  `\x01` was meant, inside backticks. Harmless, older than this work, and
+  exactly the class. Fixed.
+- **One more, caught by the runner rather than by hand.** The suite's own
+  bounds block wrote `JSON_TEXT_MAX + 16` bytes into a one-kilobyte buffer. The
+  `gcc` line used while writing it said nothing; `scripts/server-tests.sh`
+  builds with `-O2 -Werror`, which turns glibc's fortify warning into a failed
+  build. A suite that overruns its own buffer is a suite whose results are
+  whatever the stack happened to hold.

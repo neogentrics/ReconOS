@@ -49,6 +49,7 @@
 #include "../http/form.h"
 #include "../http/escape.h"
 #include "../http/json.h"
+#include "../http/jsonread.h"
 #include "../http/multipart.h"
 #include "../auth.h"
 #include "../dns.h"
@@ -635,33 +636,173 @@ static int put_if_absent(const char *path, unsigned long path_len,
  * -- an illegal character, an over-long name, a name that is only digits --
  * is refused here too.
  */
+/*
+ * Is this the media type `want`, ignoring parameters?
+ *
+ * `application/json; charset=utf-8` is `application/json`. Compared
+ * case-insensitively because a media type is a token, and cut at the first
+ * `;` or space rather than parsed: this needs to know which of two readers to
+ * use, not what the parameters say.
+ */
+static int media_is(const char *value, const char *want)
+{
+	size_t i;
+
+	if (!value)
+		return 0;
+	for (i = 0; want[i]; i++) {
+		char c = value[i];
+
+		if (c >= 'A' && c <= 'Z')
+			c = (char)(c + 32);
+		if (c != want[i])
+			return 0;
+	}
+	return value[i] == '\0' || value[i] == ';' || value[i] == ' '
+	       || value[i] == '\t';
+}
+
+/*
+ * The name a request is asking for, from a form **or** from a JSON document.
+ *
+ * --- Why this endpoint takes two shapes ---
+ *
+ * A browser form can only send `application/x-www-form-urlencoded`. A
+ * management client -- the thing `docs/SERVER.md` calls a structured REST API
+ * -- sends a document. This server has had only the first since 0.3.0, which
+ * meant the API could be driven by a person and not by a program.
+ *
+ * The reader is chosen by `Content-Type` and by nothing else. **Not by
+ * sniffing the body**, which is how one reader ends up parsing what another
+ * reader framed: a body that is valid in both shapes would then mean whichever
+ * one this tried first.
+ *
+ * A type this server does not implement is **415**, not 400: the client's
+ * request is well formed and this cannot read it, and those are different
+ * facts.
+ *
+ * Returns HTTP_OK and points `*wanted` at the name, or fills `out` with the
+ * refusal and returns HTTP_OK, or returns a verdict.
+ */
+static int name_wanted(const struct http_request *r, const char *body,
+                       size_t body_len, struct http_response *out,
+                       const char **wanted, int *answered)
+{
+	static struct json doc;		/* static: over four kilobytes, and
+					 * this program's stack is not the
+					 * place for it */
+	struct http_form form;
+	const char *type = http_header_get(r, "content-type");
+	const struct json_node *root, *member;
+	const char *text;
+	size_t len = 0;
+	int rc;
+
+	*answered = 0;
+
+	if (type && media_is(type, "application/json")) {
+		char line[128];
+		int n;
+
+		rc = json_parse(body, body_len, &doc);
+		if (rc != JSON_OK) {
+			n = snprintf(line, sizeof(line),
+			             "400 Bad Request: %s, at byte %lu\n",
+			             json_reason(rc), (unsigned long)doc.where);
+			if (n < 0 || (size_t)n >= sizeof(line))
+				return HTTP_EINTERNAL;
+			http_response_simple(out, 400, "text/plain", line,
+			                     (size_t)n);
+			*answered = 1;
+			return HTTP_OK;
+		}
+
+		root = json_root(&doc);
+		if (!root || root->kind != JSON_OBJECT) {
+			http_response_simple(out, 400, "text/plain",
+			                     "400 Bad Request: an object was"
+			                     " expected\n", 41);
+			*answered = 1;
+			return HTTP_OK;
+		}
+
+		member = json_member(&doc, root, "name");
+		text = json_string(&doc, member, &len);
+		if (!text) {
+			http_response_simple(out, 400, "text/plain",
+			                     "400 Bad Request: one name, as a"
+			                     " string\n", 39);
+			*answered = 1;
+			return HTTP_OK;
+		}
+
+		/*
+		 * A NUL inside the string. Legal JSON -- `\u0000` -- and this
+		 * value is about to be used as a C string by everything
+		 * downstream, which would see a shorter name than was sent.
+		 * Refused rather than truncated: a truncated name is a
+		 * different name.
+		 */
+		{
+			size_t i;
+
+			for (i = 0; i < len; i++) {
+				if (text[i] == '\0') {
+					http_response_simple(out, 400,
+					                     "text/plain",
+					                     "400 Bad Request: a"
+					                     " NUL in the name\n",
+					                     35);
+					*answered = 1;
+					return HTTP_OK;
+				}
+			}
+		}
+
+		*wanted = text;
+		return HTTP_OK;
+	}
+
+	if (type && !media_is(type, "application/x-www-form-urlencoded")) {
+		http_response_simple(out, 415, "text/plain",
+		                     "415 Unsupported Media Type: send a form"
+		                     " or application/json\n", 61);
+		*answered = 1;
+		return HTTP_OK;
+	}
+
+	rc = http_form_parse(body, body_len, &form);
+	if (rc != HTTP_OK)
+		return rc;
+
+	*wanted = http_form_get(&form, "name");
+	if (!*wanted) {
+		/* Absent, or given twice. `http_form_get` deliberately answers
+		 * the same for both -- see `form.h` -- and either way there is
+		 * no single name to take. */
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: one name field\n", 32);
+		*answered = 1;
+	}
+	return HTTP_OK;
+}
+
 static int handle_set_name(const struct http_request *r, const char *body,
                            size_t body_len, struct http_response *out,
                            void *ctx)
 {
 	static char answer[256];
 	struct server_facts *f = (struct server_facts *)ctx;
-	struct http_form form;
 	struct name_family family;
 	char name_room[JSON_ROOM(RECON_NAME_MAX)];
-	const char *wanted, *name;
-	int rc, n;
+	const char *wanted = 0, *name;
+	int rc, n, answered = 0;
 
-	(void)r;
-
-	rc = http_form_parse(body, body_len, &form);
+	rc = name_wanted(r, body, body_len, out, &wanted, &answered);
 	if (rc != HTTP_OK)
 		return rc;
-
-	wanted = http_form_get(&form, "name");
-	if (!wanted) {
-		/* Absent, or given twice. `http_form_get` deliberately answers
-		 * the same for both -- see `form.h` -- and either way there is
-		 * no single name to take. */
-		http_response_simple(out, 400, "text/plain",
-		                     "400 Bad Request: one name field\n", 32);
+	if (answered)
 		return HTTP_OK;
-	}
 
 	rc = server_name_split(wanted, &family);
 	if (rc != SERVER_OK && rc != SERVER_EUNNUMBERED) {
