@@ -184,6 +184,223 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ## Fixed
 
+### GX-014 — Two encodings of one pitch, called an agreement with the hardware, and a decoder that would have halved it
+
+- **Found in** kernel 0.4.0, on 18 September 2026, about ninety minutes after
+  being written down as a confirmation — in a self-test comment, in a commit
+  message, and in a signal to the kernel session.
+
+- **Was** this, in `intel_modeset_self_test`:
+
+  ```c
+  { 5464, 0 },  /* refused: 24 bytes past a chunk */
+  { 5504, 86 }, /* what that machine actually uses */
+  ```
+
+  **That machine does not use 86.** `PLANE_STRIDE_1_A` on the Gateway reads
+  `0x2b`, which is 43.
+
+  The evidence for 86 was Linux's fbdev line, `stride 5504`, and the reasoning
+  was: 5504 bytes, 64 bytes to a chunk, 86 chunks. Every step of which is
+  correct **for a linear surface**, and the plane on that machine is Y-tiled —
+  `PLANE_CTL = 0x84109000`, tiling field 4 — where the unit is 128 bytes. So
+  the register holds 43, and 43 × 128 is the same 5504 bytes.
+
+  Both encodings describe one row. The byte count agreed; the register value
+  was never checked, because there was no way to check it and it was treated as
+  though the byte count had checked it. **A quantity was converted using an
+  assumption, and the agreement of the input was reported as confirmation of the
+  output.**
+
+- **And it was not only a comment.** `intel_pipe_mode` decoded every plane with
+  the linear unit:
+
+  ```c
+  *pitch = (stride & PLANE_STRIDE_MAX) * PLANE_STRIDE_UNIT;
+  ```
+
+  Run against the Gateway as it stands, that reads 43, multiplies by 64, and
+  reports a pitch of **2752 bytes for a row that is 5504** — off by exactly a
+  factor of two, which is the diagonal-shear failure the comment three lines
+  above it warns about, arrived at by the code underneath.
+
+- **Cost** nothing in a running machine, because that path has never run on one.
+  Cost in the record: it was signalled as *"this file agreeing with an
+  independent implementation on real hardware rather than with itself"*, which
+  is a strong claim, and the thing it agreed with was its own input.
+
+- **Also a warning about the measurement.** The machine was running a KDE
+  Wayland session, so the plane describes **the compositor's** buffer while the
+  `stride 5504` line describes the **fbdev** buffer. Two allocations, both 5504
+  bytes a row, one linear and one tiled. For ten minutes this looked like a
+  contradiction between two numbers that were never about the same thing.
+  Anything read off a live plane is a statement about what some compositor
+  asked for, not about what a driver must program.
+
+- **Fixed in** kernel 0.4.0 on `graphics`. The tiling field is decoded, and the
+  unit comes from it:
+
+  ```c
+  case PLANE_TILED_LINEAR: return PLANE_STRIDE_UNIT;    /* 64 */
+  case PLANE_TILED_Y:      return PLANE_STRIDE_UNIT_Y;  /* 128, measured */
+  default:                 return 0u;
+  ```
+
+  **Zero for X and Yf, not 64.** Those two units are neither in this project's
+  measurements nor derived from anything it can check, and falling back to the
+  linear unit is how the original fault happened. A pipe whose tiling has no
+  known unit reports its tiling field and no pitch at all, which a caller can
+  act on; a pitch wrong by a factor is one it cannot.
+
+  The self-test asserts the linear contract **as linear**, and the comment on
+  the 5504 case now says which encoding it is and which register value the
+  hardware actually holds.
+
+---
+
+### GX-013 — The driver read the transcoder the panel is not on, so a lit screen came back as no display at all
+
+- **Found in** kernel 0.4.0, on 18 September 2026, on the first register read
+  ever taken off this project's Gen9 hardware — which happened only because
+  GX-015 was found first and the dump it had been hiding came out.
+
+- **Was** the register map's assumption that a pipe's transcoder is the pipe's.
+  `intel_pipe_mode` gated on `TRANSCONF_A + n * PIPE_STRIDE` and took its
+  timings from `0x60000 + n * PIPE_STRIDE`. Measured on the Gateway with the
+  panel lit and a compositor flipping on it:
+
+  ```
+  TRANS_HTOTAL_A  0x60000  0x00000000     TRANS_HTOTAL_EDP  0x6F000  0x05b90555
+  TRANS_HSYNC_A   0x60008  0x00000000     TRANS_HSYNC_EDP   0x6F008  0x0591057b
+  TRANS_VTOTAL_A  0x6000C  0x00000000     TRANS_VTOTAL_EDP  0x6F00C  0x031d02ff
+  TRANSCONF_A     0x70008  0x00000000     TRANSCONF_EDP     0x7F008  0xc0000000
+  PIPE_SRCSZ_A    0x6001C  0x055502ff     PLANE_SIZE_1_A    0x70190  0x02ff0555
+  ```
+
+  The **pipe** is A — its source size and its plane are exactly what this
+  project computed from the panel's connector — and the **transcoder** is not
+  A's. Gen9 has one dedicated to eDP at a base that is not 0x60000 plus a
+  multiple of the pipe stride, and this panel is on it.
+
+- **What it would have done:** returned false for every pipe, and
+  `intel_modeset_read` would have reported that the machine has no running
+  display, on a machine whose screen is on.
+
+  **A false negative shaped exactly like a correct refusal.** That is the worst
+  form it could take in this particular file, because half of `intel_modeset.c`
+  exists to refuse clearly and by name — `intel_modeset_set` refuses ten
+  separate steps it does not implement — so a clear refusal from it reads as the
+  driver working as designed. Nobody would have gone looking.
+
+- **What saved it from being worse.** Had the `TRANSCONF_ENABLE` gate not been
+  there, the same six zeroed registers would have gone through the minus-one
+  decoding and produced a **1x1 mode**, stated as a measurement. That gate
+  exists because of GX-006, which is the second time that argument has paid.
+
+- **Cost** nothing observed. The path has never run on the hardware, and this
+  was found by measuring before running it — which is the entire reason
+  `scripts/read-intel-display.sh` exists, three days after it was written for
+  exactly this.
+
+- **Fixed in** kernel 0.4.0 on `graphics`, in two parts:
+
+  1. The eDP transcoder's registers are named, with the measurement beside
+     them, and the self-test's block property covers them — `0x6F000` is in the
+     timing block and `0x7F008` is in the pipe block, and neither may collide
+     with a pipe-indexed register.
+
+  2. **Whether a pipe is scanning out is now asked of its plane**, not of its
+     transcoder. `PLANE_CTL_ENABLE` is the pipe saying it is putting pixels
+     somewhere, which is what a caller asking what mode a screen is in actually
+     means. A pipe scanning out with its own transcoder dark is reported —
+     with both values printed — rather than silently taken as one thing or the
+     other.
+
+- **One measured thing this does not explain, and does not guess at.**
+  `TRANS_DDI_FUNC_CTL` at `0x6F400` reads `0x00210000`, whose bit 31 — the
+  function-enable — is **clear**, on the transcoder whose `TRANSCONF` says
+  enabled and whose timings are live. This project cannot reconcile those and
+  has therefore written down both, in the driver and in
+  `docs/hardware/intel-gen9-gateway-registers.txt`, and concluded nothing. A
+  plausible sentence here would be read as a fact by whoever writes the modeset.
+
+---
+
+### GX-015 — `intel_reg` says nothing and exits 0 for a register it does not know, and the script rendered twenty-two failures as a heading
+
+- **Found in** kernel 0.4.0, on 18 September 2026, by finally getting onto the
+  hardware — and reading the output rather than filing it.
+
+- **Was** `scripts/read-intel-display.sh`, whose register section asked for
+  registers by name:
+
+  ```sh
+  printf '%-18s ' "$r"
+  intel_reg read "$r" 2>&1 | tail -n 1
+  ```
+
+  and whose comment said, in as many words, that this was the safe way round:
+
+  > Read by name so that the output says what each is rather than being a
+  > column of addresses, and so that a name intel_reg does not know **fails
+  > visibly** instead of printing a plausible number from the wrong offset.
+
+  **It does not fail visibly.** The builtin register spec in igt 2.5 knows
+  `TRANS_HTOTAL_A` and does not know `PIPE_SRCSZ_A`, `PIPECONF_A` or any
+  `PLANE_*`, and for a name it does not know `intel_reg read` **exits 0 and
+  prints nothing at all**. `tail -n 1` of nothing is nothing, and `printf`
+  without a newline then ran the next name straight on. Twenty-two consecutive
+  failed reads came back looking like this:
+
+  ```
+  ===== display registers, by name =====
+  PIPE_SRCSZ_A       PIPE_SRCSZ_B       PIPE_SRCSZ_C       PIPECONF_A ...
+  ```
+
+  Which is not obviously wrong. It reads as a heading — a list of what was
+  about to be dumped — and the file it lives in is 350 lines long.
+
+- **Cost** a round trip to a machine in another room, and worse than that: a
+  signal to the kernel session, and an addendum to GX-007, both saying the
+  register dump was missing **because `intel-gpu-tools` was not installed**.
+  That was true of the first run. On the second run the tool *was* installed,
+  the dump was still missing, and it looked exactly the same. Two different
+  causes with one appearance, which is the condition under which nobody
+  investigates.
+
+  The sharper version of this project's rule applies exactly: *a check that
+  cannot fail looks exactly like one that passes*. So does a measurement that
+  cannot be taken.
+
+- **Fixed in** kernel 0.4.0 on `graphics`. The section reads by **address**,
+  with the name beside it as a label, and an empty result is stated rather than
+  skipped:
+
+  ```
+  TRANS_HTOTAL_A     0x60000    (0x00060000): 0x00000000
+  PIPE_SRCSZ_A       0x6001C    (0x0006001c): 0x055502ff
+  ```
+
+  ```sh
+  if [ -z "$value" ]; then
+          printf '%-18s %-9s NOTHING -- intel_reg printed no value and exited 0\n' \
+                  "$name" "$addr"
+  ```
+
+  A second pass still asks by name, for the one thing a name is good for: where
+  the tool knows one, it prints the address **it** associates with it, which is
+  an independent statement about the map in `kernel/core/intel_modeset.c`. A
+  name it does not know now prints `NOT KNOWN to this intel_reg`, and on this
+  build that is all twelve of them — which is itself worth having on the record,
+  because it means igt's names are not a portable way to ask this question and
+  the addresses are.
+
+- **What it was hiding** turned out to be the most valuable thing in the file:
+  GX-013. Two runs had already been taken and filed before anybody read the
+  bottom of one.
+
+---
+
 ### GX-012 — virtio-blk had GX-011 too, and on a disk it is a read reporting success with the buffer unfilled
 
 - **Found in** kernel 0.2.49, on 17 September 2026, by being asked to go and
@@ -663,6 +880,38 @@ Checked against the entries by `python scripts/make-issues.py --check`.
   machine now prints the layout the driver actually found, which is the only way
   an assumption written from a specification ever gets corrected — and it is the
   same reason `scripts/read-intel-display.sh` exists.
+
+- **What the hardware said.** Read on 17 September 2026 by the `kernel` session,
+  which ran `scripts/read-intel-display.sh` on the Gateway under Kali and put
+  the output in `docs/hardware/intel-gen9-gateway.txt`:
+
+  ```
+  00:02.0 VGA compatible controller [8086:3185] GeminiLake [UHD Graphics 600]
+          Region 0: Memory at a0000000 (64-bit, non-prefetchable) [size=16M]
+          Region 2: Memory at 90000000 (64-bit, prefetchable)     [size=256M]
+  ```
+
+  Sixteen megabytes. Exactly — 16777216 bytes — so **the veto would have let
+  this machine through**, and by nothing at all: it refused a window *smaller*
+  than 16 MB, and this one is 16 MB on the nose. A single byte the other way
+  and the only Gen9 machine this project owns would have been turned away by a
+  number nobody had measured, onto a panel with no serial port behind it to say
+  why.
+
+  Being right is not the finding. The check was deleted because it was
+  **unverified**, and a guess that happens to match is indistinguishable from
+  knowledge right up until the device that does not match — which is sitting on
+  the same desk, since RDNA2 keeps its registers in a 512 KB fifth BAR and
+  would have been refused by the same rule for a reason true of neither family.
+
+  One thing the machine could not answer: `intel-gpu-tools` is not installed on
+  it, so the register dump — the section that script calls the most important —
+  came back empty. **Every register offset in `intel_modeset.c` is still a
+  value read out of Linux's header rather than off this hardware**, and the
+  first write to any of them is still a write nobody has confirmed the address
+  of. What *was* confirmed is the arithmetic around them: the panel's timings
+  and its padded pitch are now known-answer vectors in that file's self-test,
+  taken from the connector rather than from a specification.
 
 ---
 

@@ -31,6 +31,10 @@ REPO = 'neogentrics/ReconOS'
 # wrong in ways that read as careless -- a build-warning bug labelled
 # "accounts" is worse than no label, because somebody filtering by area then
 # trusts the filter.
+# Entries that reached labels_for with no line in AREA. Printed at the end of a
+# run: see the comment in labels_for.
+UNLABELLED = []
+
 AREA = {
     # Keyed by the whole identifier, not by the number.
     #
@@ -132,6 +136,10 @@ AREA = {
     'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
     'GX-004': 'display', 'GX-005': 'display', 'GX-006': 'display',
     'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display', 'GX-010': 'display',
+    'GX-011': 'display', 'GX-012': 'storage',
+    'GX-013': 'display', 'GX-014': 'display',
+    # GX-015 is a fault in the recon script rather than in the display layer.
+    'GX-015': 'build',
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',
@@ -433,7 +441,21 @@ def labels_for(entry):
     area = AREA.get(entry['id'])
     if '**Documentation.**' in body:
         area = 'docs'
-    if area is not None and area not in out:
+    if area is None:
+        # **Said out loud rather than skipped.**
+        #
+        # The comment on AREA has described this failure since the table was
+        # merged -- "filtering by area misses it silently" -- and described is
+        # all it was. GX-011 and GX-012 were both filed with no line here and
+        # nobody noticed for a day, which is the third time.
+        #
+        # Not an error: an entry is worth an issue whether or not somebody has
+        # chosen its label, and refusing would make a missing label into a
+        # reason the register cannot be published. A warning that names the
+        # identifier is enough, because the whole failure was that nothing
+        # named it.
+        UNLABELLED.append(entry['id'])
+    elif area not in out:
         out.append(area)
     return out
 
@@ -616,6 +638,18 @@ def main():
             print(f"  {e['id']}  closed   {url}")
         else:
             print(f"  {e['id']}  open     {url}")
+
+    # **The labels nobody chose, named.** See the comment in labels_for: the
+    # table has silently mislaid entries three times, and it did so because
+    # mislaying them looked like nothing happening.
+    if UNLABELLED:
+        print()
+        print('%d entry(s) reached an issue with no area label, because no'
+              % len(UNLABELLED))
+        print('line in AREA names them. They are filed, and filtering by area')
+        print('will not find them:')
+        for bad in UNLABELLED:
+            print('  ' + bad)
 
 
 main()

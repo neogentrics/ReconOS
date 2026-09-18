@@ -159,10 +159,29 @@ done
 
 # --- the registers -----------------------------------------------------------
 #
-# **The ones the next increment is written against.** Read by name so that the
-# output says what each is rather than being a column of addresses, and so that
-# a name intel_reg does not know fails visibly instead of printing a plausible
+# **The ones the next increment is written against.**
+#
+# Read by *address*, with the name beside it as a label, and that is the second
+# version of this section. The first read by name, on the reasoning that a name
+# intel_reg does not know would fail visibly rather than print a plausible
 # number from the wrong offset.
+#
+# **It does not fail visibly. It exits 0 and prints nothing** (GX-015), and this
+# script then printed the name, no value, and no newline -- so twenty-two failed
+# reads came back as one tidy row of register names that looked like a heading.
+# The register dump had already been described in a signal as "missing because
+# intel-gpu-tools is not installed"; it was missing a second time, on a machine
+# where the tool was installed, and looked the same.
+#
+# The builtin register spec in igt 2.5 knows TRANS_HTOTAL_A and does not know
+# PIPE_SRCSZ_A or any PLANE_* -- and it warns, on stderr, that it is using the
+# builtin spec at all. So a name is not a portable way to ask this question.
+# An address is.
+#
+# Both are read anyway, because they answer different questions: the address
+# says what this hardware holds, and the name -- where the tool knows one --
+# makes the tool print the address *it* associates with that name, which is an
+# independent check on the map in kernel/core/intel_modeset.c.
 #
 # PIPE_SRCSZ is the pipe's source size and is the closest thing to "what mode is
 # this display in" that can be read in one access. PLANE_STRIDE is the pitch in
@@ -170,18 +189,58 @@ done
 # into without. PLANE_SURF is where the pixels are, as a graphics address rather
 # than a physical one -- the difference between those two is the GTT, and is the
 # reason this step is being measured before it is coded.
-say "display registers, by name"
+say "display registers, by address"
 if have intel_reg; then
-	for r in \
-		PIPE_SRCSZ_A PIPE_SRCSZ_B PIPE_SRCSZ_C \
-		PIPECONF_A PIPECONF_B PIPECONF_C \
-		PLANE_CTL_1_A PLANE_STRIDE_1_A PLANE_SURF_1_A PLANE_SIZE_1_A \
-		PLANE_CTL_1_B PLANE_STRIDE_1_B PLANE_SURF_1_B PLANE_SIZE_1_B \
-		TRANS_CONF_A TRANS_CONF_B \
-		HTOTAL_A HBLANK_A HSYNC_A VTOTAL_A VBLANK_A VSYNC_A
+	# name:address. The address is this project's map, from
+	# kernel/core/intel_modeset.c -- reading it here is what checks it.
+	#
+	# **Both transcoder blocks**, and that is the whole point of the second
+	# version of this list: an eDP panel on Gen9 can run through transcoder
+	# EDP at 0x6F000 rather than through pipe A's own at 0x60000, and on
+	# this project's laptop it does. Pipe A's six timing registers read
+	# zero there, which is not an error anybody would notice -- zero is a
+	# mode of 1x1 once the minus-one encoding is undone (GX-013).
+	for pair in \
+		TRANS_HTOTAL_A:0x60000   TRANS_HBLANK_A:0x60004 \
+		TRANS_HSYNC_A:0x60008    TRANS_VTOTAL_A:0x6000C \
+		TRANS_VBLANK_A:0x60010   TRANS_VSYNC_A:0x60014 \
+		PIPE_SRCSZ_A:0x6001C     TRANSCONF_A:0x70008 \
+		TRANS_HTOTAL_EDP:0x6F000 TRANS_HBLANK_EDP:0x6F004 \
+		TRANS_HSYNC_EDP:0x6F008  TRANS_VTOTAL_EDP:0x6F00C \
+		TRANS_VBLANK_EDP:0x6F010 TRANS_VSYNC_EDP:0x6F014 \
+		TRANSCONF_EDP:0x7F008 \
+		PIPE_SRCSZ_B:0x6101C     PIPE_SRCSZ_C:0x6201C \
+		PLANE_CTL_1_A:0x70180    PLANE_STRIDE_1_A:0x70188 \
+		PLANE_POS_1_A:0x7018C    PLANE_SIZE_1_A:0x70190 \
+		PLANE_SURF_1_A:0x7019C   PLANE_OFFSET_1_A:0x701A4
 	do
-		printf '%-18s ' "$r"
-		intel_reg read "$r" 2>&1 | tail -n 1
+		name=${pair%%:*}
+		addr=${pair#*:}
+		value=$(intel_reg read "$addr" 2>/dev/null | tr -s ' ' | tail -n 1)
+
+		if [ -z "$value" ]; then
+			# **Silence is not success.** The whole reason this
+			# section was rewritten.
+			printf '%-18s %-9s NOTHING -- intel_reg printed no value and exited 0\n' \
+				"$name" "$addr"
+		else
+			printf '%-18s %-9s %s\n' "$name" "$addr" "$value"
+		fi
+	done
+
+	say "the same registers by name, so the tool states its own addresses"
+	echo "A name this build does not know prints NOT KNOWN rather than nothing."
+	echo "Where it does know one, the address it prints is an independent"
+	echo "statement about the map above -- a disagreement there is a finding."
+	echo
+	for r in \
+		TRANS_HTOTAL_A TRANS_HBLANK_A TRANS_HSYNC_A \
+		TRANS_VTOTAL_A TRANS_VBLANK_A TRANS_VSYNC_A \
+		PIPE_SRCSZ_A PIPECONF_A PLANE_CTL_1_A PLANE_STRIDE_1_A \
+		PLANE_SIZE_1_A PLANE_SURF_1_A
+	do
+		value=$(intel_reg read "$r" 2>/dev/null | tr -s ' ' | tail -n 1)
+		printf '%-18s %s\n' "$r" "${value:-NOT KNOWN to this intel_reg}"
 	done
 else
 	echo "intel_reg not installed, so no register dump."

@@ -1,0 +1,435 @@
+The Gateway, read a second time -- 18 September 2026
+====================================================
+
+`scripts/read-intel-display.sh`, run as root on the Gateway (Neo-Gateway, Kali
+rolling, 8086:3185 GeminiLake) over SSH from the graphics session.
+
+**This run has the register dump and the first one did not.** The first run,
+in `intel-gen9-gateway.txt`, was made before `intel-gpu-tools` was installed --
+and then a second time after it was, where the dump came back empty because
+`intel_reg read` does not know the register names this script asked for and
+says so by exiting 0 and printing nothing (GX-015). That file is kept as it is;
+this one is not a correction of it but the same script with a register section
+that reads addresses.
+
+Three things to know before reading the numbers:
+
+1. **The panel is on transcoder EDP, not on pipe A's transcoder.** Everything
+   at 0x60000-0x60014 reads zero on a machine whose screen is lit. The mode is
+   at 0x6F000, and the enable bit is in TRANSCONF_EDP at 0x7F008. GX-013.
+
+2. **A compositor was running.** `mudpuppy` was logged in on tty1 under KDE
+   Wayland, so `PLANE_CTL_1_A` and `PLANE_STRIDE_1_A` describe the buffer
+   *KDE* allocated -- Y-tiled, stride counted in 128-byte units -- and not the
+   fbdev buffer whose stride is the 5504 bytes reported further up this same
+   file. Those are two different buffers and comparing them as though they
+   were one is a mistake this project made for about ten minutes.
+
+3. **PLANE_SURF moved between the two runs** (0x01500000, then 0x01e00000).
+   That is a page flip, and it is the clearest evidence in the file that these
+   are readings off a live machine rather than a static description of one.
+
+What it settles, against `kernel/core/intel_modeset.c`: every offset *within*
+a block is right, every value this project computed from the connector's
+timings appears exactly, and the block itself was the wrong one.
+
+--------------------------------------------------------------------------------
+
+
+===== when and what =====
+2026-09-18T08:54:12Z
+Linux Neo-Gateway 6.18.12+kali-amd64 #1 SMP PREEMPT_DYNAMIC Kali 6.18.12-1kali1 (2026-02-25) x86_64 GNU/Linux
+machine: GPU Company GWTC116-2
+firmware: GPU Company CC-BI-11.6-Y116GRX510-GF55C-268-D
+
+===== the display device, as PCI reports it =====
+00:02.0 VGA compatible controller [0300]: Intel Corporation GeminiLake [UHD Graphics 600] [8086:3185] (rev 06)
+
+00:02.0 VGA compatible controller [0300]: Intel Corporation GeminiLake [UHD Graphics 600] [8086:3185] (rev 06) (prog-if 00 [VGA controller])
+	DeviceName: Onboard - Video
+	Subsystem: Device [1c6c:078b]
+	Control: I/O+ Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx+
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0, Cache Line Size: 64 bytes
+	Interrupt: pin A routed to IRQ 132
+	IOMMU group: 0
+	Region 0: Memory at a0000000 (64-bit, non-prefetchable) [size=16M]
+	Region 2: Memory at 90000000 (64-bit, prefetchable) [size=256M]
+	Region 4: I/O ports at f000 [size=64]
+	Expansion ROM at 000c0000 [virtual] [disabled] [size=128K]
+	Capabilities: [40] Vendor Specific Information: Intel Capabilities v1
+		CapA: Peg60Dis- Peg12Dis- Peg11Dis- Peg10Dis- PeLWUDis- DmiWidth=x4
+		      EccDis- ForceEccEn- VTdDis- DmiG2Dis- PegG2Dis- DDRMaxSize=Unlimited
+		      1NDis- CDDis- DDPCDis- X2APICEn- PDCDis- IGDis- CDID=0 CRID=0
+		      DDROCCAP- OCEn- DDRWrtVrefEn- DDR3LEn-
+		CapB: ImguDis+ OCbySSKUCap- OCbySSKUEn- SMTCap- CacheSzCap 0x0
+		      SoftBinCap- DDR3MaxFreqWithRef100=Disabled PegG3Dis-
+		      PkgTyp- AddGfxEn- AddGfxCap- PegX16Dis- DmiG3Dis- GmmDis-
+		      DDR3MaxFreq=2932MHz LPDDR3En-
+	Capabilities: [70] Express (v2) Root Complex Integrated Endpoint, IntMsgNum 0
+		DevCap:	MaxPayload 128 bytes, PhantFunc 0
+			ExtTag- RBE+ FLReset+ TEE-IO-
+		DevCtl:	CorrErr- NonFatalErr- FatalErr- UnsupReq-
+			RlxdOrd- ExtTag- PhantFunc- AuxPwr- NoSnoop- FLReset-
+			MaxPayload 128 bytes, MaxReadReq 128 bytes
+		DevSta:	CorrErr- NonFatalErr- FatalErr- UnsupReq- AuxPwr- TransPend-
+		DevCap2: Completion Timeout: Not Supported, TimeoutDis- NROPrPrP- LTR-
+			 10BitTagComp- 10BitTagReq- OBFF Not Supported, ExtFmt- EETLPPrefix-
+			 EmergencyPowerReduction Not Supported, EmergencyPowerReductionInit-
+			 FRS-
+			 AtomicOpsCap: 32bit- 64bit- 128bitCAS-
+		DevCtl2: Completion Timeout: 50us to 50ms, TimeoutDis-
+			 AtomicOpsCtl: ReqEn-
+			 IDOReq- IDOCompl- LTR- EmergencyPowerReductionReq-
+			 10BitTagReq- OBFF Disabled, EETLPPrefixBlk-
+	Capabilities: [ac] MSI: Enable+ Count=1/1 Maskable- 64bit-
+		Address: fee00018  Data: 0000
+	Capabilities: [d0] Power Management version 2
+		Flags: PMEClk- DSI+ D1- D2- AuxCurrent=0mA PME(D0-,D1-,D2-,D3hot-,D3cold-)
+		Status: D0 NoSoftRst- PME-Enable- DSel=0 DScale=0 PME-
+	Capabilities: [100 v1] Process Address Space ID (PASID)
+		PASIDCap: Exec- Priv-, Max PASID Width: 14
+		PASIDCtl: Enable- Exec- Priv-
+	Capabilities: [200 v1] Address Translation Service (ATS)
+		ATSCap:	Invalidate Queue Depth: 00
+		ATSCtl:	Enable-, Smallest Translation Unit: 00
+	Capabilities: [300 v1] Page Request Interface (PRI)
+		PRICtl: Enable- Reset-
+		PRISta: RF- UPRGI- Stopped+ PASID+
+		Page Request Capacity: 00008000, Page Request Allocation: 00000000
+	Kernel driver in use: i915
+	Kernel modules: i915
+
+
+===== base address registers, sizes and flags =====
+0000:00:02.0:
+  BAR0  start=0x00000000a0000000  size=16777216 (16 MB)  flags=0x0000000000140204
+  BAR1  start=0x0000000000000000  size=0 (0 MB)  flags=0x0000000000000000
+  BAR2  start=0x0000000090000000  size=268435456 (256 MB)  flags=0x000000000014220c
+  BAR3  start=0x0000000000000000  size=0 (0 MB)  flags=0x0000000000000000
+  BAR4  start=0x000000000000f000  size=64 (0 MB)  flags=0x0000000000040101
+  BAR5  start=0x0000000000000000  size=0 (0 MB)  flags=0x0000000000000000
+
+===== i915's view of the display =====
+--- /sys/kernel/debug/dri/0/i915_display_info ---
+CRTC info
+---------
+[CRTC:75:pipe A]:
+	uapi: enable=yes, active=yes, mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+	hw: enable=yes, active=yes
+	adjusted_mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+	pipe__mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+	pipe src=1366x768+0+0, dither=yes, bpp=18
+	port_clock=270000, lane_count=1
+	num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+	[ENCODER:160:DDI A/PHY A]: connectors:
+		[CONNECTOR:161:eDP-1]
+	[PLANE:34:plane 1A]: type=PRI
+		uapi: [FB:194] AB24 little-endian (0x34324241),0x100000000000004,1366x768, visible=visible, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+		hw: [FB:194] AB24 little-endian (0x34324241),0x100000000000004,1366x768, visible=yes, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+	[PLANE:43:plane 2A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:52:plane 3A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:61:plane 4A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:70:cursor A]: type=CUR
+		uapi: [FB:192] AR24 little-endian (0x34325241),0x0,64x64, visible=visible, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+28+486, rotation=0 (0x00000001)
+		hw: [FB:192] AR24 little-endian (0x34325241),0x0,64x64, visible=yes, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+28+486, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:117:pipe B]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+	[PLANE:76:plane 1B]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:85:plane 2B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:94:plane 3B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:103:plane 4B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:112:cursor B]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:159:pipe C]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	num_scalers=1, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0
+	[PLANE:118:plane 1C]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:127:plane 2C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:136:plane 3C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:145:plane 4C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:154:cursor C]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+
+Connector info
+--------------
+[CONNECTOR:161:eDP-1]: status: connected
+	physical dimensions: 260x140mm
+	subpixel order: Unknown
+	CEA rev: 0
+	DPCD rev: 11
+	audio support: no
+	DP branch device present: no
+	HDCP version: No Connector Support
+	max bpc: 6
+	fixed modes:
+		"1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+		"1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+	modes:
+		"1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+		"1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+[CONNECTOR:169:HDMI-A-1]: status: disconnected
+[CONNECTOR:178:DP-1]: status: disconnected
+--- /sys/kernel/debug/dri/0000:00:02.0/i915_display_info ---
+CRTC info
+---------
+[CRTC:75:pipe A]:
+	uapi: enable=yes, active=yes, mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+	hw: enable=yes, active=yes
+	adjusted_mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+	pipe__mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+	pipe src=1366x768+0+0, dither=yes, bpp=18
+	port_clock=270000, lane_count=1
+	num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+	[ENCODER:160:DDI A/PHY A]: connectors:
+		[CONNECTOR:161:eDP-1]
+	[PLANE:34:plane 1A]: type=PRI
+		uapi: [FB:194] AB24 little-endian (0x34324241),0x100000000000004,1366x768, visible=visible, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+		hw: [FB:194] AB24 little-endian (0x34324241),0x100000000000004,1366x768, visible=yes, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+	[PLANE:43:plane 2A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:52:plane 3A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:61:plane 4A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:70:cursor A]: type=CUR
+		uapi: [FB:192] AR24 little-endian (0x34325241),0x0,64x64, visible=visible, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+28+486, rotation=0 (0x00000001)
+		hw: [FB:192] AR24 little-endian (0x34325241),0x0,64x64, visible=yes, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+28+486, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:117:pipe B]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+	[PLANE:76:plane 1B]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:85:plane 2B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:94:plane 3B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:103:plane 4B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:112:cursor B]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:159:pipe C]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	num_scalers=1, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0
+	[PLANE:118:plane 1C]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:127:plane 2C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:136:plane 3C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:145:plane 4C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:154:cursor C]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+
+Connector info
+--------------
+[CONNECTOR:161:eDP-1]: status: connected
+	physical dimensions: 260x140mm
+	subpixel order: Unknown
+	CEA rev: 0
+	DPCD rev: 11
+	audio support: no
+	DP branch device present: no
+	HDCP version: No Connector Support
+	max bpc: 6
+	fixed modes:
+		"1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+		"1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+	modes:
+		"1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+		"1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+[CONNECTOR:169:HDMI-A-1]: status: disconnected
+[CONNECTOR:178:DP-1]: status: disconnected
+--- /sys/kernel/debug/dri/128/i915_display_info ---
+CRTC info
+---------
+[CRTC:75:pipe A]:
+	uapi: enable=yes, active=yes, mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+	hw: enable=yes, active=yes
+	adjusted_mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+	pipe__mode="1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+	pipe src=1366x768+0+0, dither=yes, bpp=18
+	port_clock=270000, lane_count=1
+	num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+	[ENCODER:160:DDI A/PHY A]: connectors:
+		[CONNECTOR:161:eDP-1]
+	[PLANE:34:plane 1A]: type=PRI
+		uapi: [FB:194] AB24 little-endian (0x34324241),0x100000000000004,1366x768, visible=visible, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+		hw: [FB:194] AB24 little-endian (0x34324241),0x100000000000004,1366x768, visible=yes, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+	[PLANE:43:plane 2A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:52:plane 3A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:61:plane 4A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:70:cursor A]: type=CUR
+		uapi: [FB:192] AR24 little-endian (0x34325241),0x0,64x64, visible=visible, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+28+486, rotation=0 (0x00000001)
+		hw: [FB:192] AR24 little-endian (0x34325241),0x0,64x64, visible=yes, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+28+486, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:117:pipe B]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+	[PLANE:76:plane 1B]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:85:plane 2B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:94:plane 3B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:103:plane 4B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:112:cursor B]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:159:pipe C]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	num_scalers=1, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0
+	[PLANE:118:plane 1C]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:127:plane 2C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:136:plane 3C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:145:plane 4C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:154:cursor C]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+
+Connector info
+--------------
+[CONNECTOR:161:eDP-1]: status: connected
+	physical dimensions: 260x140mm
+	subpixel order: Unknown
+	CEA rev: 0
+	DPCD rev: 11
+	audio support: no
+	DP branch device present: no
+	HDCP version: No Connector Support
+	max bpc: 6
+	fixed modes:
+		"1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+		"1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+	modes:
+		"1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798 0x48 0x9
+		"1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798 0x40 0x9
+[CONNECTOR:169:HDMI-A-1]: status: disconnected
+[CONNECTOR:178:DP-1]: status: disconnected
+
+===== the connectors, and which are connected =====
+card0-DP-1                   disconnected
+card0-eDP-1                  connected
+card0-HDMI-A-1               disconnected
+
+===== modes each connected output offers =====
+--- card0-DP-1 ---
+--- card0-eDP-1 ---
+1366x768
+1366x768
+--- card0-HDMI-A-1 ---
+
+===== EDID, as hex =====
+
+===== the framebuffer, as Linux describes it =====
+--- fb0 ---
+  name             i915drmfb
+  virtual_size     1366,768
+  stride           5504
+  bits_per_pixel   32
+--- fbcon ---
+
+===== display registers, by address =====
+TRANS_HTOTAL_A     0x60000    (0x00060000): 0x00000000
+TRANS_HBLANK_A     0x60004    (0x00060004): 0x00000000
+TRANS_HSYNC_A      0x60008    (0x00060008): 0x00000000
+TRANS_VTOTAL_A     0x6000C    (0x0006000c): 0x00000000
+TRANS_VBLANK_A     0x60010    (0x00060010): 0x00000000
+TRANS_VSYNC_A      0x60014    (0x00060014): 0x00000000
+PIPE_SRCSZ_A       0x6001C    (0x0006001c): 0x055502ff
+TRANSCONF_A        0x70008    (0x00070008): 0x00000000
+TRANS_HTOTAL_EDP   0x6F000    (0x0006f000): 0x05b90555
+TRANS_HBLANK_EDP   0x6F004    (0x0006f004): 0x05b90555
+TRANS_HSYNC_EDP    0x6F008    (0x0006f008): 0x0591057b
+TRANS_VTOTAL_EDP   0x6F00C    (0x0006f00c): 0x031d02ff
+TRANS_VBLANK_EDP   0x6F010    (0x0006f010): 0x031d02ff
+TRANS_VSYNC_EDP    0x6F014    (0x0006f014): 0x03070303
+TRANSCONF_EDP      0x7F008    (0x0007f008): 0xc0000000
+PIPE_SRCSZ_B       0x6101C    (0x0006101c): 0x00000000
+PIPE_SRCSZ_C       0x6201C    (0x0006201c): 0x00000000
+PLANE_CTL_1_A      0x70180    (0x00070180): 0x84109000
+PLANE_STRIDE_1_A   0x70188    (0x00070188): 0x0000002b
+PLANE_POS_1_A      0x7018C    (0x0007018c): 0x00000000
+PLANE_SIZE_1_A     0x70190    (0x00070190): 0x02ff0555
+PLANE_SURF_1_A     0x7019C    (0x0007019c): 0x01e00000
+PLANE_OFFSET_1_A   0x701A4    (0x000701a4): 0x00000000
+
+===== the same registers by name, so the tool states its own addresses =====
+A name this build does not know prints NOT KNOWN rather than nothing.
+Where it does know one, the address it prints is an independent
+statement about the map above -- a disagreement there is a finding.
+
+TRANS_HTOTAL_A     NOT KNOWN to this intel_reg
+TRANS_HBLANK_A     NOT KNOWN to this intel_reg
+TRANS_HSYNC_A      NOT KNOWN to this intel_reg
+TRANS_VTOTAL_A     NOT KNOWN to this intel_reg
+TRANS_VBLANK_A     NOT KNOWN to this intel_reg
+TRANS_VSYNC_A      NOT KNOWN to this intel_reg
+PIPE_SRCSZ_A       NOT KNOWN to this intel_reg
+PIPECONF_A         NOT KNOWN to this intel_reg
+PLANE_CTL_1_A      NOT KNOWN to this intel_reg
+PLANE_STRIDE_1_A   NOT KNOWN to this intel_reg
+PLANE_SIZE_1_A     NOT KNOWN to this intel_reg
+PLANE_SURF_1_A     NOT KNOWN to this intel_reg
+
+===== done =====
+Bring this whole file back. The driver is written against it, and the
+self-tests assert the values in it by name rather than asserting that
+something was read.

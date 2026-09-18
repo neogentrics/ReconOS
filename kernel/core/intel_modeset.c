@@ -87,8 +87,42 @@
 #define TRANS_VSYNC_A		0x60014u
 #define PIPE_SRCSZ_A		0x6001Cu	/* WIDTH  31:16, HEIGHT  15:0 */
 
+/* **And a transcoder that is not any pipe's.**
+ *
+ * Gen9 has a transcoder for eDP whose base is not 0x60000 plus a multiple of
+ * PIPE_STRIDE, and on this project's laptop **it is the one driving the
+ * panel**. Read off the Gateway on 18 September 2026, with the screen lit and
+ * a compositor flipping on it -- the file is
+ * `docs/hardware/intel-gen9-gateway-registers.txt`:
+ *
+ *   TRANS_HTOTAL_A  0x60000  0x00000000     TRANS_HTOTAL_EDP  0x6F000  0x05b90555
+ *   TRANS_HSYNC_A   0x60008  0x00000000     TRANS_HSYNC_EDP   0x6F008  0x0591057b
+ *   TRANS_VTOTAL_A  0x6000C  0x00000000     TRANS_VTOTAL_EDP  0x6F00C  0x031d02ff
+ *   TRANSCONF_A     0x70008  0x00000000     TRANSCONF_EDP     0x7F008  0xc0000000
+ *   PIPE_SRCSZ_A    0x6001C  0x055502ff     PLANE_SIZE_1_A    0x70190  0x02ff0555
+ *
+ * So the **pipe** is A -- its source size and its plane are exactly right --
+ * and the **transcoder** is not A's. Every timing register in the block this
+ * driver read is zero, and TRANSCONF_A's enable bit is clear, on a machine
+ * whose screen is on (GX-013).
+ *
+ * One thing here is measured and not understood, and is left that way on
+ * purpose: TRANS_DDI_FUNC_CTL at 0x6F400 reads 0x00210000, whose bit 31 --
+ * the function-enable -- is **clear**, which this file cannot reconcile with a
+ * transcoder whose TRANSCONF says enabled and whose timings are live. It is
+ * recorded rather than explained. Writing a guess here is how somebody later
+ * reads a guess as a fact.
+ */
+#define TRANS_HTOTAL_EDP	0x6F000u
+#define TRANS_HBLANK_EDP	0x6F004u
+#define TRANS_HSYNC_EDP		0x6F008u
+#define TRANS_VTOTAL_EDP	0x6F00Cu
+#define TRANS_VBLANK_EDP	0x6F010u
+#define TRANS_VSYNC_EDP		0x6F014u
+
 /* 0x7xxxx -- the pipe's configuration and its first plane. */
 #define TRANSCONF_A		0x70008u
+#define TRANSCONF_EDP		0x7F008u
 #define   TRANSCONF_ENABLE	(1u << 31)
 #define   TRANSCONF_STATE	(1u << 30)	/* the pipe saying it is running */
 
@@ -97,6 +131,12 @@
 #define   PLANE_CTL_FORMAT_SHIFT 24		/* bits 27:24 */
 #define     PLANE_FORMAT_XRGB_8888 4u
 #define   PLANE_CTL_ORDER_RGBX	(1u << 20)
+#define   PLANE_CTL_TILED_SHIFT	10		/* the tiling field, 12:10 */
+#define   PLANE_CTL_TILED_MASK	(7u << PLANE_CTL_TILED_SHIFT)
+#define     PLANE_TILED_LINEAR	0u
+#define     PLANE_TILED_X	1u
+#define     PLANE_TILED_Y	4u
+#define     PLANE_TILED_YF	5u
 #define   PLANE_CTL_TILED_LINEAR 0u		/* the tiling field, at zero */
 #define   PLANE_CTL_ALPHA_DISABLE 0u		/* the alpha field, at zero */
 
@@ -106,12 +146,26 @@
 #define PLANE_SURF_1_A		0x7019Cu
 #define PLANE_OFFSET_1_A	0x701A4u
 
-/* A linear plane's stride is counted in **sixty-four byte chunks**, not bytes,
+/* A **linear** plane's stride is counted in sixty-four byte chunks, not bytes,
  * and the field is twelve bits wide. Both facts bite: a pitch written straight
  * into the register is a screen shredded into diagonal stripes, and a pitch
  * that does not divide by 64 cannot be expressed at all rather than being
- * rounded to something close. */
+ * rounded to something close.
+ *
+ * **The word "linear" is doing work, and it was not here before (GX-014).**
+ * The unit depends on how the surface is tiled, and this file had no notion of
+ * tiling at all -- so it named one unit, called it the unit, and would have
+ * decoded a tiled plane's stride as a smaller number of larger rows.
+ *
+ * Measured rather than remembered. The Gateway's plane is Y-tiled and reads
+ * PLANE_STRIDE = 0x2b = 43, for a row this project independently computes as
+ * 5504 bytes: 5504 / 43 is exactly 128, so the Y-tiled unit at four bytes a
+ * pixel is 128 and the 64 above is the linear case only. Both encodings
+ * describe the same 5504 bytes -- 86 chunks of 64, or 43 of 128 -- which is
+ * why an agreement on the byte count is not an agreement on the register.
+ */
 #define PLANE_STRIDE_UNIT	64u
+#define PLANE_STRIDE_UNIT_Y	128u
 #define PLANE_STRIDE_MAX	0xFFFu
 
 /* --- the arithmetic --------------------------------------------------------
@@ -155,6 +209,29 @@ u32 intel_plane_stride(u32 pitch_bytes)
 		return 0;
 
 	return chunks;
+}
+
+/* How many bytes a stride chunk is for the tiling this plane is set to, or
+ * **zero for a tiling this file has not measured**.
+ *
+ * Zero rather than 64, and that distinction is the whole value of the
+ * function: falling back to the linear unit would decode an X-tiled plane's
+ * stride as an eighth of itself and report a pitch, and a pitch that is wrong
+ * by a factor is indistinguishable from one that is right until something is
+ * drawn. Linear is from the specification and confirmed by arithmetic; Y is
+ * from this project's own hardware; X and Yf are neither, so they are refused
+ * by name.
+ */
+static u32 intel_plane_stride_unit(u32 plane_ctl)
+{
+	switch ((plane_ctl & PLANE_CTL_TILED_MASK) >> PLANE_CTL_TILED_SHIFT) {
+	case PLANE_TILED_LINEAR:
+		return PLANE_STRIDE_UNIT;
+	case PLANE_TILED_Y:
+		return PLANE_STRIDE_UNIT_Y;
+	default:
+		return 0u;
+	}
 }
 
 /* A timing pair -- total and active, both stored one short. Used for all six
@@ -229,7 +306,7 @@ static bool intel_pipe_mode(volatile u8 *mmio, unsigned n, u32 *w, u32 *h,
 			    u32 *pitch)
 {
 	u32 base = n * PIPE_STRIDE;
-	u32 conf, src, stride;
+	u32 conf, src, stride, ctl, unit;
 
 	conf = intel_read32(mmio, TRANSCONF_A + base);
 
@@ -243,16 +320,61 @@ static bool intel_pipe_mode(volatile u8 *mmio, unsigned n, u32 *w, u32 *h,
 		return false;
 	}
 
-	if (!(conf & TRANSCONF_ENABLE))
+	ctl = intel_read32(mmio, PLANE_CTL_1_A + base);
+
+	/* **Whether the pipe is scanning out, asked of the plane.**
+	 *
+	 * This used to be `conf & TRANSCONF_ENABLE` and nothing else, which is
+	 * a question about the pipe's *own* transcoder -- and on the one Gen9
+	 * machine this project owns, the panel is on a transcoder that is not
+	 * the pipe's. Every timing register in that block reads zero and the
+	 * enable bit is clear while the screen is lit, so this returned false
+	 * and `intel_modeset_read` reported that the machine had no running
+	 * display at all (GX-013).
+	 *
+	 * **A false negative that looks exactly like a correct refusal**, which
+	 * is the worst shape it could have taken in this file -- half of this
+	 * driver exists to refuse clearly, so a clear refusal reads as working.
+	 *
+	 * The plane is the better question anyway. A transcoder is a thing that
+	 * drives a port; a plane being enabled is the pipe saying it is putting
+	 * pixels somewhere, which is what a caller asking "what mode is this
+	 * screen in" means.
+	 */
+	if (!(ctl & PLANE_CTL_ENABLE))
 		return false;
+
+	/* And the transcoder situation is reported rather than decided, because
+	 * a pipe scanning out with its own transcoder dark is exactly what this
+	 * hardware does and somebody reading the log should see it. */
+	if (!(conf & TRANSCONF_ENABLE)) {
+		u32 edp = intel_read32(mmio, TRANSCONF_EDP);
+
+		kprintf("intel-display: pipe %u is scanning out with its own "
+			"transcoder disabled (%08x); the eDP transcoder reads "
+			"%08x\n", n, conf, edp);
+	}
 
 	src    = intel_read32(mmio, PIPE_SRCSZ_A + base);
 	stride = intel_read32(mmio, PLANE_STRIDE_1_A + base);
+	unit   = intel_plane_stride_unit(ctl);
 
 	/* Undoing the subtraction the hardware stores. */
 	*w = ((src >> 16) & 0xFFFFu) + 1;
 	*h = (src & 0xFFFFu) + 1;
-	*pitch = (stride & PLANE_STRIDE_MAX) * PLANE_STRIDE_UNIT;
+
+	if (!unit) {
+		/* Said, and left at zero. A pitch decoded with the wrong unit
+		 * is wrong by a factor, and a caller cannot tell that from a
+		 * pitch that is right. */
+		kprintf("intel-display: pipe %u has tiling %u, whose stride "
+			"unit this driver has not measured, so its pitch is "
+			"not reported\n", n,
+			(ctl & PLANE_CTL_TILED_MASK) >> PLANE_CTL_TILED_SHIFT);
+		*pitch = 0;
+	} else {
+		*pitch = (stride & PLANE_STRIDE_MAX) * unit;
+	}
 
 	return true;
 }
@@ -367,6 +489,21 @@ bool intel_modeset_self_test(void)
 			{  640,  480, 0x027F01DFu },	/* Linux's own test pattern */
 			{ 1920, 1080, 0x077F0437u },
 			{ 1280,  800, 0x04FF031Fu },
+
+			/* **The panel in this project's own laptop.**
+			 *
+			 * Read off it on 17 September through
+			 * `scripts/read-intel-display.sh`, and kept in
+			 * `docs/hardware/intel-gen9-gateway.txt`:
+			 *
+			 *   [CONNECTOR:161:eDP-1]  status: connected
+			 *   "1366x768": 60 70190 1366 1404 1426 1466
+			 *                        768 772 776 798
+			 *
+			 * Every other vector here is a size somebody chose.
+			 * This one is a measurement, and it is the mode the
+			 * first real modeset on that machine will set. */
+			{ 1366,  768, 0x055502FFu },
 			{ 3840, 2160, 0x0EFF086Fu },
 			{    1,    1, 0x00000000u },	/* the subtraction at its limit */
 		};
@@ -395,6 +532,7 @@ bool intel_modeset_self_test(void)
 			{  640,  480, 0x01DF027Fu },
 			{ 1920, 1080, 0x0437077Fu },
 			{ 1280,  800, 0x031F04FFu },
+			{ 1366,  768, 0x02FF0555u },	/* the laptop's panel */
 		};
 		unsigned i;
 
@@ -423,7 +561,27 @@ bool intel_modeset_self_test(void)
 			{  5120,  80 },		/* 1280 * 4 */
 			{ 15360, 240 },		/* 3840 * 4 */
 			{    64,   1 },
-			{  5464,   0 },		/* 1366 * 4: not a multiple of 64 */
+			/* **1366 * 4, and this one is not hypothetical.**
+			 *
+			 * 1366x768 is the panel in this project's laptop. Its
+			 * natural pitch of 5464 bytes has no representation in
+			 * a field counting 64-byte chunks, so a driver has to
+			 * pad, and 5504 is where it lands. Linux reports 5504
+			 * bytes for that panel's fbdev buffer, which is an
+			 * independent implementation arriving at the same row.
+			 *
+			 * **86 is that row in linear chunks, and it is not
+			 * what the machine's register holds.** PLANE_STRIDE_1_A
+			 * on the Gateway reads 0x2b -- 43 -- because the plane
+			 * scanning out there is Y-tiled, where the unit is 128
+			 * bytes. 43 x 128 and 86 x 64 are the same 5504 bytes
+			 * in two encodings, and for a while this file called
+			 * the agreement of the byte count a confirmation of the
+			 * register value (GX-014). It is not. This function
+			 * answers the linear question only, which is what the
+			 * cases below assert and what its name now says. */
+			{  5464,   0 },		/* refused: 24 bytes past a chunk */
+			{  5504,  86 },		/* the linear encoding of that row */
 			{     0,   0 },		/* nothing is not a pitch */
 			{    63,   0 },
 			{ 262144,  0 },		/* 4096 chunks: past a 12-bit field */
@@ -442,14 +600,81 @@ bool intel_modeset_self_test(void)
 		}
 	}
 
-	/* 4. A transcoder timing pair. */
+	/* 4. Transcoder timing pairs -- one from Linux's own test pattern, and
+	 *    the rest from the laptop's panel, whose numbers are nothing like
+	 *    round and are exactly the sort a hand-written expectation gets
+	 *    wrong in a way that still looks plausible. */
 	{
-		u32 got = intel_trans_timing(800, 640);
+		static const struct {
+			u32 total, active, want;
+			const char *what;
+		} CASES[] = {
+			{  800,  640, 0x031F027Fu, "Linux's 640x480 pattern" },
+			{ 1466, 1366, 0x05B90555u, "the laptop's horizontal" },
+			{  798,  768, 0x031D02FFu, "and its vertical" },
 
-		if (got != 0x031F027Fu) {
-			kprintf("intel-modeset: 800/640 came out %08x and "
-				"should be 031F027F\n", got);
-			ok = false;
+			/* Not a total and an active at all: the sync register
+			 * shares the layout, which is why one function writes
+			 * all six of them. End first, start second, both
+			 * stored one short. */
+			{ 1426, 1404, 0x0591057Bu, "its hsync, end over start" },
+		};
+		unsigned i;
+
+		for (i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+			u32 got = intel_trans_timing(CASES[i].total,
+						     CASES[i].active);
+
+			if (got != CASES[i].want) {
+				kprintf("intel-modeset: %u/%u (%s) came out "
+					"%08x and should be %08x\n",
+					CASES[i].total, CASES[i].active,
+					CASES[i].what, got, CASES[i].want);
+				ok = false;
+			}
+		}
+	}
+
+	/* 4b. **The stride unit, which depends on the tiling and did not used
+	 *     to depend on anything.**
+	 *
+	 *     The refusals are the point again. An unmeasured tiling returns
+	 *     zero, and the temptation is to return 64 so that a caller always
+	 *     gets a number -- which is exactly the shape of GX-014, where a
+	 *     plausible number stood in for one nobody had checked. A pitch
+	 *     wrong by a factor cannot be told from a right one by the caller;
+	 *     a zero can. */
+	{
+		static const struct { u32 ctl, want; const char *what; } CASES[] = {
+			{ 0u << PLANE_CTL_TILED_SHIFT, 64u,
+			  "linear, from the specification" },
+			{ 4u << PLANE_CTL_TILED_SHIFT, 128u,
+			  "Y-tiled, measured on the Gateway" },
+			{ 1u << PLANE_CTL_TILED_SHIFT, 0u,
+			  "X-tiled, which is refused rather than guessed" },
+			{ 5u << PLANE_CTL_TILED_SHIFT, 0u,
+			  "Yf-tiled, likewise" },
+
+			/* **The actual register**, read off the Gateway on
+			 * 18 September with a compositor scanning out of it.
+			 * Carried whole rather than as its tiling field alone,
+			 * so that a change to the mask or the shift is caught
+			 * by a value this project has actually seen. */
+			{ 0x84109000u, 128u, "PLANE_CTL_1_A as that machine holds it" },
+		};
+		unsigned i;
+
+		for (i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+			u32 got = intel_plane_stride_unit(CASES[i].ctl);
+
+			if (got != CASES[i].want) {
+				kprintf("intel-modeset: plane control %08x "
+					"(%s) gave a stride unit of %u and "
+					"should give %u\n",
+					CASES[i].ctl, CASES[i].what,
+					got, CASES[i].want);
+				ok = false;
+			}
 		}
 	}
 
@@ -478,6 +703,20 @@ bool intel_modeset_self_test(void)
 			{ "PLANE_SIZE",   PLANE_SIZE_1_A, false },
 			{ "PLANE_SURF",   PLANE_SURF_1_A, false },
 			{ "PLANE_OFFSET", PLANE_OFFSET_1_A, false },
+
+			/* **The transcoder the panel is actually on.** It
+			 * obeys the same property -- timings in 0x6xxxx, the
+			 * configuration register in 0x7xxxx -- which is worth
+			 * asserting precisely because its base is not the
+			 * pipe-indexed one and nothing else here would catch
+			 * it being typed into the wrong block. */
+			{ "TRANS_HTOTAL_EDP", TRANS_HTOTAL_EDP, true  },
+			{ "TRANS_HBLANK_EDP", TRANS_HBLANK_EDP, true  },
+			{ "TRANS_HSYNC_EDP",  TRANS_HSYNC_EDP,  true  },
+			{ "TRANS_VTOTAL_EDP", TRANS_VTOTAL_EDP, true  },
+			{ "TRANS_VBLANK_EDP", TRANS_VBLANK_EDP, true  },
+			{ "TRANS_VSYNC_EDP",  TRANS_VSYNC_EDP,  true  },
+			{ "TRANSCONF_EDP",    TRANSCONF_EDP,    false },
 		};
 		unsigned i;
 
