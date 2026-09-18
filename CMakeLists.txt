@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.62
+    VERSION 0.4.63
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -215,6 +215,8 @@ add_executable(ReconOS
     src/recon_registry.c
     src/recon_stb.c
     src/recon_keyring.c
+    src/recon_sealed.c
+    src/recon_cookie_store.c
     src/recon_crypt.c
     src/recon_sign.c
     src/recon_users.c
@@ -828,13 +830,26 @@ add_test(NAME form COMMAND recon_form_tests)
 # to a correct one until the day it does not, so the refusals are the part that
 # has to be exercised deliberately -- nothing reaches them by accident.
 #
-# recon_cookie.c opens nothing and has no idea what a socket is.
+# recon_cookie.c opens nothing and has no idea what a socket is -- and it still
+# does not, which is the point of src/recon_cookie_store.c being a separate
+# file. The store brings a cipher, the keyring and a filesystem; the jar brings
+# none of them and stays on the freestanding list because of it.
 add_executable(recon_cookie_tests
     tests/test_cookie.c
-    src/recon_cookie.c)
+    src/recon_cookie.c
+    src/recon_cookie_store.c
+    src/recon_sealed.c
+    src/recon_keyring.c
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_fs.c
+    src/recon_error.c)
 
 target_include_directories(recon_cookie_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_cookie_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 add_test(NAME cookies COMMAND recon_cookie_tests)
 
@@ -1480,6 +1495,32 @@ add_test(NAME png COMMAND recon_png_tests)
 add_test(NAME images COMMAND recon_image_tests)
 add_test(NAME sending-mail COMMAND recon_smtp_tests)
 add_test(NAME keyring COMMAND recon_keyring_tests)
+
+# Sealed files: a file only the signed-in account can read, which is what the
+# keyring's own header says belongs somewhere else -- "something larger belongs
+# in a file that is encrypted, which is a different thing and is not this".
+#
+# The checks that matter are the same shape as the keyring's, plus one a
+# keyring cannot have: a sealed file is a *file*, and somebody with the disk
+# can move one. The name is authenticated as associated data so that moving it
+# is a decryption failure, and that is the check a careful round-trip test
+# still misses.
+add_executable(recon_sealed_tests
+    tests/test_sealed.c
+    src/recon_sealed.c
+    src/recon_keyring.c
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_fs.c
+    src/recon_error.c)
+
+target_include_directories(recon_sealed_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_sealed_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+add_test(NAME sealed-files COMMAND recon_sealed_tests)
 
 # Signatures: who made a package, and has it changed since.
 #

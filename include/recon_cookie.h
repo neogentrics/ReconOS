@@ -46,12 +46,32 @@
  * never sent over one. A server that asks for both has asked for a
  * contradiction; the encrypted half wins.
  *
- * **4. Nothing is written to disk.** A cookie with an expiry a year away is
- * kept until the browser closes and no longer. A stored session cookie is a
- * key to somebody's account sitting in a file, and the place for a key in this
- * system is the keyring -- which holds 512 bytes per secret and has no consent
- * question in front of it yet. Both of those are on the list. Until then this
- * says what is true: signing in lasts as long as the window.
+ * **4. What is written to disk is sealed, and it is not everything.**
+ *
+ * This used to say *"nothing is written to disk"*, and gave the reason: a
+ * stored session cookie is a key to somebody's account sitting in a file, the
+ * place for a key is the keyring, and the keyring holds 512 bytes -- about a
+ * thousandth of a full jar. `include/recon_sealed.h` is what was missing. A
+ * saved jar is encrypted under a key derived from the account password at
+ * sign-in, so a stolen disk is ciphertext and a locked machine is a jar
+ * nothing can read.
+ *
+ * **A cookie with no expiry is still never written.** That is not caution, it
+ * is what the word means: a session cookie is defined as lasting until the
+ * browser closes, and keeping one would be storing something the server asked
+ * not to be stored. So what survives a restart is exactly what a server asked
+ * to survive one, and nothing else.
+ *
+ * A cookie whose expiry passed while the browser was shut is dropped as the
+ * jar is read, not when it is next looked at. The difference matters: it is
+ * never in the jar at all, so nothing can send it in the window between
+ * loading and the first sweep.
+ *
+ * And the limit is worth stating rather than implying. This protects a disk
+ * somebody has taken away. It does **not** protect against code running in
+ * this process while somebody is signed in -- there are no address spaces yet,
+ * and `include/recon_sealed.h` says the same thing about everything it
+ * holds.
  *
  * --- What is not refused ---
  *
@@ -159,5 +179,78 @@ int recon_cookie_sweep(struct recon_cookie_jar *jar, time_t now);
 /* Returns how many were dropped, so the answer can say so. */
 int recon_cookie_forget_host(struct recon_cookie_jar *jar, const char *host);
 int recon_cookie_forget_all(struct recon_cookie_jar *jar);
+
+/* --- Across a restart ---------------------------------------------------
+ *
+ * Kept in a sealed file, which is a file only the signed-in account can read.
+ * See refusal 4 at the top of this header for what is kept and what is not.
+ *
+ * These are called by the browser rather than by the jar, deliberately: a jar
+ * that wrote to disk on its own would be a jar that decided when somebody's
+ * cookies were worth keeping, and that is the browser's decision to make and
+ * the browser's to stop making when somebody clears them.
+ */
+
+/*
+ * Write the jar, keeping only what has an expiry in the future.
+ *
+ * True when it was written -- including when there was nothing to write, which
+ * saves an **empty** jar rather than leaving the old one. That is the whole
+ * difference between "I signed out" and "I signed out and it came back": a
+ * save that skipped an empty jar would leave yesterday's cookies sealed on the
+ * disk for the next start to find.
+ *
+ * False when the keyring is locked or the write fails, and a false is cookies
+ * that were not kept.
+ */
+bool recon_cookie_jar_save(const struct recon_cookie_jar *jar);
+
+/*
+ * Read it back into `jar`, dropping anything that expired while it was shut.
+ *
+ * Returns how many cookies were restored; zero for an empty jar, a locked
+ * keyring, nothing saved, or a file that does not open -- which are one answer
+ * for the reason `recon_sealed_read` gives, and because the browser does the
+ * same thing in every case.
+ *
+ * Added to whatever is already in the jar rather than replacing it, because
+ * the only caller loads into a jar it has just made.
+ */
+int recon_cookie_jar_load(struct recon_cookie_jar *jar, time_t now);
+
+/* Remove what was saved. For "clear cookies", which has to reach the disk as
+ * well as the jar or it clears them until the next start. */
+bool recon_cookie_jar_forget_saved(void);
+
+/*
+ * Put a cookie back into a jar as it was.
+ *
+ * --- Why this exists, and why it is not a way in ---
+ *
+ * `src/recon_cookie_store.c` reads a saved jar, and it is a *different file*
+ * from `src/recon_cookie.c` on purpose: sealing pulls in a cipher, a keyring
+ * and a filesystem, and the jar is 850 lines of policy that compiles with no
+ * libc under it. Putting the two together would have taken the policy off that
+ * list to get a file format.
+ *
+ * So the store needs a way to hand a cookie back, and this is it. **It is not
+ * a way round `recon_cookie_set`.** Every refusal that applies to a cookie
+ * arriving from a server applies here -- the lengths, the control characters,
+ * the room in the jar -- because a saved file is a file somebody with the disk
+ * can write, and a cookie that could not have arrived must not be able to be
+ * restored either.
+ *
+ * What it does *not* re-derive is the narrowing and the flags, which are
+ * decisions already made when the cookie arrived and are carried across as
+ * recorded.
+ *
+ * `expires` must be in the future; a cookie with none, or one already past, is
+ * refused rather than swept later -- a cookie waiting to be tidied up is a
+ * cookie that can be sent first.
+ *
+ * False when the cookie was not put back, for any of those reasons.
+ */
+bool recon_cookie_restore(struct recon_cookie_jar *jar,
+    const struct recon_cookie_view *cookie, time_t now);
 
 #endif /* RECON_COOKIE_H */

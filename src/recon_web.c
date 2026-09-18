@@ -4478,6 +4478,18 @@ static void menu_do(struct recon_web *w, int item) {
         break;
     case MENU_FORGET_COOKIES: {
         int gone = recon_cookie_forget_all(w->cookies);
+
+        /*
+         * The saved jar too, and this is the half that would be easy to miss.
+         *
+         * Clearing only the jar in memory would empty it, and then closing the
+         * window would write that empty jar over the saved one -- so it would
+         * *look* right. But a crash, or a second window still open with its
+         * own jar, and yesterday's cookies come back. Somebody who chose to
+         * forget them would have been told they were gone.
+         */
+        recon_cookie_jar_forget_saved();
+
         if (t != NULL) {
             /* The number, because "cookies cleared" is a sentence somebody
              * has to take on trust and "seven forgotten" is not. */
@@ -5880,6 +5892,20 @@ static void web_destroy(void *user) {
         tab_free(w->tabs[i]);
     }
     /*
+     * Kept, before it goes.
+     *
+     * After `tab_free`, so no fetch is still adding to it, and before the free
+     * for the obvious reason. Only what a server asked to outlive the window
+     * is written -- `include/recon_cookie.h` refusal 4 -- so closing the
+     * browser still signs you out of everything that wanted you signed out.
+     *
+     * Nothing is said when this fails. A window being closed is the worst
+     * moment to put a message in front of somebody, and what they would do
+     * about it is nothing.
+     */
+    recon_cookie_jar_save(w->cookies);
+
+    /*
      * After the tabs, not before. Freeing the jar first would leave every
      * in-flight fetch holding a pointer to it, and `tab_free` is what cancels
      * those -- so the order here is the whole of why a closed window does not
@@ -6115,6 +6141,23 @@ struct recon_appwin *recon_web_create(struct recon_server *server,
      * refusing to open.
      */
     w->cookies = recon_cookie_jar_new();
+
+    /*
+     * And what was kept from last time, if the keyring is open.
+     *
+     * Silent about failing, deliberately. Nothing saved, a locked machine, a
+     * file that does not open -- all of them mean the same thing to somebody
+     * using this, which is that they are signed out and can sign in again.
+     * Putting a message in front of them would be telling them about a
+     * mechanism instead of about their browsing.
+     *
+     * `time(NULL)` here rather than a time passed down: this is the moment the
+     * window opened, and anything that expired before it must not arrive in
+     * the jar at all.
+     */
+    if (w->cookies != NULL) {
+        recon_cookie_jar_load(w->cookies, time(NULL));
+    }
 
     w->win = recon_appwin_create(server, font, &WEB_IMPL, w);
     if (w->win == NULL) {

@@ -73,6 +73,48 @@ static void set_error(const char *fmt, ...) {
     va_end(args);
 }
 
+/*
+ * A key for one named purpose. See include/recon_keyring.h for why this is a
+ * derivation rather than a getter for `g_key`.
+ *
+ * One HMAC block, which is where the size limit comes from. HKDF would expand
+ * past thirty-two bytes and nothing here needs that -- and a function that
+ * quietly produced more material than it had would be the kind of thing that
+ * looks right and is not.
+ */
+bool recon_keyring_derive(const char *purpose, uint8_t *out, size_t size) {
+    if (out == NULL || size == 0) {
+        return false;
+    }
+    /* Erased first, so a caller that ignores the result is not left holding
+     * whatever was in the buffer -- the same promise `get` makes. */
+    recon_secure_erase(out, size);
+
+    if (purpose == NULL || *purpose == 0) {
+        set_error("a derived key needs a purpose");
+        return false;
+    }
+    if (size > RECON_SHA256_SIZE) {
+        set_error("a derived key is at most %d bytes", RECON_SHA256_SIZE);
+        return false;
+    }
+    if (!g_unlocked) {
+        set_error("the keyring is locked");
+        return false;
+    }
+
+    uint8_t full[RECON_SHA256_SIZE];
+
+    recon_hmac_sha256(g_key, KEY_SIZE, purpose, strlen(purpose), full);
+    memcpy(out, full, size);
+    recon_secure_erase(full, sizeof(full));
+    return true;
+}
+
+const char *recon_keyring_user(void) {
+    return g_unlocked ? g_user : "";
+}
+
 const char *recon_keyring_last_error(void) {
     return g_error[0] != '\0' ? g_error : "no error";
 }

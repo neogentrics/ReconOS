@@ -235,6 +235,20 @@ the session — and the two that fetch stylesheets and pictures say no. A rule
 written in a comment is one somebody switches off; a parameter is one they have
 to look at.
 
+**And the fourth refusal stopped being a refusal in v0.4.63.** It read "nothing
+is written to disk", and gave its own reason: a stored session cookie is a key
+to somebody's account, the place for a key is the keyring, and the keyring
+holds 512 bytes -- about a thousandth of a full jar. What was missing was
+`include/recon_sealed.h`, a file only the signed-in account can read, which is
+the thing `include/recon_keyring.h` had been pointing at all along when it said
+*"something larger belongs in a file that is encrypted, which is a different
+thing and is not this"*.
+
+What survives a restart is now exactly what a server asked to survive one. **A
+cookie with no expiry is still never written**, and that is not caution: a
+session cookie is *defined* as lasting until the browser closes, so keeping one
+would be storing something the server asked not to be stored.
+
 **Forms, and they submit** — v0.4.20. Asked for as "now do the forms in the
 browser and build it out completely", and it was the largest thing the viewer
 was missing: it could draw a search box and could not search with it, which

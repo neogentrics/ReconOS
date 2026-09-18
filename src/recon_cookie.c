@@ -475,6 +475,33 @@ const char *recon_cookie_set(struct recon_cookie_jar *jar, const char *host,
         return "a cookie with no name is not stored";
     }
 
+    /*
+     * No control characters in either, which is a refusal worth its own note.
+     *
+     * A well-formed `Set-Cookie` cannot contain one: the header arrives as a
+     * line, so a newline or carriage return would have ended it, and RFC 6265
+     * excludes controls from a cookie value outright. So nothing legitimate is
+     * being turned away.
+     *
+     * Two things depend on it. A stored control character is a thing that gets
+     * pasted into somewhere else later -- a listing, a log, a header being
+     * built -- and none of those places is expecting one. And **the saved
+     * format below separates its fields with tabs**, so a tab inside a value
+     * would be a cookie that reads back as a different cookie. That dependency
+     * is why this is here and not only in the writer: a format made safe by a
+     * check somewhere else needs the check to be findable from both ends.
+     */
+    for (const char *c = name; *c != '\0'; c++) {
+        if ((unsigned char)*c < 0x20 || (unsigned char)*c == 0x7f) {
+            return "that cookie's name has a character a cookie may not";
+        }
+    }
+    for (const char *c = value; *c != '\0'; c++) {
+        if ((unsigned char)*c < 0x20 || (unsigned char)*c == 0x7f) {
+            return "that cookie's value has a character a cookie may not";
+        }
+    }
+
     /* --- The attributes --- */
     char stored_path[RECON_COOKIE_PATH_MAX];
     default_path(path, stored_path, sizeof(stored_path));
@@ -754,6 +781,101 @@ int recon_cookie_forget_host(struct recon_cookie_jar *jar, const char *host) {
         }
     }
     return gone;
+}
+
+/*
+ * A cookie put back as it was. See include/recon_cookie.h for why this exists
+ * and why it is not a way round recon_cookie_set.
+ *
+ * The refusals are restated here rather than shared with the parser above,
+ * and that is a judgement rather than an oversight: the parser's versions are
+ * tangled with reading a header, and a shared helper would be four lines with
+ * two callers that each want something slightly different. What matters is
+ * that a saved file cannot put anything in a jar that a server could not.
+ */
+bool recon_cookie_restore(struct recon_cookie_jar *jar,
+        const struct recon_cookie_view *cookie, time_t now) {
+    if (jar == NULL || cookie == NULL) {
+        return false;
+    }
+    if (jar->count >= RECON_COOKIE_MAX) {
+        return false;
+    }
+
+    /*
+     * In the future, not merely non-zero.
+     *
+     * A cookie that expired while the browser was shut must never be in the
+     * jar -- not put there and swept later. The gap between the two is a gap
+     * in which it can be sent.
+     */
+    if (cookie->expires == 0 || cookie->expires <= now) {
+        return false;
+    }
+
+    if (cookie->host[0] == 0 || cookie->name[0] == 0) {
+        return false;
+    }
+    if (cookie->path[0] != '/') {
+        return false;
+    }
+
+    /* The same lengths the parser enforces. The fields are arrays, so what is
+     * being checked is that they are terminated inside themselves. */
+    if (strnlen(cookie->host, sizeof(cookie->host)) >= sizeof(cookie->host) ||
+            strnlen(cookie->path, sizeof(cookie->path)) >= sizeof(cookie->path) ||
+            strnlen(cookie->name, sizeof(cookie->name)) >= sizeof(cookie->name) ||
+            strnlen(cookie->value, sizeof(cookie->value)) >= sizeof(cookie->value)) {
+        return false;
+    }
+
+    /* And the same control characters, for the reason recon_cookie_set gives:
+     * nothing legitimate has one, and a saved file is a file somebody with the
+     * disk can write. */
+    const char *fields[] = { cookie->host, cookie->path, cookie->name,
+        cookie->value };
+
+    for (size_t f = 0; f < sizeof(fields) / sizeof(fields[0]); f++) {
+        for (const char *c = fields[f]; *c != 0; c++) {
+            if ((unsigned char)*c < 0x20 || (unsigned char)*c == 0x7f) {
+                return false;
+            }
+        }
+    }
+
+    /*
+     * Replacing one already there, the way a server setting the same cookie
+     * twice would -- host, path and name together are what makes a cookie the
+     * same cookie.
+     */
+    for (int i = 0; i < jar->count; i++) {
+        if (strcasecmp(jar->at[i].host, cookie->host) == 0 &&
+                strcmp(jar->at[i].path, cookie->path) == 0 &&
+                strcmp(jar->at[i].name, cookie->name) == 0) {
+            jar->at[i].secure = cookie->secure;
+            jar->at[i].http_only = cookie->http_only;
+            jar->at[i].was_narrowed = cookie->was_narrowed;
+            jar->at[i].expires = cookie->expires;
+            snprintf(jar->at[i].value, sizeof(jar->at[i].value), "%s",
+                cookie->value);
+            return true;
+        }
+    }
+
+    struct cookie *c = &jar->at[jar->count];
+
+    memset(c, 0, sizeof(*c));
+    snprintf(c->host, sizeof(c->host), "%s", cookie->host);
+    snprintf(c->path, sizeof(c->path), "%s", cookie->path);
+    snprintf(c->name, sizeof(c->name), "%s", cookie->name);
+    snprintf(c->value, sizeof(c->value), "%s", cookie->value);
+    c->secure = cookie->secure;
+    c->http_only = cookie->http_only;
+    c->was_narrowed = cookie->was_narrowed;
+    c->expires = cookie->expires;
+    c->serial = jar->next_serial++;
+    jar->count++;
+    return true;
 }
 
 int recon_cookie_forget_all(struct recon_cookie_jar *jar) {

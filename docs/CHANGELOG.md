@@ -9,6 +9,138 @@ way for the two to disagree.
 
 ---
 
+## v0.4.63 — a file only this account can read
+
+`include/recon_keyring.h` has said what does not belong in a keyring since the
+keyring was written:
+
+> The longest secret this will hold. A password, a token, a key — not a file.
+> **Something larger belongs in a file that is encrypted, which is a different
+> thing and is not this.**
+
+That different thing did not exist, and the absence had a cost that was easy to
+miss: **the browser could not keep a cookie past the window closing.** A stored
+session cookie is a key to somebody's account, so the registry was out and
+plain text was out — and a jar of three hundred cookies is half a megabyte,
+about a thousand times what a keyring entry holds. The board row said "blocked
+on the keyring's size" and had said it for weeks.
+
+### Sealed files
+
+`include/recon_sealed.h`. Bytes on disk, AES-256-GCM, unreadable when nobody is
+signed in, and it says exactly what it protects: **a stolen disk and a stolen
+backup.** While somebody is signed in the key is in this process and any code
+in this process can read any sealed file. There are no address spaces yet. When
+there are, this is one of the things that gets to mean more; until then it says
+what is true.
+
+The key comes from `recon_keyring_derive("sealed-files", ...)`, so the account
+key lives in one place and is not copied to grow a second. HMAC is one way, so
+a caller holding the sealed-files key cannot work back to the account's, and so
+cannot compute the key for anything else — the same argument the keyring's own
+salt makes against the login salt, one level down.
+
+**One blob, not a stream.** A sealed file is authenticated as a single piece,
+so nothing is handed to a caller until the whole file has authenticated. That
+is the property worth having: a caller can never act on the first half of a
+file whose second half was tampered with. The cost is a size limit, and it is
+deliberate — something genuinely large wants authenticated chunks and a
+different header, and getting that by raising a constant until it stopped
+complaining is how a mechanism ends up used for something nobody reasoned
+about.
+
+**The name is authenticated as associated data**, which is the check a careful
+round-trip test still misses: without it, somebody who could write the folder
+could move `browser/cookies` on top of another sealed file and every byte would
+still verify.
+
+### And there is no version number in the format
+
+The magic string *is* the version. A later format gets a different magic and a
+reader that knows both, rather than a version byte inside a format claiming to
+describe itself — which is a thing that can disagree with the bytes around it.
+`src/recon_package.c` reached the same conclusion about receipts two versions
+ago, and it is worth the two of them agreeing.
+
+It also makes the failure legible: a file that is not this reports that it is
+not a sealed file, instead of failing to authenticate and sending somebody
+looking for a tampering that never happened.
+
+### Cookies survive a restart, and only the right ones
+
+`include/recon_cookie.h` refusal 4 used to read *"nothing is written to
+disk"*. It now reads what is true, and most of it is still a refusal:
+
+**A cookie with no expiry is never written.** That is not caution — it is what
+the word means. A session cookie is *defined* as lasting until the browser
+closes, so keeping one would be storing something the server asked not to be
+stored. What survives a restart is exactly what a server asked to survive one.
+
+**A cookie whose expiry passed while the browser was shut is dropped as the jar
+is read**, not swept afterwards. The gap between arriving and being swept is a
+gap in which it can be sent.
+
+### The jar stayed freestanding, which decided the shape
+
+The obvious place for this was `src/recon_cookie.c`. That would have been
+wrong: sealing pulls in a cipher, the keyring, the accounts file and the
+filesystem, and the jar is eight hundred lines of policy that is one of the
+**67 of 67** sources compiling with no libc under them. Putting a file format
+into it to gain persistence would have taken the policy off that list.
+
+So `src/recon_cookie_store.c` is separate, and the only thing crossing between
+them is `recon_cookie_restore` — which applies every refusal a cookie arriving
+from a server meets. A saved file is a file, and what it can put in a jar is
+exactly what a server could.
+
+### One new refusal, upstream
+
+A cookie whose name or value holds a control character is refused. Nothing
+legitimate has one: a `Set-Cookie` arrives as a line, so a newline would have
+ended it, and RFC 6265 excludes controls from a value outright. Two things
+depend on it — a stored control character is a thing that gets pasted into
+somewhere else later, and the saved format separates its fields with tabs, so a
+tab inside a value would be a cookie that reads back as a different cookie.
+That dependency is written down at both ends, because a format made safe by a
+check somewhere else needs the check to be findable from the format.
+
+### Mutation found two checks that were not checking
+
+Seventeen mutations across the two pieces. Nine on sealed files, all caught —
+including the one somebody would actually write, dropping the name from both
+associated-data blocks, which dies to exactly one check.
+
+Eight on the cookie side, and **two survived**:
+
+- **Saving session cookies too changed nothing.** The restore side refuses an
+  expiry of zero, so the one that came back was still the right one — the
+  downstream refusal was standing in front of the upstream one and hiding
+  whether it worked. It matters on its own: a sealed file is still read back by
+  this process, where every module runs.
+- **A saved line with fields missing was caught by a different guard.** Every
+  forged line in the test happened to fail a later check — a path that is not a
+  path, a host that is empty — so the skip itself was never under test. The new
+  line is built so the downstream refusals would pass it.
+
+Both are now checked, and all eight die. That is the second time this month a
+guard has turned out to be standing behind another one; the tell is a mutation
+that changes no output rather than a test that fails.
+
+### And my own instrument was wrong first
+
+The mutation harness reported every run, mutated or not, as "did not build". It
+decided by looking for `rror` in the build output, which matches
+`src/recon_error.c`. **A check that cannot tell the two apart is worse than
+none** — it now reads the exit code.
+
+### The numbers
+
+**58 suites**, up from 57. **67 of 67** sources still compile with no libc
+under them, which was the constraint that shaped the design rather than an
+outcome.
+
+---
+
 ## v0.4.62 — seven thousand lines held by one include
 
 **67 of 67 desktop sources build with no libc under them**, up from 64. What

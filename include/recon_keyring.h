@@ -58,6 +58,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* The longest secret this will hold. A password, a token, a key -- not a file.
  * Something larger belongs in a file that is encrypted, which is a different
@@ -120,6 +121,60 @@ bool recon_keyring_forget(const char *name);
  * reason to want that. */
 int recon_keyring_count(void);
 bool recon_keyring_name_at(int index, char *out, size_t size);
+
+/*
+ * A key for one named purpose, derived from the account's.
+ *
+ * --- What this is for ---
+ *
+ * The header at the top of this file says what does not belong in a keyring:
+ * *"Something larger belongs in a file that is encrypted, which is a different
+ * thing and is not this."* `include/recon_sealed.h` is that different thing,
+ * and this is where it gets a key -- the account's key exists in exactly one
+ * place and is not going to be handed out to grow a second.
+ *
+ * --- Why a derived key rather than the key ---
+ *
+ * HMAC is one way. A caller holding the key for `"sealed-files"` cannot work
+ * back to the account key, and so cannot compute the key for anything else --
+ * so a fault in one thing that uses a derived key does not reach the secrets
+ * in here or anything else that derived one.
+ *
+ * That is the same argument the keyring's own salt makes against the login
+ * salt, one level down: **two things that need a key from one password should
+ * not end up with the same key**, because then a weakness in either is a
+ * weakness in both.
+ *
+ * `purpose` is a short constant written into the program -- `"sealed-files"`,
+ * not something a user or a page chooses. Two different purposes give two
+ * unrelated keys; the same purpose always gives the same key, which is what
+ * makes a file written yesterday readable today.
+ *
+ * At most `RECON_SHA256_SIZE` bytes, because this is one HMAC and pretending
+ * otherwise would be a lie about where the material came from. Something
+ * wanting more wants a real expansion, and should say so rather than get it by
+ * accident.
+ *
+ * False when the keyring is locked -- which is the same answer `get` gives,
+ * and for the same reason: there is no key when nobody is signed in.
+ *
+ * **This does not protect against code running in this process**, exactly as
+ * the note at the top of this file says of everything else here. A module that
+ * can call this can also call `recon_keyring_get`.
+ */
+bool recon_keyring_derive(const char *purpose, uint8_t *out, size_t size);
+
+/*
+ * Who the keyring is unlocked for, or an empty string when it is locked.
+ *
+ * `recon_users_current()` answers a similar question and is not the same one:
+ * it says who is signed in, and this says whose key is in memory. They agree
+ * in every ordinary case and the difference is the point -- anything storing
+ * something under the account's key should name the account *that key belongs
+ * to*, so that a mismatch writes nothing rather than writing where it cannot
+ * read back.
+ */
+const char *recon_keyring_user(void);
 
 const char *recon_keyring_last_error(void);
 
