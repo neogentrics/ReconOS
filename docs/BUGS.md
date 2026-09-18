@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-13, and each entry says why. They are listed because a register that only
+15, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -175,6 +175,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
+- **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
+- **KF-257** — The handshake completes on the wire and `connect` never hears about it
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
 
 ---
@@ -7802,6 +7804,196 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-257 — The handshake completes on the wire and `connect` never hears about it
+
+[#529](https://github.com/neogentrics/ReconOS/issues/529)
+
+- **Found:** 17 September 2026, by the **server session**, with a packet capture
+  on the virtual NIC. Handed here because it is kernel code and they cannot push
+  to this branch.
+
+- **What they measured**, relative to boot:
+
+  ```
+  + 2.047s  SYN -> :9        RST+ACK back 1 ms later
+  + 6.023s  SYN -> :8099     SYN+ACK back 1 ms later     <- not acted on
+  +12.008s                   SYN+ACK retransmitted by the peer
+  +12.041s  ACK ->           this machine finally answers
+  ```
+
+  Replies arrive in about a millisecond and nothing happens for six seconds,
+  until the far end gives up waiting and retransmits. The program polls
+  throughout -- **7,848,406 attempts** against a thirty-second deadline -- and
+  every one answers `SYS_EAGAIN`. A connection the host had already accepted was
+  never reported to the program that opened it.
+
+- **So `c->state = TCP_ESTABLISHED` in the `TCP_SYN_SENT` case does run** -- the
+  ACK at +12.041s is sent from that branch and proves it -- and
+  `tcp_state_of(s->conn)` does not return it to the caller.
+
+- **What they ruled out, and each with a control:** not a timeout (thirty
+  seconds and 7.8 million polls give the same answer as two); not the poll loop
+  starving the stack (`SYS_YIELD` between attempts, and the DNS resolver polls in
+  exactly the same shape and gets its reply in about 2,600 tries); not inbound
+  (`GET /api/status` answers 200 throughout).
+
+- **What reading the code here ruled out**, so the next person does not repeat
+  it: `tcp_open` returns `(int)(c - conns)` and `tcp_state_of` indexes `conns`
+  with it, so the index convention agrees. `find_conn` matches all four of the
+  tuple before it considers a listener. `sys_connect` asks
+  `socket_connect_progress` and maps its three answers correctly.
+  **Every layer reads correctly in isolation, which is why this needs a live
+  reproduction rather than more reading.**
+
+- **The six-second gap is the sharper clue and is worth chasing first.** The
+  first SYN+ACK arrived and was not acted on at all; only the peer's retransmit
+  was. Something is delivering inbound segments late or not at all, and the
+  state machine is downstream of that.
+
+- **Status:** open, and it blocks the server branch's entire client half.
+  `server/dial.c` is written and waiting with 38 checks.
+
+### KF-256 — One failed transfer wedges the endpoint for the rest of the boot
+
+[#530](https://github.com/neogentrics/ReconOS/issues/530)
+
+- **Found:** 17 September 2026, **reproduced on this desktop** rather than on the
+  Gateway, by handing QEMU the physical stick with `usb-host` passthrough so the
+  real device's firmware answers this kernel's driver.
+
+  ```
+  usb-storage : reading 8 block(s) at 2048 failed -- the device sent no data (0 of 4096 bytes moved)
+  usb-storage : reading 8 block(s) at 2176 failed -- the device sent no data (0 of 4096 bytes moved)
+  usb-storage : reading 8 block(s) at 4096 failed -- the command wrapper was not accepted (0 of 4096 bytes moved)
+  usb-storage : reading 2 block(s) at 2    failed -- the command wrapper was not accepted (0 of 1024 bytes moved)
+  usb-storage : reading 32 block(s) at 30277600 failed -- the command wrapper was not accepted (0 of 16384 bytes moved)
+  ```
+
+- **Two faults, and this entry is the second one.** The first read fails in the
+  **data** phase -- the device accepts the command and sends nothing. Every read
+  after it fails in the **command** phase, which means the bulk OUT endpoint is
+  halted and stays halted. One transient failure turns into a dead device for the
+  rest of the boot.
+
+- **Nothing in this driver clears a halt.** Bulk-Only Transport says what to do
+  and it is not optional: a Clear-Feature(ENDPOINT_HALT) on the stalled endpoint,
+  and a Bulk-Only Mass Storage Reset when both are stuck. This kernel does
+  neither, so `command()` retries into an endpoint that can only refuse.
+
+- **This is what the Gateway's screen was showing.** `storage: no volume this
+  kernel can read` and the missing `RECONOS-BOOT.TXT` are not separate faults --
+  they are this one, cascading. Once the endpoint wedged, the partition scan's
+  later reads, the filesystem probe and the log write could not succeed.
+
+- **The partition scan works because it reads one or two blocks at a time and
+  gets in before the first failure**, which is why `usb0p1` and `usb0p2` appear
+  on the screen while nothing can be read from them.
+
+- **Status:** open, reproducible on this desk in one command, no laptop needed.
+
+### KF-255 — Every outbound SYN carried a wrong TCP checksum, and always had
+
+[#531](https://github.com/neogentrics/ReconOS/issues/531)
+
+- **Found:** 17 September 2026, by the **server session**, from a packet capture
+  rather than from reading the code. Fix written by them; taken here because it
+  is kernel code.
+
+- **What it was.** `socket_connect` calls `socket_bind(s, IPV4_ANY, 0)`, so
+  `s->local_ip` was `0.0.0.0` when handed to `tcp_open`. TCP's checksum covers a
+  pseudo-header containing the source address; it was summed over that zero while
+  the IP layer wrote the device's real address into the header on the way out.
+  The two disagreed on every segment this machine ever originated.
+
+- **The evidence is what makes it certain.** The IP checksum was correct and the
+  TCP one wrong **by the same `0x0C0F` on every packet** -- which is
+  `0x0A00 + 0x020F`, the two halves of `10.0.2.15`, the machine's own address,
+  missing from the sum.
+
+  ```
+  before   SYN, then silence, for every target -- no SYN+ACK, and no RST
+           even from a port with nothing listening
+  after    SYN -> RST+ACK from the closed port
+           SYN -> SYN+ACK -> ACK, handshake complete
+  ```
+
+- **Why a working TCP stack and a full self-test suite never saw it.** An
+  accepted connection takes its local address from the packet that arrived, so
+  **inbound has always been correct and outbound never has.** Every test in this
+  kernel that exercises TCP does it by listening.
+
+- **Status:** fixed, kernel 0.3.2. The route is looked up before `tcp_open`
+  and the device's address filled in when the socket bound to `IPV4_ANY`.
+
+### KF-254 — `connect` on a datagram socket answers `SYS_EIO` every time
+
+[#532](https://github.com/neogentrics/ReconOS/issues/532)
+
+- **Found:** 17 September 2026, by the **server session**, on their DNS resolver:
+  `resolved:false` on the first boot after merging kernel 0.2.48, where it had
+  worked before.
+
+- **What it was, and it is mine.** KF-244 gave `socket_connect_progress` this
+  opening line:
+
+  ```c
+  if (!s || s->type != SOCK_STREAM || s->conn < 0)
+          return SOCKET_PROGRESS_FAILED;
+  ```
+
+  One condition said two different things. *This socket cannot be asked* and
+  *this socket was asked and failed* are not the same fact, and folding them
+  together made every datagram socket report as having lost -- taking
+  `SYS_CONNECT` away from the only shape of UDP a program can use, which
+  `socket_file.c` says itself.
+
+- **A fix that broke the neighbouring case.** KF-244 was about `connect`
+  reporting success before a handshake finished; it was right about streams and
+  silently wrong about datagrams, because a datagram has no handshake to wait
+  for and `connected` was already the whole answer.
+
+- **Three controls separated it from a network fault**, which is why the report
+  could be acted on without re-deriving it: inbound TCP still answered 200, the
+  kernel's own DHCP still completed, and the address came up identically on both
+  boots.
+
+- **Status:** fixed, kernel 0.3.2. A datagram reports DONE when connected and
+  FAILED when not, before the stream logic is reached.
+
+### KF-253 — The byte count in a failure report was left over from the transfer before
+
+[#533](https://github.com/neogentrics/ReconOS/issues/533)
+
+- **Found:** 17 September 2026, on the **first real outing of KF-246's
+  diagnostic** -- which reported:
+
+  ```
+  usb-storage : reading 8 block(s) at 2048 failed -- the device sent no data (31 of 4096 bytes moved)
+  ```
+
+  Thirty-one bytes of four thousand is a strange number, and it is `CBW_LENGTH`:
+  the command wrapper that had just succeeded. **Nothing had moved at all.**
+
+- **What it was.** `xhci_bulk_transfer` wrote `*transferred` only where a
+  completion arrived. Every other exit -- not configured, no endpoint, an
+  unmappable buffer, and above all the timeout -- returned false leaving the
+  caller's variable holding whatever the previous call had put there. `command()`
+  reuses one `moved` across all three phases of a request, so a data phase that
+  moved nothing reported the command phase's 31.
+
+- **The diagnostic reproduced, inside itself, the exact fault it was built to
+  end.** KF-246 exists because six different failures wore one sentence; its
+  first real answer carried a number that was not a measurement. A stale number
+  is worse than an absent one for the same reason a wrong answer is: it is
+  actionable and it is false.
+
+- **Status:** fixed, kernel 0.3.2. Answered before anything can fail:
+  `*transferred` is set to zero at entry, so no exit can leave a previous
+  call's value standing.
+
+- **Verified by re-running the same reproduction**, which now reads
+  `0 of 4096 bytes moved`.
 
 ### KF-252 — The command ring takes whatever completion arrives, and nothing serialises it
 
