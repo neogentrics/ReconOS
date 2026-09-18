@@ -112,6 +112,18 @@ u32 bt_stack_event(struct bt_stack *s, const u8 *ev, u32 len, u8 *out,
 				return 0;
 			}
 
+			/* **Eight bytes, and this path was not checking.**
+			 *
+			 * The builders take no size -- the caller guarantees
+			 * the room -- and every other call site here does
+			 * guard. This one did not, found by listing them
+			 * rather than by a test, and it is the worst kind of
+			 * omission to leave to a test: nothing fails, a few
+			 * bytes past the end are overwritten, and what breaks
+			 * is whatever was living there. */
+			if (outmax < 8)
+				return 0;
+
 			s->state = BT_ST_INQUIRING;
 			s->link.state = BT_LINK_INQUIRING;
 			s->commands_sent++;
@@ -717,6 +729,62 @@ bool bt_stack_self_test(void)
 					(unsigned long long)s.reports);
 				ok = false;
 			}
+		}
+	}
+
+	/* --- a buffer too small for what would be written ----------------
+	 *
+	 * The command builders take no size; the caller promises the room.
+	 * That promise is only worth what the call sites keep, and one of
+	 * them here was not keeping it.
+	 *
+	 * Checked with a canary rather than by inspection: a byte past the
+	 * end of a deliberately short buffer must still hold what was put
+	 * there. An overrun of a few bytes into somebody else's memory is
+	 * the kind of fault that does not fail here at all -- it fails
+	 * somewhere unrelated, later.
+	 */
+	{
+		static struct bt_stack tight;
+		u8 small[9];		/* 8 usable, 1 canary */
+		u32 m;
+
+		bt_stack_init(&tight);
+		bt_stack_start(&tight, addr, out, sizeof(out));
+
+		ev[0] = HCI_EV_COMMAND_COMPLETE;
+		ev[1] = 4;
+		ev[2] = 1;
+		ev[3] = 0x03;
+		ev[4] = 0x0C;
+		ev[5] = 0x00;
+
+		/* The inquiry this draws is eight bytes; offer seven. */
+		kmemset(small, 0xC7, sizeof(small));
+		m = bt_stack_event(&tight, ev, 6, small, 7);
+
+		if (m) {
+			kprintf("  btstack: a command was written into a "
+				"seven-byte buffer that needs eight (%u "
+				"bytes)\n", m);
+			ok = false;
+		}
+
+		if (small[8] != 0xC7 || small[7] != 0xC7) {
+			kputs("  btstack: the bytes past a short buffer were "
+			      "overwritten -- nothing fails here, it fails "
+			      "later somewhere unrelated\n");
+			ok = false;
+		}
+
+		/* And with enough room it still works, so the guard is not
+		 * simply refusing everything. */
+		m = bt_stack_event(&tight, ev, 6, small, 8);
+
+		if (m != 8) {
+			kprintf("  btstack: with eight bytes offered the "
+				"inquiry came to %u\n", m);
+			ok = false;
 		}
 	}
 

@@ -1374,3 +1374,57 @@ assertions happen to check. It rebuilds now, with a note saying why.
 73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean. Removing the new check fails with `a working channel torn down by a
 message that was never about it`.
+
+---
+
+### 18 September 2026 (third) — bluetooth → kernel
+
+**The same audit, pointed at a different rule, found a buffer overrun.**
+
+Listing every place the channel-matching rule applies found two omissions.
+So: list every place a **caller's buffer is written**, and check each guard.
+
+The command builders on this branch take no size. `hci_command_build`,
+`hci_inquiry_build`, `l2cap_signal_build` and the rest write what they write
+and the caller promises the room. That promise is worth exactly what the call
+sites keep.
+
+Eleven builders, and one call site was not keeping it: `bt_stack_event`'s
+inquiry path writes eight bytes with **no `outmax` guard**. Every other call
+site in that file has one.
+
+**This is the worst kind of thing to leave to a test.** Nothing fails at the
+point of the overrun — a few bytes past the end are overwritten and what
+breaks is whatever was living there, later, somewhere unrelated. It is
+precisely the fault that survives a green test run.
+
+Checked with a canary rather than by inspection: a seven-byte buffer with a
+known byte past the end, and that byte must survive. Removing the guard fails
+with both `a command was written into a seven-byte buffer that needs eight`
+and `the bytes past a short buffer were overwritten` — **the second is the one
+that matters**, because it proves a real memory write rather than only a
+missing return.
+
+#### The technique, since it is now three for three
+
+Three audits, each just *listing the places a rule applies and checking every
+one*:
+
+| rule | places | wrong |
+|---|---|---|
+| a message is matched to what it answers | 9 | 2 |
+| a caller's buffer is written | 11 | 1 |
+| an answer that arrives early is not the answer | 4 | 0 |
+
+Six faults in this session came from breaking working code, and those three
+from reading it. **The two find different things.** No breakage would have
+reached the disconnect path, because nothing here disconnects a second
+channel; no breakage would have reached the missing bound, because every
+caller in the tests passes a large buffer. Both were a minute's reading.
+
+Worth saying plainly: *"where else does this rule apply?"* has been cheaper
+per fault than *"what test would catch this?"*, and the faults it found were
+more severe.
+
+73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
