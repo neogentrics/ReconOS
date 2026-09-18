@@ -31,6 +31,20 @@ void net_bring_up(void)
 		if (!d || !d->up)
 			continue;
 
+		/* Said before the attempt rather than inferred from its failure.
+		 *
+		 * A card with no cable and a network with no DHCP server both
+		 * end at "no address", and they are completely different
+		 * problems -- one is a wire somebody can plug in and the other
+		 * is a server somebody has to go and look at. Waiting two and a
+		 * half seconds to report the wrong one of those is worse than
+		 * not reporting at all, because it reads like an answer. */
+		if (!d->link) {
+			kprintf("net: %s has no cable; not asking for an "
+				"address\n", d->name);
+			continue;
+		}
+
 		if (!dhcp_configure(d)) {
 			kprintf("net: %s has no address; nothing offered one\n",
 				d->name);
@@ -82,6 +96,12 @@ void net_print_summary(void)
 
 	if (virtio_net_count())
 		virtio_net_print_summary();
+
+	if (r8169_count())
+		r8169_print_summary();
+
+	if (e1000_count())
+		e1000_print_summary();
 
 	dhcp_print_summary();
 	netbuf_print_summary();
@@ -136,6 +156,13 @@ bool net_self_test(void)
 		ok = false;
 
 	if (!netdev_self_test())
+		ok = false;
+
+	/* Before the capture device is registered below, so that the two
+	 * tests' registrations do not interleave -- `netdev_forget_last` takes
+	 * back the most recent, and a test that forgets somebody else's device
+	 * is a test that breaks the run after it. */
+	if (!nic_self_test())
 		ok = false;
 
 	if (!arp_self_test())
