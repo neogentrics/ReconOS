@@ -105,13 +105,13 @@ the same two things: a static file handler and a JSON API.
 
 | console | status | note |
 |---|---|---|
-| Server Manager dashboard | **partial** | one page, real numbers, its own stylesheet on the volume, and a form that changes something **from a browser** — which it could not do between 0.17.0 and 0.21.0, see VF-022. Now shows services, clock offset and guard posture |
+| Server Manager dashboard | **partial** | one page, real numbers, its own stylesheet on the volume, and a form that changes something **from a browser** — which it could not do between 0.17.0 and 0.21.0, see VF-022. Shows services, the clock, the guard, **the configuration in force and the last twelve log lines** since 0.32.0. Still one page: no navigation, no storage, no network centre |
 | Storage / RAID manager | spec | waits on the kernel's RAID |
 | Network and firewall centre | spec | |
 | Services and daemon inspector | **partial** | `GET /api/services` — state, polls, faults, restarts |
 | Directory and user manager | spec | waits on LDAP |
 | Performance monitor | spec | `SYS_MACHINE` gives some of it today |
-| Event viewer and log explorer | **built** | `GET /api/log` for the live ring, `GET /api/log/segments` and `GET /api/log/segment?n=` for the durable archive on the volume — **history from previous boots, read back over HTTP**. The archive is guarded; the ring is not |
+| Event viewer and log explorer | **built** | `GET /api/log` for the live ring, as text or JSON; `GET /api/log/segments` and `GET /api/log/segment?n=` for the durable archive on the volume — **history from previous boots, read back over HTTP**. The last twelve lines are on the console page, escaped. The archive is guarded; the ring is not |
 | Task and job scheduler | spec | waits on a timer |
 
 ### Graphical desktop and remote access

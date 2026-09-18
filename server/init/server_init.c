@@ -149,6 +149,38 @@ struct server_facts {
 static struct server_facts FACTS;
 
 /*
+ * What the configuration file said, kept for the console and the API.
+ *
+ * `configure()` reads the file into a `struct config`, applies it, and lets it
+ * go. Until 0.32.0 nothing afterwards could say **what the machine was running
+ * as** -- the port was in `WEB_PORT`, the clock server in a buffer, the sites
+ * in a chain, and a person asking "is my file in force?" had to read the serial
+ * console from boot time or guess.
+ *
+ * That is the shape this project keeps naming: a fact with no reader. So the
+ * summary is kept, in one place, and both the page and `GET /api/config` are
+ * built from it -- because two readers of one fact eventually become two facts.
+ *
+ * Deliberately a summary rather than the whole `struct config`, which is four
+ * kilobytes and mostly room for text that has already been copied where it is
+ * used.
+ */
+struct config_summary {
+	int      read;			/* a file was found and parsed */
+	int      refused;		/* a file was found and would not parse */
+	unsigned line;			/* where, when refused */
+	char     why[64];		/* and in a few words */
+	char     clock[CONFIG_VALUE_MAX];
+	unsigned resolver;
+	unsigned port;
+	size_t   sites;
+	char     site_host[CONFIG_SITES_MAX][CONFIG_VALUE_MAX];
+	char     site_root[CONFIG_SITES_MAX][CONFIG_VALUE_MAX];
+};
+
+static struct config_summary IN_FORCE;
+
+/*
  * The secret that the two writing endpoints require.
  *
  * Made once at boot from `SYS_RANDOM` and printed on the serial console. See
@@ -370,13 +402,29 @@ static const char PAGE_HEAD[] =
  * become attributes of the tag. `server/tests/test_http_escape.c` carries that
  * exact case, reconstructed from this field.
  */
+/*
+ * How many log lines the console shows.
+ *
+ * Not all of them. The ring holds sixty-four and the page is read in a browser
+ * on another machine over a link measured at about a kilobyte a second, so the
+ * whole ring would be most of the page and most of the transfer. Twelve is a
+ * screenful; `GET /api/log` has the rest, and the archive on the volume has
+ * every boot.
+ */
+#define DASHBOARD_LOG_LINES 12
+
 static int handle_dashboard(const struct http_request *r, const char *body,
                             size_t body_len, struct http_response *out,
                             void *ctx)
 {
 	static char page[HTTP_RESPONSE_MAX];
 	static char safe_name[RECON_NAME_MAX * 6 + 1];
+	static char safe_clock[CONFIG_VALUE_MAX * 6 + 1];
 	static char clock_said[96];
+	static char config_said[256];
+	static char sites_said[96];
+	static char site_rows[CONFIG_SITES_MAX * (CONFIG_VALUE_MAX * 12 + 96) + 128];
+	static char log_rows[DASHBOARD_LOG_LINES * (LOG_LINE_MAX * 6 + 96) + 128];
 	struct server_facts *f = (struct server_facts *)ctx;
 	unsigned running = 0, failed = 0, refused = 0;
 	int n;
@@ -410,6 +458,111 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	 * which is safe and useless. */
 	if (http_escape(f->name, safe_name, sizeof(safe_name)) < 0)
 		return HTTP_EBODY_LONG;
+	if (http_escape(IN_FORCE.clock, safe_clock, sizeof(safe_clock)) < 0)
+		return HTTP_EBODY_LONG;
+
+	/* Where the configuration came from. A machine running its defaults
+	 * because a file would not parse looks exactly like one running them
+	 * because there is no file, and the difference is somebody's
+	 * afternoon. */
+	if (IN_FORCE.refused)
+		snprintf(config_said, sizeof(config_said),
+		         "<strong>" CONFIG_PATH " was refused</strong> at line "
+		         "%u: %s. This machine is running its built-in "
+		         "defaults.", IN_FORCE.line, IN_FORCE.why);
+	else if (IN_FORCE.read)
+		snprintf(config_said, sizeof(config_said),
+		         "Read from <code>" CONFIG_PATH "</code>.");
+	else
+		snprintf(config_said, sizeof(config_said),
+		         "No <code>" CONFIG_PATH "</code>; these are the "
+		         "built-in defaults.");
+
+	snprintf(sites_said, sizeof(sites_said),
+	         "%lu, and the console, which answers to every other name",
+	         (unsigned long)IN_FORCE.sites);
+
+	/* One row per configured site. Both fields escaped: a host name and a
+	 * path both come out of a file somebody wrote, and `config.c` bounds
+	 * their shape without making them safe to put in a document. */
+	{
+		size_t k;
+		int at = 0;
+
+		site_rows[0] = 0;
+		for (k = 0; k < IN_FORCE.sites; k++) {
+			char host[CONFIG_VALUE_MAX * 6 + 1];
+			char root[CONFIG_VALUE_MAX * 6 + 1];
+			int m;
+
+			if (http_escape(IN_FORCE.site_host[k], host,
+			                sizeof(host)) < 0)
+				return HTTP_EBODY_LONG;
+			if (http_escape(IN_FORCE.site_root[k], root,
+			                sizeof(root)) < 0)
+				return HTTP_EBODY_LONG;
+			m = snprintf(site_rows + at,
+			             sizeof(site_rows) - (size_t)at,
+			             "<tr><td><code>%s</code></td>"
+			             "<td><code>%s</code></td></tr>\n",
+			             host, root);
+			if (m < 0 || (size_t)(at + m) >= sizeof(site_rows))
+				return HTTP_EBODY_LONG;
+			at += m;
+		}
+		if (at) {
+			/* Wrapped in its own table only when there is one: an
+			 * empty table is a heading with nothing under it. */
+			static char wrapped[sizeof(site_rows) + 64];
+
+			snprintf(wrapped, sizeof(wrapped),
+			         "<table>\n%s</table>\n", site_rows);
+			snprintf(site_rows, sizeof(site_rows), "%s", wrapped);
+		}
+	}
+
+	/*
+	 * The last few log lines.
+	 *
+	 * **Escaped, every one.** A log line holds the request target, which is
+	 * text a client chose -- and this is the one place on this machine
+	 * where something a stranger sent is put into a document somebody
+	 * else's browser will parse. VF-010 is this project's entry about a
+	 * value that reached a document unescaped and was safe only by
+	 * coincidence; the coincidence there was a validator that happened to
+	 * forbid a quote. There is no such validator here: `request.c` admits
+	 * every printable byte in a target, including `<`.
+	 */
+	{
+		size_t held = log_held(&LOGBOOK);
+		size_t first = held > DASHBOARD_LOG_LINES
+		             ? held - DASHBOARD_LOG_LINES : 0;
+		size_t k;
+		int at = 0;
+
+		log_rows[0] = 0;
+		for (k = first; k < held; k++) {
+			const struct log_entry *e = log_at(&LOGBOOK, k);
+			char safe_line[LOG_LINE_MAX * 6 + 1];
+			int m;
+
+			if (http_escape(e->line, safe_line,
+			                sizeof(safe_line)) < 0)
+				continue;	/* one line that will not fit is
+						 * not a reason to drop the page */
+			m = snprintf(log_rows + at,
+			             sizeof(log_rows) - (size_t)at,
+			             "<tr><td><code>%lu</code></td>"
+			             "<td><code>%s</code></td></tr>\n",
+			             e->at, safe_line);
+			if (m < 0 || (size_t)(at + m) >= sizeof(log_rows))
+				break;
+			at += m;
+		}
+		if (!at)
+			snprintf(log_rows, sizeof(log_rows),
+			         "<tr><td colspan=\"2\">nothing yet</td></tr>\n");
+	}
 
 	n = snprintf(page, sizeof(page),
 	             "%s"
@@ -430,6 +583,19 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             "<tr><td>clock</td><td>%s</td></tr>\n"
 	             "<tr><td>writes</td><td>%s</td></tr>\n"
 	             "</table>\n"
+	             "<h2>Configuration</h2>\n"
+	             "<p class=\"sub\">%s</p>\n"
+	             "<table>\n"
+	             "<tr><td>listening on</td><td><code>:%u</code></td></tr>\n"
+	             "<tr><td>resolver</td><td><code>%u.%u.%u.%u</code></td></tr>\n"
+	             "<tr><td>time server</td><td><code>%s</code></td></tr>\n"
+	             "<tr><td>named sites</td><td>%s</td></tr>\n"
+	             "</table>\n"
+	             "%s"
+	             "<h2>Recently asked for</h2>\n"
+	             "<p class=\"sub\">The last few entries of the access log. "
+	             "Every one of them is text a client chose.</p>\n"
+	             "<table class=\"log\">\n%s</table>\n"
 	             "<form class=\"rename\" method=\"post\" "
 	             "action=\"/api/name\">\n"
 	             "<label>rename this machine "
@@ -465,6 +631,16 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             clock_said,
 	             GUARD.armed ? "need the console token"
 	                         : "refused -- this machine has no secret",
+	             config_said,
+	             IN_FORCE.port,
+	             (IN_FORCE.resolver >> 24) & 0xFF,
+	             (IN_FORCE.resolver >> 16) & 0xFF,
+	             (IN_FORCE.resolver >> 8) & 0xFF,
+	             IN_FORCE.resolver & 0xFF,
+	             safe_clock,
+	             sites_said,
+	             site_rows,
+	             log_rows,
 	             safe_name);
 
 	if (n < 0 || (size_t)n >= sizeof(page))
@@ -813,6 +989,94 @@ static int name_wanted(const struct http_request *r, const char *body,
 		                     "400 Bad Request: one name field\n", 32);
 		*answered = 1;
 	}
+	return HTTP_OK;
+}
+
+
+/*
+ * What this machine is configured as.
+ *
+ * **Guarded**, and the reason is the same one that guards the log archive: the
+ * answer names directories on the volume. A site's document root is a path
+ * somebody chose, and a reader who can list them has been handed the shape of
+ * the filesystem for free.
+ *
+ * Reported from `IN_FORCE`, which is the same structure the console page reads.
+ * Two renderings of one fact, and only one fact -- see the comment on that
+ * structure.
+ */
+static int handle_config(const struct http_request *r, const char *body,
+                         size_t body_len, struct http_response *out, void *ctx)
+{
+	static char answer[2048];
+	char room[JSON_ROOM(CONFIG_VALUE_MAX)];
+	const char *safe;
+	size_t i;
+	int n, m;
+
+	(void)r; (void)body; (void)body_len; (void)ctx;
+
+	safe = as_json(IN_FORCE.clock, room, sizeof(room));
+	if (!safe)
+		return HTTP_EINTERNAL;
+
+	n = snprintf(answer, sizeof(answer),
+	             "{\"from\":\"%s\",\"port\":%u,"
+	             "\"resolver\":\"%u.%u.%u.%u\",\"clock\":\"%s\","
+	             "\"sites\":[",
+	             IN_FORCE.refused ? "refused"
+	                              : IN_FORCE.read ? CONFIG_PATH : "defaults",
+	             IN_FORCE.port,
+	             (IN_FORCE.resolver >> 24) & 0xFF,
+	             (IN_FORCE.resolver >> 16) & 0xFF,
+	             (IN_FORCE.resolver >> 8) & 0xFF,
+	             IN_FORCE.resolver & 0xFF, safe);
+	if (n < 0 || (size_t)n >= sizeof(answer))
+		return HTTP_EINTERNAL;
+
+	for (i = 0; i < IN_FORCE.sites; i++) {
+		char host_room[JSON_ROOM(CONFIG_VALUE_MAX)];
+		char root_room[JSON_ROOM(CONFIG_VALUE_MAX)];
+		const char *host = as_json(IN_FORCE.site_host[i], host_room,
+		                           sizeof(host_room));
+		const char *root = as_json(IN_FORCE.site_root[i], root_room,
+		                           sizeof(root_room));
+
+		if (!host || !root)
+			return HTTP_EINTERNAL;
+		m = snprintf(answer + n, sizeof(answer) - (size_t)n,
+		             "%s{\"host\":\"%s\",\"root\":\"%s\"}",
+		             i ? "," : "", host, root);
+		if (m < 0 || (size_t)(n + m) >= sizeof(answer))
+			return HTTP_EINTERNAL;
+		n += m;
+	}
+
+	/*
+	 * The refusal, when there was one, and where.
+	 *
+	 * A machine running its defaults because a file would not parse looks
+	 * exactly like one running its defaults because there is no file, and
+	 * the difference is somebody's afternoon.
+	 */
+	if (IN_FORCE.refused) {
+		char why_room[JSON_ROOM(sizeof(IN_FORCE.why))];
+		const char *why = as_json(IN_FORCE.why, why_room,
+		                          sizeof(why_room));
+
+		if (!why)
+			return HTTP_EINTERNAL;
+		m = snprintf(answer + n, sizeof(answer) - (size_t)n,
+		             "],\"refused\":{\"line\":%u,\"why\":\"%s\"}}\n",
+		             IN_FORCE.line, why);
+	} else {
+		m = snprintf(answer + n, sizeof(answer) - (size_t)n, "]}\n");
+	}
+	if (m < 0 || (size_t)(n + m) >= sizeof(answer))
+		return HTTP_EINTERNAL;
+	n += m;
+
+	http_response_simple(out, 200, "application/json", answer, (size_t)n);
 	return HTTP_OK;
 }
 
@@ -1684,6 +1948,8 @@ static const struct http_route ROUTES[] = {
 	/* The archive, guarded. The ring at `/api/log` is a snapshot and stays
 	 * open; these are every path this machine has ever been asked for. See
 	 * the block above `handle_log_segments`. */
+	{ .method = "GET", .prefix = "/api/config",
+	  .exact = 1, .handler = handle_config, .guarded = 1 },
 	{ .method = "GET", .prefix = "/api/log/segments",
 	  .exact = 1, .handler = handle_log_segments, .guarded = 1 },
 	{ .method = "GET", .prefix = "/api/log/segment",
@@ -1903,6 +2169,24 @@ static unsigned int address_of(const char *text)
 	return (out << 8) | (part & 0xFF);
 }
 
+/*
+ * Snapshot what is actually in force, whichever way `configure` ended.
+ *
+ * Called once, from `main`, after it returns. Four of `configure`'s paths end
+ * early -- no file, a file too large, a file that would not parse, a name the
+ * naming rule refuses -- and on every one of them the defaults are what the
+ * machine runs on. A summary filled inside the function would have had to be
+ * filled at four `return`s, which is the shape that ends with three of them
+ * updated and one forgotten.
+ */
+static void note_in_force(void)
+{
+	IN_FORCE.port = WEB_PORT;
+	IN_FORCE.resolver = RESOLVER.server;
+	snprintf(IN_FORCE.clock, sizeof(IN_FORCE.clock), "%s",
+	         CLOCK_SERVER_NAME);
+}
+
 static void configure(void)
 {
 	/*
@@ -1978,6 +2262,10 @@ static void configure(void)
 
 	rc = config_parse(text, (size_t)got, &CONF);
 	if (rc != CONFIG_OK) {
+		IN_FORCE.refused = 1;
+		IN_FORCE.line = CONF.line;
+		snprintf(IN_FORCE.why, sizeof(IN_FORCE.why), "%s",
+		         config_reason(rc));
 		snprintf(line, sizeof(line),
 		         "  the configuration: REFUSED at line %u -- %s (%s)\n",
 		         CONF.line, config_reason(rc), CONF.found);
@@ -2039,6 +2327,32 @@ static void configure(void)
 		snprintf(line, sizeof(line),
 		         "  the configuration: clock %s\n", CLOCK_SERVER_NAME);
 		say(line);
+	}
+
+	/*
+	 * Written down before the sites are chained, so that what the console
+	 * reports and what the server runs come from the same moment. A
+	 * summary built later could describe a chain that had already been
+	 * changed.
+	 *
+	 * The port, the resolver and the clock are **not** taken here. They
+	 * have defaults that stand when there is no file at all, and a summary
+	 * that only recorded them on the path where a file was applied would
+	 * report nothing for the commonest machine there is. `note_in_force`
+	 * is called once, after `configure` returns by whichever of its four
+	 * paths.
+	 */
+	IN_FORCE.read = 1;
+	IN_FORCE.sites = CONF.site_count;
+	{
+		size_t k;
+
+		for (k = 0; k < CONF.site_count; k++) {
+			snprintf(IN_FORCE.site_host[k], CONFIG_VALUE_MAX, "%s",
+			         CONF.sites[k].host);
+			snprintf(IN_FORCE.site_root[k], CONFIG_VALUE_MAX, "%s",
+			         CONF.sites[k].root);
+		}
 	}
 
 	if (CONF.site_count) {
@@ -2892,6 +3206,7 @@ int main(void)
 	 * refuse outright.
 	 */
 	configure();
+	note_in_force();
 
 	/*
 	 * --- the secret, made once ------------------------------------------

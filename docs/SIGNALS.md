@@ -608,8 +608,8 @@ two reads reported two of forty against a server answering all forty.
 
 ## Status of this branch
 
-**server 0.31.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the **three** socket fixes above. **1453 checks across twenty-four suites** on the host and **57 more on a
+**server 0.32.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the **three** socket fixes above. **1453 checks across twenty-four suites** on the host and **74 more on a
 booted machine**, green. Both
 roles build.
 

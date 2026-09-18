@@ -304,6 +304,26 @@ def a_form_field_past_its_bound():
        "a form field past its bound is 413, which names the body", status)
 
 
+def the_configuration():
+    """What the machine is running as, which nothing could ask before 0.32.0."""
+    status, _, _ = parts(get("/api/config"))
+    ok(status.startswith("HTTP/1.1 401"),
+       "the configuration is guarded, because it names paths on the volume",
+       status)
+
+    status, lines, body = parts(get("/api/config",
+                                    "Authorization: Bearer %s\r\n" % TOKEN))
+    ok(status.startswith("HTTP/1.1 200"),
+       "and readable with the token", status)
+    ok(header(lines, "Content-Type") == "application/json",
+       "as JSON", header(lines, "Content-Type"))
+    ok(b'"port"' in body and b'"resolver"' in body and b'"clock"' in body,
+       "naming the port, the resolver and the clock", body[:80])
+    ok(b'"from"' in body,
+       "and where it came from, so defaults and a refused file are not the "
+       "same answer", body[:80])
+
+
 def the_guard():
     request = ("POST /api/name HTTP/1.1\r\nHost: m16\r\n"
                "Content-Type: application/x-www-form-urlencoded\r\n"
@@ -544,6 +564,68 @@ def conditional_requests():
        "form sends none", status)
 
 
+def the_console_itself():
+    """
+    What a person sees, rather than what a program is told.
+
+    VF-022 is this project's entry about an API change that broke the
+    console's own form for three versions while every `curl` test passed:
+    *testing the API is not testing the console*. So these read the page.
+    """
+    status, lines, page = parts(get("/"))
+    ok(status.startswith("HTTP/1.1 200"), "the console is served", status)
+    ok((header(lines, "Content-Type") or "").startswith("text/html"),
+       "as HTML", header(lines, "Content-Type"))
+
+    # The form a person actually uses, with both fields the guard needs.
+    ok(b'method="post"' in page and b'action="/api/name"' in page,
+       "and carries the form that renames the machine")
+    ok(b'name="name"' in page and b'name="token"' in page,
+       "with a field for the name and one for the token, because a browser "
+       "form cannot send a header")
+
+    # The sections, each with a real value rather than a heading over nothing.
+    ok(b"<h2>Configuration</h2>" in page,
+       "the page says what the machine is configured as")
+    ok(b"server.conf" in page,
+       "and where that came from")
+    ok(b"time server" in page and b"resolver" in page,
+       "naming the clock and the resolver it is using")
+
+    ok(b"<h2>Recently asked for</h2>" in page,
+       "and what it has recently been asked for")
+    ok(b"/api/name" in page or b"/health" in page,
+       "with real entries in it, not an empty table")
+
+
+def the_console_escapes_what_it_shows():
+    """
+    A target a stranger chose, shown to somebody else's browser.
+
+    The access log holds the request target, and the console now prints it.
+    `request.c` admits every printable byte in a target, including `<`, so
+    this is the one place on this machine where text from a stranger reaches
+    a document another person parses.
+
+    VF-010 is the entry about a value that reached a JSON document unescaped
+    and was safe only because a validator happened to forbid a quote. There is
+    no such coincidence here, so this asks for a path that would close a tag
+    and then reads the page back.
+    """
+    raw("GET /%3Cscript%3Ealert(1)%3C/script%3E HTTP/1.1\r\nHost: m16\r\n"
+        "Connection: close\r\n\r\n")
+
+    status, _, page = parts(get("/"))
+    ok(status.startswith("HTTP/1.1 200"), "the console still renders", status)
+
+    ok(b"<script>alert(1)" not in page,
+       "a target that would close a tag does not reach the page as markup")
+    ok(b"&lt;script&gt;" in page,
+       "it arrives escaped, which is what makes it safe to show at all",
+       "the page does not contain the escaped form either, so the check may "
+       "be looking at the wrong thing")
+
+
 def main():
     global PORT, TOKEN
 
@@ -552,9 +634,11 @@ def main():
 
     print("what this server does on the machine")
 
-    for check in (it_answers, host_is_required, the_guard, json_in,
+    for check in (it_answers, host_is_required, the_guard,
+                  the_configuration, json_in,
                   chunked_bodies, a_body_larger_than_one_read,
                   a_form_field_past_its_bound, conditional_requests,
+                  the_console_itself, the_console_escapes_what_it_shows,
                   negotiation,
                   compression, files_off_the_volume, the_status_line,
                   keep_alive, two_hundred_connections):

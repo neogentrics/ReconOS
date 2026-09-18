@@ -1495,3 +1495,60 @@ no precondition at all               200, as the console's form sends none
   every response here carries `X-Content-Type-Options` -- which contains that
   string. **The substring trap the `Accept` suite opens by describing**, found
   in another file by falling into it. Matched with its CRLF and its colon now.
+
+### VF-038 -- two facts the machine had and could not report, and one it had to escape
+
+- **What was missing** The configuration was read at boot, applied, and let go.
+  Nothing afterwards could say **what the machine was running as**: the port
+  lived in `WEB_PORT`, the clock server in a buffer, the sites in a chain, and a
+  person asking *is my file in force?* had to read the serial console from boot
+  time or guess. The access log had an API since 0.12.0 and no place on the
+  page. Both are the shape this project keeps naming: a fact with no reader.
+- **`GET /api/config`** reports what is in force, and **is guarded**, for the
+  reason the log archive is: a site's document root is a path somebody chose,
+  and a reader who can list them has been handed the shape of the filesystem.
+- **It says where the configuration came from**, which is the part that took a
+  moment's thought. A machine running its defaults because a file would not
+  parse looks exactly like one running them because there is no file, and the
+  difference is somebody's afternoon. Three answers, not two: the path, the
+  word `defaults`, or `refused` with the line and the reason.
+- **One structure, two renderings.** The page and the endpoint read the same
+  `IN_FORCE`, for the reason `struct server_facts` exists at all -- two readers
+  of one fact eventually become two facts.
+- **And a snapshot taken from the right place.** `configure()` ends by four
+  different paths -- no file, a file too large, a file that would not parse, a
+  name the naming rule refuses -- and on every one of them the defaults are what
+  the machine runs. A summary filled inside the function would have had to be
+  filled at four returns, which is the shape that ends with three updated and
+  one forgotten. `note_in_force()` is called once, from `main`, after
+  `configure` returns however it ends.
+
+- **The log on the page is a different kind of thing from everything else on
+  it.** Every other value the console prints comes from this machine: its
+  architecture, its memory, its own name. A log line holds the **request
+  target**, which is text a stranger sent, and the console puts it into a
+  document somebody else's browser will parse.
+- **There is no coincidence protecting it.** VF-010 is this project's entry
+  about a value that reached a JSON document unescaped and was safe only because
+  `server_name_split` happens to forbid a quote. `request.c` admits **every
+  printable byte** in a target, including `<`. So every line goes through
+  `escape.c`, and the machine suite proves it end to end:
+
+```
+ask for   /%3Cscript%3Ealert(1)%3C/script%3E
+read      GET /
+assert    the page does not contain <script>alert(1)
+assert    the page does contain &lt;script&gt;
+```
+
+- **Watched failing.** With the escaping replaced by a copy, both checks fail
+  and the target arrives as markup. That is the whole reason the check exists on
+  the machine rather than in a host suite: the path from *a stranger's request*
+  to *another person's browser* runs through the kernel's sockets, the log ring
+  and the page builder, and no host suite holds all three.
+- **And the suite now reads the console's own form**, not only the API it posts
+  to. VF-022 is the entry about that form answering 401 to every submission for
+  three versions while every `curl` test passed, and *testing the API is not
+  testing the console* is the sentence it produced. There are now checks that
+  the page carries the form, both of its fields, and a real value under every
+  heading rather than a heading over nothing.
