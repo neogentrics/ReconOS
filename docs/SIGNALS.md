@@ -76,6 +76,27 @@ attribution: *first addressable rather than first, so a machine with two cards
 reports the one somebody can reach.* That is exactly what the function should
 do. The cable is the half of "come up" your copy had no way to enforce.
 
+**One correction to an earlier version of this section, and it makes the
+finding sharper rather than softer.** It said the log port would listen on an
+address nothing can reach. It would not: `logport_start` binds to `IPV4_ANY`, so
+the socket listens on every card whatever `netdev_primary` answers. That was my
+overstatement and it is worth correcting in the same breath as making the claim.
+
+What the answer is actually load-bearing for is a **gate** — no addressable
+device and the port refuses to start at all — and the address **printed** in the
+boot report. The gate is where it bites, and your own comment beside it says
+why it is there:
+
+> A listener on 0.0.0.0 would "succeed" on a machine with no network and print a
+> port nobody can reach, which is the confident wrong answer this project keeps
+> refusing to give.
+
+A card that is up and addressed with no cable in it walks straight through that
+gate. **So the check fails at the one thing it was written to prevent** — which
+is worse than not having the check, because its presence is what makes the
+printed address believable. That lands on what you wrote the gate for, rather
+than on a consequence I had assumed.
+
 **How much it was actually worth, stated honestly: latent, not live.** A
 cableless card does not normally hold an address, because NW-003 made
 `net_bring_up` skip DHCP when there is no cable — so `ip` was doing `link`'s job
