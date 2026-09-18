@@ -632,6 +632,45 @@ static void cmd_errors(struct recon_cmd_session *s, int argc, char **argv) {
         out(s, "  %-8s %s\n", "", area != NULL ? area : "");
         out(s, "  %-8s %s\n\n", "", level);
         out(s, "  %s\n\n", info->detail);
+
+        /*
+         * --- And what the help has about it ---
+         *
+         * The third caller `docs/ROADMAP.md` named for `recon_help_search`,
+         * after the Start menu and `help`. Somebody reading an error code is
+         * exactly the person who wants more than four lines about it, and the
+         * system had more and did not mention it.
+         *
+         * **What it finds is the change log**, and the sentence says so rather
+         * than implying a manual page. There is no page per error code: the
+         * help is built from `docs/CHANGELOG.md`, so a code appears on the
+         * page for the version that introduced it. Knowing which version a
+         * code arrived in, and what else arrived with it, is genuinely useful
+         * to somebody whose machine has just raised one -- and it is a
+         * different thing from a page about what to do, which does not exist.
+         *
+         * Promising the second and delivering the first is how somebody stops
+         * trusting what this system tells them.
+         *
+         * `recon_help_search` already reads page bodies, which I did not know
+         * when I started and wrote a second function to do it. The reason this
+         * found nothing at first was not the search: it was that the page's
+         * *title* was longer than `RECON_HELP_TITLE_MAX`, and a title that
+         * does not fit is skipped. See that constant for what was actually
+         * wrong.
+         */
+        char titles[HELP_HITS][RECON_HELP_TITLE_MAX];
+        int pages = recon_help_search(info->code, titles, HELP_HITS);
+
+        if (pages > 0) {
+            out(s, "  The change log mentions %s on %s:\n\n",
+                info->code, pages == 1 ? "one page" : "these pages");
+            for (int i = 0; i < pages; i++) {
+                out(s, "    %s\n", titles[i]);
+            }
+            out(s, "\n  Open Help to read %s.\n\n",
+                pages == 1 ? "it" : "them");
+        }
         return;
     }
 

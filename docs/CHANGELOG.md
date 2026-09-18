@@ -9,6 +9,102 @@ way for the two to disagree.
 
 ---
 
+## v0.4.67 — eleven help pages nothing could find
+
+### An error code offers what the help has about it
+
+The third caller `docs/ROADMAP.md` named for `recon_help_search`, after the
+Start menu and `help <word>`. Somebody reading `errors VT-E006` is exactly the
+person who wants more than four lines, and the system had more and did not
+mention it.
+
+**What it offers is the change log**, and the sentence says so rather than
+implying a manual page. There is no page per error code — the help is built
+from `docs/CHANGELOG.md`, so a code appears on the page for the version that
+introduced it. Knowing which version a code arrived in, and what else arrived
+with it, is useful. It is not a page about what to do, which does not exist,
+and promising one is how somebody stops trusting what this system tells them.
+
+### It found nothing, and the reason was not the search
+
+The first attempt came back with no pages for a code written out in full on
+one. I concluded `recon_help_search` matched titles only, and wrote a second
+function to search page bodies.
+
+**`recon_help_search` already searches page bodies.** It had all along, twenty
+lines below the part I read. The function I wrote was a worse copy of one that
+existed — worse because it truncated a long title where the original *skips*
+one, and the original's comment says exactly why that matters. It is out again.
+
+The real reason is the line I had not read:
+
+```c
+/* Skipped rather than cut: a title cut to fit would be handed to
+ * recon_help_show_topic, which looks it up by exact text. */
+if (strlen(title) >= RECON_HELP_TITLE_MAX) {
+    continue;
+}
+```
+
+That is right, and it is what a buffer of 64 did to a change log whose headings
+had grown past it. **Eleven of a hundred and fifteen help pages could not be
+returned by any search** — not the Start menu's, not `help`, not `errors`. They
+were in Help, readable, listed. Nothing anywhere reported that they had gone
+missing from search, because from the search's side there was nothing to
+report: it skipped them and returned what was left.
+
+The limit is 96 now, measured against the longest title that exists (71 bytes),
+and `scripts/check-help-titles.sh` holds the number against what
+`make-help.sh` generates. The next long heading is a red check rather than
+another page quietly going.
+
+### And that check counted the wrong thing first
+
+It measured 69 where `strlen` measures 71. The headings use an em dash: one
+character, three bytes. A check for a byte limit that counts characters passes
+two bytes before the thing it is checking for — **the same shape as the bug it
+exists to catch, one level up.** `LC_ALL=C` and it counts bytes.
+
+### The two ways the first boot can fail that nothing had run
+
+Six of the desktop program's eight exit codes were checked. The two that were
+not are 25, no panel, and **26, no font** — which is the one I have told the
+kernel session to expect on the first boot of the volume copy, because the
+medium writes fonts to the ESP and nothing copies them onto the volume.
+
+A number I have put in somebody else's plan should be a number something runs.
+
+Getting 26 took one more thing than it looked: `recon_font_system` keeps every
+size it has ever loaded for the life of the process, so the first version of
+the check handed in a bad font and got back the one an earlier test had cached
+at that size — and reported that the desktop drew fine with no font. On a real
+boot the process is new and the cache is empty, so the check starts there.
+
+### Answering the kernel session, and correcting it an hour later
+
+`docs/SIGNALS.md` carries the reply to their question of the 16th — which
+sources the volume copy is made of, in what order, and the font.
+
+The answer to the first two is that the question has the wrong shape: hand the
+linker every source that builds freestanding, pass `--gc-sections`, and it
+chooses. 161,504 bytes, zero undefined symbols with `stat` stubbed. A
+hand-written list would be a second thing to keep in step with the code.
+
+I tried three ways to say *which* of the sources end up in the binary and
+reported the attempt rather than a number: grepping the map said 70 of 70,
+because a map names every object it was handed; comparing symbol names said 45,
+because every one of these files defines a static `be16`; counting kept
+sections said `recon_fonts.c` was out of a program that calls
+`recon_font_system`. Three checks that could not fail.
+
+**And then I corrected the font paragraph an hour after publishing it.** I said
+the desktop reads fonts through `RECON_DIR_FONTS`. It does not — that is the
+Control Panel's font manager, and the desktop never calls it. The desktop opens
+a hardcoded list in `src/recon_ui.c` with `fopen`. The conclusion held; the
+mechanism under it was wrong, and they were about to wire against it.
+
+---
+
 ## v0.4.66 — asking the whole tree what it knows and does not do
 
 v0.4.65 found `required` by hand: listing the members of one struct and asking

@@ -1,3 +1,2 @@
-Connections that carry data, with a rule about which programs may open
-one. Screen capture on Print Screen. Installing and removing programs.
-Wallpapers the system draws for itself.
+All Programs at the foot of the Start menu lists everything installed. The
+column above it is what this account opens most.

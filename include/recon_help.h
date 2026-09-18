@@ -99,7 +99,25 @@ bool recon_help_topic_exists(const char *title);
  * cut, because a truncated title handed back would be asked for again by
  * recon_help_show_topic and would not be found.
  */
-#define RECON_HELP_TITLE_MAX 64
+/*
+ * The longest help title this will carry.
+ *
+ * Ninety-six, and the number is measured rather than chosen. It was 64, and
+ * the longest title the change log generates is 71 bytes -- so four pages were
+ * cut wherever a list of titles was shown, including in the Start menu's
+ * search.
+ *
+ * A cut title is not a cosmetic fault here. It is what a caller hands to
+ * `recon_help_show_topic`, and a title cut in the middle matches no page -- so
+ * the answer to "which page is this on" named a page that could not then be
+ * opened. Surfaced by `errors <code>` in v0.4.67, and it had been true of
+ * `help <word>` for as long as the change log has had long headings.
+ *
+ * `scripts/check-help-titles.sh` holds the number against what
+ * `make-help.sh` actually generates, so the next long heading is a failing
+ * check rather than another cut title.
+ */
+#define RECON_HELP_TITLE_MAX 96
 
 /*
  * Which topics mention this, by title, without opening Help.

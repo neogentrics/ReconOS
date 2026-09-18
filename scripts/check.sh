@@ -287,6 +287,18 @@ if ! "$REPO_DIR/scripts/check-truncation.sh"; then
     exit 1
 fi
 
+# --- and that a help page can still be found ---
+#
+# A title longer than the buffer the searches carry it in is skipped rather
+# than cut -- correctly, because a cut title names a page that cannot be
+# opened. The cost is that the page vanishes from every search while staying
+# in Help, which nothing reports. Eleven of a hundred and fifteen had.
+echo
+echo "Checking that every help title fits the buffer searches carry it in"
+if ! "$REPO_DIR/scripts/check-help-titles.sh"; then
+    exit 1
+fi
+
 # --- and every error code can actually be produced ---
 #
 # A code with no caller is documented, listed by `errors`, lookupable -- and

@@ -314,6 +314,61 @@ static void test_every_way_it_can_fail(void)
 	check(recon_desktop_run(NULL) == 27, "and no machine at all: 27");
 
 	/*
+	 * 26, and it is the one to get right.
+	 *
+	 * The desktop opens its font with `fopen` down a hardcoded list in
+	 * `src/recon_ui.c` whose first entry is `/System/Fonts/Sans.ttf`, and
+	 * `RECONOS_FONT` overrides the lot. Pointing it at something that is
+	 * not a font is the only way to make the search fail on a build machine
+	 * that has DejaVu installed -- and it is the same failure a ReconOS
+	 * volume with no font on it produces, reached from the other side.
+	 *
+	 * **This is the code I have told the kernel session to expect on the
+	 * first boot**, because the medium writes its fonts to the ESP at
+	 * `/reconos/fonts/` and nothing copies them onto the volume. A number I
+	 * have put in somebody else's plan should be a number something runs.
+	 */
+	fake_reset();
+	setenv("RECONOS_FONT", "/dev/null", 1);
+
+	/*
+	 * The cache emptied first, and that is the finding rather than a
+	 * detail. `recon_font_system` keeps every size it has ever loaded for
+	 * the life of the process -- so the first version of this check passed
+	 * a bad font in and got back the one `test_it_runs` had already cached
+	 * at size 14, and reported that the desktop drew fine with no font.
+	 *
+	 * On a real boot the process is new and the cache is empty, so the
+	 * check has to start there to be about the same thing.
+	 */
+	recon_font_system_finish();
+	check(run() == 26, "no font it can read: 26");
+	unsetenv("RECONOS_FONT");
+	recon_font_system_finish();
+
+	/*
+	 * --- 25 is not checked, and finding out why was worth the attempt ---
+	 *
+	 * `recon_panel_on_screen` returns NULL four ways. Three of them --
+	 * a NULL pointer, a width or height of zero, a pitch under a row --
+	 * are all caught *upstream* by the checks that produce 22 and 24, so
+	 * the desktop can never reach the panel with any of them. **The fourth
+	 * is `calloc` failing**, and that is the only way to 25.
+	 *
+	 * Asking for it means a screen too big to allocate a panel for, and a
+	 * screen that big makes the sanitizers abort on the allocation rather
+	 * than let it fail -- correctly: an allocation of four terabytes is a
+	 * fault whatever the caller meant by it. Tuning the number until ASan
+	 * tolerated it would make this a test about ASan's threshold.
+	 *
+	 * So 25 stays unexercised, and what is written down instead is that it
+	 * is unreachable except under memory exhaustion. That is a fact about
+	 * the code rather than a gap in this file, and it is the kind of thing
+	 * somebody reading the exit table should know before spending a boot
+	 * looking for it.
+	 */
+
+	/*
 	 * A table with a hole in it. Every entry is called, so a NULL is a
 	 * crash rather than a failure -- which is why it is checked once at
 	 * the top rather than at each call site.
