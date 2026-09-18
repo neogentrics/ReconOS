@@ -16,7 +16,7 @@ git show origin/graphics:docs/SIGNALS.md
 This track merges into **`kernel`**, not `main`: it is kernel code, and the
 kernel session verifies it against the full matrix first.
 
-**`VERSION` in `kernel/Makefile` reads 0.3.5 in this branch**, which is a
+**`VERSION` in `kernel/Makefile` reads 0.3.7 in this branch**, which is a
 departure from the rule that the merging session owns it. Joshua set the
 direction and told this session to apply it; see the version section below for
 the arithmetic. Override it if the merged tree wants otherwise.
@@ -293,24 +293,47 @@ Correcting a guess while I am here: those RTL8168s offer **both MSI and MSI-X**
 not the device `arch/x86_64/msi.c` is waiting for when it says plain MSI "goes
 in beside the first device that needs it" — that slot is still unclaimed.
 
-### Four entries are open and they are yours, not mine
+### Two entries are open and they are yours — down from four
 
-Each is an interface decision rather than a driver problem, which is why none
-of them was fixed here:
+**NW-003 and NW-008 turned out to be mine and are closed.** An earlier version
+of this signal handed you both, on the grounds that they were interface
+decisions rather than driver faults. That was half right and I took them back:
+both were in `netdev.c`, which this branch was already changing, and both were
+the same fault twice — a member of an interface that one implementation could
+not make mean anything.
+
+- **NW-003** — `net_device.link` was written once by virtio-net as a constant
+  `true` and read by nothing. `netdev_route` consults it now on both the
+  unicast and broadcast paths, and `net_bring_up` reports *"has no cable"*
+  rather than spending DHCP's timeout and reporting the wrong problem.
+  `netdev_register` defaults it true, because three test devices in this tree
+  never set it.
+- **NW-008** — `enable_interrupts` was declared, documented, and called by
+  nothing. `netdev_register` calls it now, **after** the device is in the
+  table, and both drivers claim their vector before registering so the hook has
+  something to arm. The member was not deleted: it is the right idea with a
+  missing call site.
+
+  **It is worth nothing on this rig yet and the boot says so** —
+  `interrupts : 1 card(s) can raise one, 2 cannot and are polled`. Both real
+  drivers return false because they can get no vector. The only implementation
+  that returns true is the self-test's, which is why that test does not accept
+  false as proof.
+
+**These two are still yours**, and both for reasons this branch measured rather
+than assumed:
 
 - **NW-004** — network cards are bound from `arch/*/storage.c`, once per
-  architecture. A driver registry would fix it; building one to hold three
+  architecture. A driver registry would fix it; building one to hold four
   drivers would be an interface designed before anything measured it.
 - **NW-005** — a PCI device with no MSI-X can be given **no interrupt at all**.
-  The interrupt-line and interrupt-pin registers at config 0x3C/0x3D are never
-  read anywhere in the kernel and nothing routes a PCI pin to a legacy line.
-  The fallback to polling is silent and works, which is what makes it bad.
-- **NW-008** — `enable_interrupts` is declared in `net_device_ops`, documented
-  in a paragraph, and **called by nothing**. Not removed: it is the right idea
-  with a missing call site, and wiring it up is yours.
-- **NW-003** — half fixed. Both drivers now read the link out of the silicon,
-  and nothing above them consults `net_device.link`, so a machine whose cable
-  is pulled still believes it has a route.
+  Config 0x3C and 0x3D are never read anywhere and nothing routes a PCI pin to
+  a line. Measured on the rig: the emulated Intel offers neither MSI nor MSI-X,
+  so it is not the device `arch/x86_64/msi.c` is waiting for either. Legacy
+  INTx routing is what would fix it and that is the interrupt layer.
+
+  **NW-008's fix is what makes this one visible.** There is a working hook now
+  with nothing to hang on it.
 
 NW-007 stood alongside these four when this signal was first written, as the
 one that was nobody's fault. **It is closed** --
@@ -321,18 +344,18 @@ See the section on the two tests below.
 
 ## Three things you need to do on merge
 
-**1. The version is set, and it is `0.3.5` rather than the `0.4.0` I first
+**1. The version is set, and it is `0.3.7` rather than the `0.4.0` I first
 asked for.** Joshua's call, and he was right to push back on it.
 
-`kernel/Makefile` reads **0.3.5** in this branch. That is a departure from the
+`kernel/Makefile` reads **0.3.7** in this branch. That is a departure from the
 convention that the merging session owns the number, and it is on his explicit
 instruction rather than this session deciding to reach for it — override it
 freely if the merged tree wants something else.
 
-**Five patches, one per fault fixed**, which is the arithmetic this file has
-followed since 0.1.x: NW-001, NW-002, NW-006, NW-007, NW-009. The other four
-entries are open and are interface decisions rather than driver faults, so they
-buy nothing.
+**Seven patches, one per fault fixed**, which is the arithmetic this file has
+followed since 0.1.x: NW-001, NW-002, NW-006, NW-007, NW-009, and then NW-003
+and NW-008 once those turned out to be mine rather than yours. Two entries
+remain open and are genuinely interface decisions, so they buy nothing.
 
 **Why not a minor, since a second display backend was one.** By the letter of
 the rule — *an update adds something it did not have* — this looks like the same
