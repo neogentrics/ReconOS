@@ -13,6 +13,89 @@ patch.
 
 ---
 
+## Status: ready to read, 17 September 2026 — sixth signal
+
+Gen9 modesetting, started. **What is here is the half that can be checked; the
+half that cannot is named step by step rather than attempted.**
+
+---
+
+## Every number in it came from the source, and that is not a formality
+
+`core/intel_modeset.c` is the Gen9 register map and the arithmetic a modeset
+rests on. The offsets are Linux v6.6's `i915_reg.h` and
+`skl_universal_plane.c`, fetched and **read** — and the first attempt asked a
+model to summarise that header instead, which answered:
+
+```
+_TRANSACONF = 0x60008        <- wrong
+_TRANS_HSYNC_A = 0x60008     <- and it gave this too, in the same answer
+```
+
+Two registers at one address is a contradiction on its face. The real value is
+**0x70008**. Writing the pipe-enable bit into the horizontal sync register, on
+the one machine in this project with a Gen9 in it and no serial port, is exactly
+the failure the rules here exist to prevent — and it was one `grep` from
+happening.
+
+**It has no `GX-` number**, deliberately: it never entered the tree, so it is
+not a fault in ReconOS. It is recorded in the file where somebody adding the
+next register will read it, and the self-test asserts against it — the timing
+block is 0x6xxxx, the pipe and plane block is 0x7xxxx, nothing may be in the
+wrong one, and no two registers may share an address. Sabotaged with the exact
+mistake, it says so twice:
+
+```
+intel-modeset: TRANSCONF is at 60008, which is the timing block and should be the pipe one
+intel-modeset: TRANS_HSYNC and TRANSCONF are both 60008
+  a mode in numbers  : FAIL
+```
+
+## What is testable, and is tested
+
+The arithmetic is pure — functions of two integers with no hardware in them —
+so it runs in the matrix on machines with no Intel display at all. **Every
+active and total in this engine is stored as one less than itself**, which is
+the single most likely thing to be wrong and the thing nothing catches: a pipe
+told it is 1921 pixels wide accepts it, and the panel looks almost right.
+
+Known answers computed from the field layouts and then verified independently,
+not by running the code and writing down what it said. Two vectors are Linux's
+own 640x480 test pattern, checkable outside this tree. Three sabotages — the
+minus-one omitted, the stride left in bytes, the register blocks confused — all
+caught.
+
+One finding fell out worth passing on: **1366 x 4 = 5464 is not a multiple of
+64**, and a linear plane's stride is counted in 64-byte chunks in a 12-bit
+field. So a 1366-wide panel — very common — has a natural pitch that cannot be
+expressed at all, and a driver must pad it to 5504. `intel_plane_stride`
+refuses rather than rounding.
+
+## What is not here, named rather than absent
+
+`intel_modeset_read` reads the mode out of the running hardware and **writes
+nothing**, which is what makes it the right first thing to run on a machine that
+cannot report what happened. It is self-validating: firmware lit the panel and
+the handoff carried its geometry, so there are two independent statements about
+one screen and this kernel has never compared them. Agreement is evidence the
+register map is right about that silicon. Disagreement is printed as
+disagreement, with both numbers and **no verdict** — saying which is wrong would
+be a guess, and a conclusion would stop somebody looking.
+
+Setting a mode is not here. It needs the power wells, a DPLL that must lock, the
+DDI, link training over AUX, eDP panel power sequencing, and Skylake watermarks
+whose failure is corruption rather than an error. The ten steps are written out
+in order in that file, with 3, 4 and 9 marked as the ones this file can already
+compute.
+
+**There is deliberately no `set_mode` function at all, not even one that
+refuses.** A null `display_ops.set_mode` is how this interface already says
+"cannot be told a mode", clearly and once; a function returning false would send
+`display_init` down its nine-rung ladder printing nine refusals, which is the
+fault GX-006 fixed. The absence is the statement.
+
+---
+
 ## Status: ready to read, 17 September 2026 — fifth signal
 
 Branch `graphics`, on `origin/kernel` 0.2.49. The fourth signal below is

@@ -992,6 +992,24 @@ check_for "13 model(s) known, recognition and refusal both checked" \
 	"  PVH, the graphics cards it can recognise" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
 
+# The arithmetic a Gen9 modeset would rest on, checked on machines that have
+# no Gen9 -- which is every machine here.
+#
+# Every active and total in that display engine is stored as one *less* than
+# the number it describes. A pipe told it is 1921 pixels wide accepts it and
+# the panel looks almost right, so nothing catches the omission but a known
+# answer. The vectors are computed from the field layouts, and two of them are
+# Linux's own 640x480 test pattern, so they can be checked outside this tree.
+#
+# It also asserts that the two register blocks have not been confused -- the
+# transcoder timings live at 0x6xxxx and the pipe and its planes at 0x7xxxx.
+# That is not hypothetical tidiness: the first draft of this map put TRANSCONF
+# at 0x60008, which is the horizontal sync register, and the pipe-enable bit
+# would have gone into it on a laptop with no serial port.
+check_for "the register map and its arithmetic are checked" \
+	"  PVH, a mode expressed as numbers" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
 # Two display adapters in one machine, and the report naming both.
 #
 # QEMU with `-device virtio-gpu-pci` and no `-vga none` gives a Bochs adapter

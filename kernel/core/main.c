@@ -362,6 +362,15 @@ void kmain(void)
 	kprintf("  the graphics cards it knows : %s\n",
 		amd_display_self_test() ? "pass" : "FAIL");
 
+	/* The arithmetic a Gen9 modeset rests on, checked on machines that have
+	 * no Gen9 -- which is all of them. Every field in that engine stores one
+	 * less than the number it describes, and a pipe told it is 1921 pixels
+	 * wide accepts it: nothing but a known answer catches that. It also
+	 * asserts that the two register blocks have not been confused, which is
+	 * the mistake that nearly shipped. */
+	kprintf("  a mode in numbers  : %s\n",
+		intel_modeset_self_test() ? "pass" : "FAIL");
+
 	/* After the sweep above, which sets seven modes in turn and moves the
 	 * framebuffer each time. A program's mapping is of one physical address;
 	 * taking it before the last mode change would be a mapping of wherever

@@ -57,6 +57,7 @@
 #ifndef RECON_KERNEL_INTEL_DISPLAY_H
 #define RECON_KERNEL_INTEL_DISPLAY_H
 
+#include <recon/kernel/boot.h>
 #include <recon/kernel/types.h>
 
 struct pci_device;
@@ -96,6 +97,40 @@ bool intel_display_attach(const struct pci_device *d);
 /* What was found, and what was seen and declined. Prints nothing on a machine
  * with no Intel graphics, which is every machine in the verification matrix. */
 void intel_display_print_summary(void);
+
+/* --- the register map, in core/intel_modeset.c ---------------------------
+ *
+ * A mode expressed as the numbers Gen9's registers take. Pure functions of
+ * integers, no hardware in them, so the arithmetic that a modeset would rest on
+ * is checked by known answers on every boot in the matrix -- on machines with
+ * no Intel display at all, which is all of them.
+ *
+ * Every field in this engine stores one *less* than the number it describes,
+ * which is the thing most likely to be wrong and the thing nothing catches: a
+ * pipe told it is 1921 pixels wide accepts it, and the panel looks almost
+ * right. */
+u32 intel_pipe_srcsz(u32 width, u32 height);
+u32 intel_plane_size(u32 width, u32 height);
+u32 intel_trans_timing(u32 total, u32 active);
+u32 intel_plane_ctl_bgra(void);
+
+/* The plane stride, in the sixty-four byte chunks the register counts, or
+ * **zero for a pitch it cannot express**. Checked rather than rounded: 1366 is
+ * a very common panel width and 1366 * 4 is not a multiple of 64, so its
+ * natural pitch has no representation here and a driver has to pad. */
+u32 intel_plane_stride(u32 pitch_bytes);
+
+/* Read the mode the hardware is actually in, and compare it with the one
+ * firmware handed over.
+ *
+ * Writes nothing, which is what makes it safe to be the first thing run on a
+ * machine that cannot report what happened. Self-validating: agreement between
+ * the pipe registers and the handoff is evidence the register map is right
+ * about this silicon, and that is a great deal to learn from a read. */
+bool intel_modeset_read(volatile u8 *mmio, const struct framebuffer *firmware);
+
+/* That the register map and its arithmetic say what they mean. */
+bool intel_modeset_self_test(void);
 
 /* That the recognition table says what it means, including what it refuses. */
 bool intel_display_self_test(void);
