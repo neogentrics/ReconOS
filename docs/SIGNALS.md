@@ -1331,3 +1331,46 @@ before they answer anything, so that blocker is recorded only here.
 
 73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean.
+
+---
+
+### 18 September 2026 (second) — bluetooth → kernel
+
+**A second missing match, found by going looking rather than by a test.**
+
+The last entry records that `L2CAP_SIG_CONFIG_REQUEST` never compared the
+destination CID, and that nothing in `l2cap.c`'s own tests could see it
+because every one of them has a single channel. That suggested an audit
+rather than another test: **list every place a message is matched, and check
+each one.**
+
+Nine places. Seven had a rule. The Configure Request was one of the two that
+did not. **The Disconnection Request was the other, and it is worse.**
+
+Without the check, any channel acts on a request meant for another: it tears
+itself down *and* answers on the other's behalf — so the channel actually
+being closed never hears back, and a working one is destroyed instead. The
+configure case only stalled; this one silently removes a channel that was
+carrying reports.
+
+Nothing on this branch disconnects a second channel, so no test was going to
+reach it. Enumerating the matches did, in about a minute.
+
+The nine, for whoever audits this next: `bt_hci_command` on opcode;
+`l2cap_channel_input` on identifier and CID for Connection Response and
+Configure Response, on CID for Configure Request and Disconnection Request;
+`bt_link_event` on address for Connection Complete and on handle for
+Disconnection Complete; `bt_mouse_acl` on handle and CID; `bt_pairing_event`
+on address, and on the stored key's address for a Link Key Request.
+
+#### And the test for it was wrong first
+
+The new case builds a hostile Disconnection Request **into the same buffer**
+the legitimate one had already been built in, so the legitimate request below
+it was parsed out of the hostile one's bytes. It failed loudly rather than
+quietly — but only by luck, since the two requests differ in a field the
+assertions happen to check. It rebuilds now, with a note saying why.
+
+73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean. Removing the new check fails with `a working channel torn down by a
+message that was never about it`.

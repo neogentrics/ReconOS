@@ -497,6 +497,25 @@ u32 l2cap_channel_input(struct l2cap_channel *c, const u8 *sig, u32 len,
 		if (s.length < 4)
 			return 0;
 
+		/* **The same omission as the Configure Request above, found
+		 * by going looking for it.**
+		 *
+		 * A Disconnection Request names the channel to close --
+		 * destination CID first, this side's. Without this check any
+		 * channel would act on a request meant for another: it would
+		 * tear itself down *and* answer on the other's behalf, so the
+		 * channel actually being closed never gets its response and
+		 * a working one is destroyed instead.
+		 *
+		 * That is worse than the configure case, which only stalled.
+		 * It was found by listing every place a message is matched --
+		 * five had a rule, two did not -- rather than by a test,
+		 * because nothing here disconnects a second channel. */
+		if (get_le16(s.data) != c->scid) {
+			c->wrong_channel++;
+			return 0;
+		}
+
 		/* Echoed back as sent: destination then source, from the
 		 * requester's point of view. */
 		body[0] = s.data[0];
@@ -1138,6 +1157,52 @@ bool l2cap_self_test(void)
 		CONN_RSP(0x01, 0x0041, 0x0040, L2CAP_CONN_SUCCESS);
 		l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
 
+		{
+			u8 body[4];
+
+			put_le16(body, 0x0040);
+			put_le16(body + 2, 0x0041);
+			n = l2cap_signal_build(rx,
+					       L2CAP_SIG_DISCONNECT_REQUEST,
+					       0x30, body, sizeof(body));
+		}
+
+		/* **First, one for a different channel.** It must not close
+		 * this one and must not be answered -- answering on another
+		 * channel's behalf means the channel actually being closed
+		 * never hears back, while this one is torn down instead. */
+		{
+			u8 other[4];
+			u64 before = ch.wrong_channel;
+			u32 m;
+
+			put_le16(other, 0x0099);	/* not this channel */
+			put_le16(other + 2, 0x0041);
+			m = l2cap_signal_build(rx,
+					       L2CAP_SIG_DISCONNECT_REQUEST,
+					       0x2F, other, sizeof(other));
+
+			if (l2cap_channel_input(&ch, rx, m, tx, sizeof(tx)) ||
+			    ch.wrong_channel != before + 1) {
+				kputs("  l2cap: a Disconnection Request for "
+				      "another channel was answered\n");
+				ok = false;
+			}
+
+			if (ch.state == L2CAP_CH_CLOSED) {
+				kputs("  l2cap: a Disconnection Request for "
+				      "another channel closed this one -- a "
+				      "working channel torn down by a message "
+				      "that was never about it\n");
+				ok = false;
+			}
+		}
+
+		/* Rebuilt, because the block above wrote its own request into
+		 * the same buffer. The first version of this did not, and the
+		 * legitimate request below was parsed out of the bytes the
+		 * hostile one had left there -- which failed loudly rather
+		 * than quietly, but only by luck. */
 		{
 			u8 body[4];
 
