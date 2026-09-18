@@ -295,7 +295,27 @@
 #
 # Neither is a capability, so neither moves the minor. 0.4.0 stands as the log
 # port's, and these are two fixes laid on top of it.
-VERSION := 0.4.2
+#
+# **0.4.3 on 18 September 2026: NW-012, and it is in `scripts/` on purpose.**
+#
+# `make-issues.py` asked `gh` for 500 issues and the tracker holds 408. Newest
+# first, so the day it passes 500 the listing loses its oldest rows, and an
+# entry whose issue is not in the listing looks like an entry never filed.
+# Measured: against a truncated listing the script proposes creating **318
+# issues that already exist**.
+#
+# **The objection to raising this line for a `scripts/` change was made at
+# KF-200 and refused, and the refusal applies unchanged.** Nothing here alters
+# a kernel instruction, and raising it rebuilds the whole tree — including the
+# tree a matrix had just been run against. That was true then and it is true
+# now: this bump cost a matrix run that was twenty-three minutes in, which was
+# killed rather than allowed to certify a tree that was about to change.
+#
+# Letting it finish and bumping afterwards was the tempting option and it is
+# the wrong one, because **the tree that gets pushed has to be the tree the
+# matrix ran on.** A green matrix for a tree nobody is pushing is not evidence
+# about the tree they are.
+VERSION := 0.4.3
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
