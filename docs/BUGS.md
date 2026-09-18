@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-17, and each entry says why. They are listed because a register that only
+15, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -210,10 +210,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-232** — Three timers did not fire, once, on one path of twenty-eight
 - **KF-237** — A power cut inside a rename left no valid superblock, once
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
-- **NW-003** — Half fixed: the link state is read from the card now, and still nothing consults it
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
-- **NW-008** — `enable_interrupts` is declared and documented in `net_device_ops` and called by nothing
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
 - **KF-251** — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
@@ -286,7 +284,7 @@ turned out to be true.
   `netdev_register` refuses a duplicate rather than accepting it. Both halves
   are asserted, and both assertions were broken on purpose and seen to fail.
 
-### NW-003 — Half fixed — A field for what the cable is doing that nothing ever read
+### NW-003 — A field for what the cable is doing that nothing ever read
 
 [#521](https://github.com/neogentrics/ReconOS/issues/521)
 
@@ -301,19 +299,36 @@ turned out to be true.
   virtio-net, and for virtio-net the honest value is a constant. A card with a
   PHY has a link that genuinely comes and goes, and "the device is up" and
   "there is a cable in it" are two different facts about a real machine.
-- **Status:** half fixed, and half reads as open here — the same call KF-127
-  makes about itself, for the same reason.
+- **Fixed in** kernel 0.3.5 on `network`, in two halves a day apart.
 
-  The half that is done: both new drivers read the real state out of the
-  silicon, report it at attach in either direction, and report every change. So
-  the field now holds a fact.
+  **The writing half:** both new drivers read the real state out of the silicon,
+  report it at attach in either direction, and report every change. So the field
+  holds a fact.
 
-  The half that is not: **nothing reads it.** A machine whose cable is pulled
-  still believes it has a route, still answers `netdev_route`, and still
-  reports the device up. Making `link` mean something to the layer above is a
-  routing decision and belongs to whoever owns routing — and writing a value
-  nobody consults is exactly the state this entry was opened about, moved one
-  step along rather than closed.
+  **The reading half:** `netdev_route` now skips a device whose cable is out, on
+  both the unicast and the broadcast path, and `net_bring_up` says *"`eth0` has
+  no cable; not asking for an address"* instead of spending two and a half
+  seconds on DHCP and reporting that nothing offered one. Those are different
+  problems — a wire somebody can plug in, and a server somebody has to go and
+  look at — and reporting the wrong one of them after a timeout reads like an
+  answer.
+
+  **The default had to change with it.** `netdev_register` now sets `link` true,
+  because three devices in this tree never set it and all three are test devices
+  with no cable to have an opinion about; defaulting to false would have made
+  them unroutable and taken the stack self-test down. True is also the honest
+  default for a driver that cannot read a PHY: *"I do not know"* and *"there is
+  no cable"* are different answers.
+- **And the test for it could not fail, twice over.** The unicast assertion was
+  sound. The broadcast one was not: the broadcast path returns the *first*
+  qualifying device, the test's device registers last, so on a machine with a
+  real card the answer was that card no matter what the test did. Removing the
+  link check from the broadcast path on purpose left the run green. It puts
+  every other device down for the length of that assertion now, and carries a
+  control that fails if broadcasts route nowhere at all.
+
+  Worth recording because of where it happened: directly beneath a comment in
+  the same file about checks that cannot fail.
 
 ### NW-004 — Open — Network cards are bound from a file called storage.c
 
@@ -558,7 +573,7 @@ turned out to be true.
   one and deleting them would leave the register pointing at nothing. The fault
   was the path, not the outcome.
 
-### NW-008 — A hook in the device interface that nothing has ever called
+### NW-008 — A hook in the device interface that nothing ever called
 
 [#526](https://github.com/neogentrics/ReconOS/issues/526)
 
@@ -579,7 +594,28 @@ turned out to be true.
   driver's side of the same wire. Deleting it would throw away the right idea
   because of a missing call; wiring it up is a device-layer decision. Both new
   drivers leave it null and arm their own interrupts at attach, and say so.
-- **Status:** open. Left so deliberately, for the kernel session.
+- **Fixed in** kernel 0.3.7 on `network`. `netdev_register` calls it, after the
+  device is in the table and before the driver's attach returns. Both card
+  drivers implement it, and both now claim their interrupt vector *before*
+  registering so the hook has something to arm.
+
+  **The ordering is the reason the hook is worth having** rather than each
+  driver arming its own mask at the end of attach: an interrupt arriving the
+  instant the mask opens asks the worker thread to poll every registered
+  device, and a card that armed itself first is not on that list yet. Asserted
+  separately from "was it called at all", and broken separately to prove it —
+  moving the registration after the call makes the run red on its own.
+
+  Deleting the member was the other option and it was refused. It is the right
+  idea with a missing call site; throwing it away because nobody had wired it
+  up would have lost the design and kept the problem.
+- **What it is worth, on this rig, is nothing yet** — and that is worth saying
+  rather than leaving the fix looking bigger than it is. Both real drivers
+  return **false** from it, because `arch_pci_request_interrupt` can give them
+  no vector (NW-005). The only implementation in the tree that returns true is
+  the self-test's, which is why the test does not accept false as proof. The
+  boot now says so outright: `interrupts : 1 card(s) can raise one, 2 cannot
+  and are polled`.
 
   This is also the entry that nearly did not get written. The first version of
   NW-001's test **passed with `netdev_wake` gutted** — it measured whether the

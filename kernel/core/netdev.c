@@ -70,6 +70,13 @@ static u64 rx_serviced;
  * only number that tells the two apart. */
 static u64 rx_wakes;
 
+/* How many registered devices said they could raise an interrupt, and how many
+ * said they could not. Both printed: a machine where every card is polled is a
+ * machine with a whole class of driver path never exercised, and that is worth
+ * seeing rather than inferring from the absence of a line. */
+static unsigned interrupt_capable;
+static unsigned interrupt_refused;
+
 /* How many registrations were refused for a name already in use, and how many
  * of those the self-test asked for on purpose. Both, for the reason the
  * interrupt layer keeps both: a number that is never zero stops being read,
@@ -145,6 +152,21 @@ struct net_device *netdev_register(const char *name,
 	d->mtu = NET_MTU;
 	d->up = true;
 
+	/* Connected until a driver says otherwise.
+	 *
+	 * `link` is now consulted by `netdev_route`, so the default decides what
+	 * happens to every device whose driver never sets it -- and three of
+	 * those exist in this tree, all of them test devices with no cable to
+	 * have an opinion about. Defaulting to false would make them unroutable
+	 * and take the whole stack self-test down with them.
+	 *
+	 * True is also the honest default for a real driver that cannot read a
+	 * PHY: "I do not know" and "there is no cable" are different answers, and
+	 * routing round a card that is actually fine is worse than trying and
+	 * failing. A driver that *can* tell overwrites this at attach and on
+	 * every change. */
+	d->link = true;
+
 	if (mac)
 		d->mac = *mac;
 
@@ -154,6 +176,33 @@ struct net_device *netdev_register(const char *name,
 	 * would not survive a suspend is generated from what is actually in
 	 * the machine. */
 	suspend_declare(d->name, 0);
+
+	/* And now the card may interrupt, if it can.
+	 *
+	 * This call is NW-008. `enable_interrupts` has been declared in
+	 * `net_device_ops` with a paragraph of comment explaining when a driver
+	 * should implement it, and **nothing in the kernel called it** -- there
+	 * was no `ops->enable_interrupts` anywhere. All three implementations
+	 * were null, so a missing call site and a correctly-skipped optional
+	 * hook looked identical from every angle except grepping for the call.
+	 *
+	 * **Here rather than at the end of a driver's attach**, and the ordering
+	 * is the reason the hook is worth having at all: the device is in the
+	 * table before anything is allowed to interrupt about it. A driver that
+	 * armed its own mask first can take an interrupt for a device the stack
+	 * has not been told about, and the handler's first act is to ask the
+	 * worker thread to go and poll every registered device -- which is a
+	 * list this one is not on yet.
+	 *
+	 * False is not a failure. It means the card cannot, and the polling path
+	 * carries it; `netdev_service` calls every device's `poll` whether or not
+	 * it interrupts, for exactly this reason. */
+	if (d->ops && d->ops->enable_interrupts) {
+		if (d->ops->enable_interrupts(d))
+			interrupt_capable++;
+		else
+			interrupt_refused++;
+	}
 
 	return d;
 }
@@ -244,7 +293,7 @@ struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop)
 	 * every test above configures its device by hand first. */
 	if (dst == IPV4_BROADCAST) {
 		for (i = 0; i < device_count; i++) {
-			if (!devices[i].up)
+			if (!devices[i].up || !devices[i].link)
 				continue;
 
 			if (next_hop)
@@ -259,7 +308,21 @@ struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop)
 	for (i = 0; i < device_count; i++) {
 		struct net_device *d = &devices[i];
 
-		if (!d->up || !d->ip)
+		/* `link` as well as `up`, and they are different questions.
+		 *
+		 * `up` is whether the kernel is willing to use the card; `link`
+		 * is whether there is a cable in it. A card that is up with
+		 * nothing plugged in will accept a frame, count it as sent, and
+		 * drop it on the floor -- so routing to it is how a machine
+		 * with two cards sends everything out of the dead one.
+		 *
+		 * This field existed and nothing read it, which is NW-003. It
+		 * was written once by virtio-net as a constant `true`, which is
+		 * the honest value for a card that has no cable to have an
+		 * opinion about -- and that is exactly why the gap was
+		 * invisible: with one driver, the field could not disagree with
+		 * anything. */
+		if (!d->up || !d->link || !d->ip)
 			continue;
 
 		/* On the same wire: the frame goes straight to the host. */
@@ -478,6 +541,11 @@ void netdev_print_summary(void)
 	 * whether any were real. A refusal the test asked for is not news; one
 	 * it did not is two cards claiming one name, which is NW-002 coming
 	 * back. */
+	if (interrupt_capable || interrupt_refused)
+		kprintf("  interrupts   : %u card(s) can raise one, %u cannot "
+			"and are polled\n",
+			interrupt_capable, interrupt_refused);
+
 	if (name_refusals) {
 		kprintf("  names        : %u refused as already taken",
 			(unsigned)name_refusals);

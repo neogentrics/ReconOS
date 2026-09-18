@@ -231,6 +231,216 @@ static bool wake_reaches_the_worker(void)
 	return ok;
 }
 
+/* --- NW-008: the hook that nothing called ---------------------------------
+ *
+ * `enable_interrupts` was declared in `net_device_ops`, documented in a
+ * paragraph explaining when a driver should implement it, and **called by
+ * nothing**. There was no `ops->enable_interrupts` anywhere in the kernel. All
+ * three implementations were null, so a missing call site and a correctly
+ * skipped optional hook looked identical from every angle except grepping for
+ * the call — which is what found it.
+ *
+ * It is called by `netdev_register` now, and this is what says so. The device
+ * below is the only implementation in the tree that returns **true**, which
+ * matters: both real drivers return false on a machine with no vector to give
+ * them, so on the verification rig a test that accepted false as proof would be
+ * proving nothing.
+ */
+static unsigned enables;
+static bool enable_answer;
+static struct net_device *enabled_with;
+static bool enabled_while_registered;
+
+static bool test_enable_interrupts(struct net_device *dev)
+{
+	enables++;
+	enabled_with = dev;
+
+	/* Asked **here**, inside the call, because that is the only moment the
+	 * question means anything. The first version of this test asked after
+	 * `netdev_register` had returned, where the device is always in the
+	 * table -- an assertion that could not fail, written into a file whose
+	 * subject is assertions that cannot fail. */
+	enabled_while_registered = netdev_by_name(dev->name) == dev;
+
+	return enable_answer;
+}
+
+static const struct net_device_ops enabling_ops = {
+	.transmit = test_transmit,
+	.enable_interrupts = test_enable_interrupts,
+	.poll = test_poll,
+};
+
+static bool the_enable_hook_is_called(void)
+{
+	static const struct mac_addr mac = { { 0x02, 0x4E, 0x57, 0, 0, 4 } };
+	struct net_device *d;
+	char name[NET_NAME_MAX];
+	unsigned before = enables;
+	bool ok = true;
+
+	if (!netdev_name("eth", name, sizeof(name)))
+		return false;
+
+	enable_answer = true;
+	enabled_with = NULL;
+	enabled_while_registered = false;
+
+	d = netdev_register(name, &enabling_ops, NULL, &mac);
+
+	if (!d) {
+		kputs("  nic: could not register a device to enable\n");
+		return false;
+	}
+
+	if (enables == before) {
+		kputs("  nic: enable_interrupts was never called -- a driver "
+		      "that implements it would sit there never being asked\n");
+		ok = false;
+	}
+
+	/* The device it was handed, not merely that something was called. A
+	 * hook invoked with the wrong device is a driver arming a card that is
+	 * not its own. */
+	if (enabled_with != d) {
+		kputs("  nic: enable_interrupts was called with a different "
+		      "device than the one being registered\n");
+		ok = false;
+	}
+
+	/* And it must be called **after** the device is in the table. The whole
+	 * reason the hook exists rather than each driver arming its own mask is
+	 * that an interrupt arriving the instant the mask opens asks the worker
+	 * thread to poll every registered device -- so the card had better be
+	 * on that list already. */
+	if (!enabled_while_registered) {
+		kputs("  nic: enable_interrupts ran before the device was in "
+		      "the table, so an interrupt could arrive for a card the "
+		      "stack cannot find\n");
+		ok = false;
+	}
+
+	netdev_forget_last();
+	return ok;
+}
+
+/* --- NW-003: a card with no cable is not a route ---------------------------
+ *
+ * `net_device.link` was carried for as long as this stack has existed and read
+ * by nothing. It could not be read usefully, either: the only driver that set
+ * it set it to a constant `true`, which is the honest value for a card with no
+ * cable to have an opinion about. **An interface with one implementation cannot
+ * disagree with itself**, and this field is the smallest possible example of
+ * that -- one boolean, written once, meaning nothing.
+ *
+ * It means something now: `netdev_route` skips a device whose cable is out.
+ * What that is worth is a machine with two cards sending out of the live one
+ * instead of the dead one, which is the whole reason the server has two.
+ */
+static bool a_dead_cable_is_not_a_route(void)
+{
+	static const struct mac_addr mac = { { 0x02, 0x4E, 0x57, 0, 0, 3 } };
+	struct net_device *d;
+	char name[NET_NAME_MAX];
+	ipv4_addr hop = 0;
+	bool ok = true;
+
+	if (!netdev_name("eth", name, sizeof(name)))
+		return false;
+
+	d = netdev_register(name, &test_ops, NULL, &mac);
+
+	if (!d) {
+		kputs("  nic: could not register a device to unplug\n");
+		return false;
+	}
+
+	/* On its own subnet, so routing has every reason to choose it. */
+	d->ip = IPV4(10, 90, 0, 2);
+	d->netmask = IPV4(255, 255, 255, 0);
+
+	if (netdev_route(IPV4(10, 90, 0, 9), &hop) != d) {
+		kputs("  nic: a device on the destination's own subnet was not "
+		      "chosen, so this test cannot say anything about the "
+		      "cable\n");
+		ok = false;
+	}
+
+	/* And now the cable comes out. Nothing else changes -- the device is
+	 * still up, still has an address, still owns the subnet. */
+	d->link = false;
+
+	if (netdev_route(IPV4(10, 90, 0, 9), &hop) == d) {
+		kputs("  nic: a card with no cable was still chosen to send "
+		      "through -- every frame would be counted as sent and "
+		      "dropped on the floor\n");
+		ok = false;
+	}
+
+	/* A broadcast too, which takes its own path through the router and had
+	 * its own copy of the check. DHCP is the caller that matters: asking for
+	 * an address down a cable that is not there is how a machine with two
+	 * cards ends up with none.
+	 *
+	 * **Every other device is put down for the length of this.** The
+	 * broadcast path returns the *first* device that qualifies, and this one
+	 * registered last -- so on a machine with a real card the answer is that
+	 * card whatever this test's device does, and the assertion passes
+	 * without ever consulting the thing it is about.
+	 *
+	 * That is not a hypothetical. The first version of this did not do it,
+	 * and the broadcast half of the check was removed on purpose and stayed
+	 * green. A check that cannot fail looks exactly like one that passes,
+	 * and it looked that way sitting directly underneath a comment saying
+	 * so. */
+	{
+		bool was_up[NET_MAX_DEVICES];
+		unsigned i, n = netdev_count();
+
+		for (i = 0; i < n; i++) {
+			struct net_device *o = netdev_at(i);
+
+			was_up[i] = o->up;
+			if (o != d)
+				o->up = false;
+		}
+
+		if (netdev_route(IPV4_BROADCAST, &hop)) {
+			kputs("  nic: a broadcast was routed out of a card "
+			      "with no cable, and it was the only card\n");
+			ok = false;
+		}
+
+		/* And the control: with the cable in, this device *is* the
+		 * answer. Without this the assertion above would also pass on a
+		 * machine where broadcasts route nowhere at all. */
+		d->link = true;
+
+		if (netdev_route(IPV4_BROADCAST, &hop) != d) {
+			kputs("  nic: the only card on the machine, with a "
+			      "cable in it, was not chosen for a broadcast\n");
+			ok = false;
+		}
+
+		d->link = false;
+
+		for (i = 0; i < n; i++)
+			netdev_at(i)->up = was_up[i];
+	}
+
+	d->link = true;
+
+	if (netdev_route(IPV4(10, 90, 0, 9), &hop) != d) {
+		kputs("  nic: plugging the cable back in did not make the "
+		      "card routable again\n");
+		ok = false;
+	}
+
+	netdev_forget_last();
+	return ok;
+}
+
 bool nic_self_test(void)
 {
 	bool ok = true;
@@ -239,6 +449,12 @@ bool nic_self_test(void)
 		ok = false;
 
 	if (!wake_reaches_the_worker())
+		ok = false;
+
+	if (!a_dead_cable_is_not_a_route())
+		ok = false;
+
+	if (!the_enable_hook_is_called())
 		ok = false;
 
 	/* And the Realtek's receive loop, which has no other way to be run at

@@ -721,21 +721,6 @@ static void start_card(struct r8169 *r)
 	w16(r, R_IMR, 0);
 }
 
-/* Opens the interrupt mask, and only when there is somewhere for one to go.
- *
- * A card that could not be given a vector is left with the mask shut and is
- * polled. That is a real difference in behaviour and not a tidy-up: masked, it
- * never asserts anything, so a machine with no message-signalled interrupts
- * runs this card correctly instead of hanging on a line nobody claimed. */
-static void arm_interrupts(struct r8169 *r)
-{
-	if (!r->interrupting)
-		return;
-
-	w16(r, R_ISR, 0xFFFF);
-	w16(r, R_IMR, INT_WANTED);
-}
-
 bool r8169_attach(const struct pci_device *d)
 {
 	struct r8169 *r;
@@ -869,6 +854,14 @@ bool r8169_attach(const struct pci_device *d)
 		return false;
 	}
 
+	/* The vector before the registration, because `netdev_register` is
+	 * what opens the mask -- through `enable_interrupts` -- and it can
+	 * only do that if this driver already knows whether it has one.
+	 * NW-008. */
+	r->interrupting = arch_pci_request_interrupt(&r->pci, 0,
+						     r8169_interrupt, r,
+						     "r8169");
+
 	r->ndev = netdev_register(name, &r8169_ops, r, &mac);
 
 	if (!r->ndev) {
@@ -880,18 +873,6 @@ bool r8169_attach(const struct pci_device *d)
 	 * card with a cable in it are two different facts, and this kernel has
 	 * only ever had a field for the second that nothing wrote -- NW-003. */
 	update_link(r);
-
-	/* And an interrupt, if this machine can deliver one. False is not a
-	 * failure: it means the card signals the old way or the machine has no
-	 * message-signalled interrupts, and the polling path above is what
-	 * happens then. Which one is in force is printed, because a driver
-	 * quietly polling when it believes it is interrupt-driven is the
-	 * failure this whole file was written to find. */
-	r->interrupting = arch_pci_request_interrupt(&r->pci, 0,
-						     r8169_interrupt, r,
-						     "r8169");
-
-	arm_interrupts(r);
 
 	device_count++;
 

@@ -234,7 +234,26 @@
 #
 # Four of the nine entries are open and are interface decisions rather than
 # driver faults, so they buy nothing here either.
-VERSION := 0.3.5
+# **0.3.7 on 17 September 2026: two more, and both are the same shape.**
+#
+# NW-003 and NW-008 were the two open entries that turned out to be this
+# track's rather than the kernel session's, and they are the same fault twice:
+# a member of an interface that one implementation could not make mean
+# anything.
+#
+# `net_device.link` was written once by virtio-net as a constant `true` and
+# read by nothing. `netdev_route` consults it now, on both the unicast and the
+# broadcast path, so a machine with two cards sends out of the live one --
+# which is the whole reason the server has two.
+#
+# `net_device_ops.enable_interrupts` was declared, documented in a paragraph,
+# and called by nothing. `netdev_register` calls it now, after the device is in
+# the table, and both drivers claim their vector before registering so the hook
+# has something to arm.
+#
+# Neither could have been seen with one driver behind the interface, which is
+# the point the whole branch has been making.
+VERSION := 0.3.7
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

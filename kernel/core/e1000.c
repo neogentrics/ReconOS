@@ -610,9 +610,25 @@ static void e1000_interrupt(void *arg)
 	netdev_wake();
 }
 
+/* The device layer asking whether this card can interrupt, and arming it if
+ * so. Called by `netdev_register`; see the same function in `r8169.c` and
+ * NW-008 for why the vector is claimed before the card is registered
+ * rather than after. */
+static bool e1000_enable_interrupts(struct net_device *dev)
+{
+	struct e1000 *e = dev->driver;
+
+	if (!e->interrupting)
+		return false;
+
+	(void)rr(e, R_ICR);
+	wr(e, R_IMS, INT_WANTED);
+	return true;
+}
+
 static const struct net_device_ops e1000_ops = {
 	.transmit = e1000_transmit,
-	.enable_interrupts = NULL,
+	.enable_interrupts = e1000_enable_interrupts,
 	.poll = e1000_poll,
 };
 
@@ -690,15 +706,6 @@ static void start_card(struct e1000 *e)
 	 * itself, which is the only thing to do when nobody has said what the
 	 * far end is. */
 	wr(e, R_CTRL, rr(e, R_CTRL) | CTRL_SLU | CTRL_ASDE);
-}
-
-static void arm_interrupts(struct e1000 *e)
-{
-	if (!e->interrupting)
-		return;
-
-	(void)rr(e, R_ICR);
-	wr(e, R_IMS, INT_WANTED);
 }
 
 bool e1000_attach(const struct pci_device *d)
@@ -796,6 +803,11 @@ bool e1000_attach(const struct pci_device *d)
 		return false;
 	}
 
+	/* Before the registration, for the reason in `r8169.c`. */
+	e->interrupting = arch_pci_request_interrupt(&e->pci, 0,
+						     e1000_interrupt, e,
+						     "e1000");
+
 	e->ndev = netdev_register(name, &e1000_ops, e, &mac);
 
 	if (!e->ndev) {
@@ -804,11 +816,6 @@ bool e1000_attach(const struct pci_device *d)
 	}
 
 	update_link(e);
-
-	e->interrupting = arch_pci_request_interrupt(&e->pci, 0,
-						     e1000_interrupt, e,
-						     "e1000");
-	arm_interrupts(e);
 
 	device_count++;
 

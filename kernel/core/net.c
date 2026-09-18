@@ -31,6 +31,20 @@ void net_bring_up(void)
 		if (!d || !d->up)
 			continue;
 
+		/* Said before the attempt rather than inferred from its failure.
+		 *
+		 * A card with no cable and a network with no DHCP server both
+		 * end at "no address", and they are completely different
+		 * problems -- one is a wire somebody can plug in and the other
+		 * is a server somebody has to go and look at. Waiting two and a
+		 * half seconds to report the wrong one of those is worse than
+		 * not reporting at all, because it reads like an answer. */
+		if (!d->link) {
+			kprintf("net: %s has no cable; not asking for an "
+				"address\n", d->name);
+			continue;
+		}
+
 		if (!dhcp_configure(d)) {
 			kprintf("net: %s has no address; nothing offered one\n",
 				d->name);
