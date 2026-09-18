@@ -306,20 +306,53 @@ def existing_titles():
         raise SystemExit(f'gh issue list failed: {out.stderr.strip()}')
 
     rows = json.loads(out.stdout)
-    titles = {row['title']: row for row in rows}
+
+    """
+    Keyed by the entry's identifier, **not by its title** -- NW-011.
+
+    It was keyed by the full title, and a title is prose. Closing NW-003
+    deleted the words "Half fixed --" from its heading, and closing NW-008
+    changed "nothing has ever called" to "nothing ever called". One word. Both
+    entries stopped matching their own issues, and this script filed #535 and
+    #537 as new ones beside the #521 and #526 the register still pointed at.
+
+    The guard below already describes this failure -- *every title looks new
+    and the run makes a second copy of the whole register* -- and only catches
+    the wholesale version of it. One entry at a time is the same fault at
+    retail, and it is quieter, because the run looks normal.
+
+    An identifier is the one part of a heading the register promises not to
+    reuse or reword. The prose after it is meant to be rewritten as an entry's
+    story changes; that is the point of writing it that way.
+    """
+    by_id = {}
+    for row in rows:
+        m = re.match(r'\s*(' + ENTRY_ID + r')', row['title'])
+        if not m:
+            continue
+
+        '''
+        The lowest number wins, deterministically. `gh` lists newest first, so
+        taking the first match would make the *duplicate* canonical and leave
+        the original -- the one the register links to -- open for ever. The
+        first issue filed for an entry is the one the register points at.
+        '''
+        prev = by_id.get(m.group(1))
+        if prev is None or row['number'] < prev['number']:
+            by_id[m.group(1)] = row
 
     """
     A sanity check, because the failure this guards against is silent: if the
     listing came back mangled, every title looks new and the run makes a
     second copy of the whole register.
     """
-    if rows and not any(t.startswith(('BG-', 'KF-')) for t in titles):
+    if rows and not by_id:
         raise SystemExit(
             'The issue list came back with no BG-/KF- titles in it. Refusing '
             'run: this is what a decoding fault looks like, and continuing '
             'would duplicate every entry.')
 
-    return titles
+    return by_id
 
 
 # An entry heading, and every way one has actually been typed.
@@ -591,8 +624,8 @@ def main():
     print(f'{len(entries)} entries, {len(have)} issues already there')
 
     for e in entries:
-        if e['title'] in have:
-            row = have[e['title']]
+        if e['id'] in have:
+            row = have[e['id']]
             '''
             An entry that already has an issue is left alone -- except when
             the register says it is fixed and the issue is open, which is the
@@ -600,6 +633,19 @@ def main():
             match is the contract: the register is the source.
             '''
             note = []
+
+            '''
+            The heading was reworded. Rename the issue rather than leave the
+            tracker showing an entry's old story -- and note that before this
+            was keyed by identifier, this branch did not exist because the
+            reworded entry simply looked new. See NW-011.
+            '''
+            if row['title'] != e['title']:
+                note.append('retitle')
+                if not dry:
+                    gh(['issue', 'edit', str(row['number']), '--repo', REPO,
+                        '--title', e['title']])
+
             if is_fixed(e['body']) and row['state'] == 'OPEN':
                 note.append('close')
                 if not dry:

@@ -441,6 +441,98 @@ static bool a_dead_cable_is_not_a_route(void)
 	return ok;
 }
 
+/* NW-010: the address this machine gives out is one somebody can reach.
+ *
+ * `logport.c` walked the device table itself, asking `up && ip` and not
+ * `link`, because there was no `netdev_primary` to call -- its comment says
+ * so. Routing asks all three. So on a machine with a card that is up and
+ * addressed with the cable out, the two disagreed, and the one that picks the
+ * address to advertise was the one that did not care about the wire.
+ *
+ * **What that is worth saying honestly: the divergence was latent, not live.**
+ * A cableless card does not normally hold an address, because NW-003 made
+ * `net_bring_up` skip DHCP when there is no cable -- so `ip` was doing
+ * `link`'s job by coincidence, in a different file. The ways it stops being a
+ * coincidence are a static address, and a cable pulled after the lease: both
+ * drivers re-read the cable on every poll, so `link` goes false under a live
+ * address and nothing else changes. This test builds the second case directly
+ * rather than waiting for it. */
+static bool the_primary_device_has_a_cable(void)
+{
+	static const struct mac_addr mac = { { 0x02, 0x4E, 0x57, 0, 0, 4 } };
+	struct net_device *d;
+	char name[NET_NAME_MAX];
+	bool was_up[NET_MAX_DEVICES];
+	unsigned i, n;
+	bool ok = true;
+
+	if (!netdev_name("eth", name, sizeof(name)))
+		return false;
+
+	d = netdev_register(name, &test_ops, NULL, &mac);
+
+	if (!d) {
+		kputs("  nic: could not register a device to unplug\n");
+		return false;
+	}
+
+	d->ip = IPV4(10, 90, 1, 2);
+	d->netmask = IPV4(255, 255, 255, 0);
+
+	/* **Every other device goes down for the length of this.**
+	 * `netdev_primary` returns the *first* device that qualifies and this
+	 * one registered last, so on a machine with a real card the answer is
+	 * that card whatever this device does -- and the assertion would pass
+	 * without ever consulting the thing it is about. That is the same trap
+	 * the broadcast half of `a_dead_cable_is_not_a_route` fell into, which
+	 * is how it was seen here before it was written. */
+	n = netdev_count();
+
+	for (i = 0; i < n; i++) {
+		struct net_device *o = netdev_at(i);
+
+		was_up[i] = o->up;
+		if (o != d)
+			o->up = false;
+	}
+
+	/* The control first, and it is not optional: without it, an assertion
+	 * that a cableless card is not chosen also passes on a machine where
+	 * nothing is ever chosen. */
+	if (netdev_primary() != d) {
+		kputs("  nic: a card that is up, addressed and plugged in was "
+		      "not offered as this machine's address, so this test "
+		      "cannot say anything about the cable\n");
+		ok = false;
+	}
+
+	/* And now the cable comes out. The address does not go with it: that is
+	 * the whole case, and it is what a lease outliving a cable looks like. */
+	d->link = false;
+
+	if (netdev_primary() == d) {
+		kputs("  nic: a card with no cable was offered as this "
+		      "machine's address -- the log port would listen on an "
+		      "address nothing can reach, which is the one case it "
+		      "exists for\n");
+		ok = false;
+	}
+
+	d->link = true;
+
+	if (netdev_primary() != d) {
+		kputs("  nic: plugging the cable back in did not make the card "
+		      "addressable again\n");
+		ok = false;
+	}
+
+	for (i = 0; i < n; i++)
+		netdev_at(i)->up = was_up[i];
+
+	netdev_forget_last();
+	return ok;
+}
+
 bool nic_self_test(void)
 {
 	bool ok = true;
@@ -455,6 +547,9 @@ bool nic_self_test(void)
 		ok = false;
 
 	if (!the_enable_hook_is_called())
+		ok = false;
+
+	if (!the_primary_device_has_a_cable())
 		ok = false;
 
 	/* And the Realtek's receive loop, which has no other way to be run at

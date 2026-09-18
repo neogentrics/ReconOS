@@ -536,6 +536,121 @@ turned out to be true.
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
 
+### NW-011 — An entry was identified by its title, and a title is prose
+
+[#538](https://github.com/neogentrics/ReconOS/issues/538)
+
+- **Found in** `scripts/make-issues.py`, on 18 September 2026, by the network
+  session, by running it to file NW-010 and reading the three lines it printed
+  instead of the one that was expected.
+- **Was** the script asked whether an entry already had an issue by looking up
+  its **full title** in the list of issue titles. Closing an entry means
+  rewriting its heading — that is what the register's style is for, an entry's
+  story changes as it is fixed — and a rewritten heading matches nothing.
+
+  Closing NW-003 deleted the words `Half fixed — ` from its heading. Closing
+  NW-008 changed `nothing has ever called` to `nothing ever called`. One word.
+  Both entries looked new, and the run filed **#535 and #537** beside the #521
+  and #526 the register still pointed at, then closed the new ones and left the
+  originals open.
+- **What it cost.** Two duplicate issues on a public tracker, and for about ten
+  minutes the tracker said NW-003 and NW-008 were both open and closed, on
+  different numbers, with the register linking the open ones. Cleaned up rather
+  than left: #521 and #526 are retitled and closed, #535 and #537 carry a
+  comment naming what they duplicate and why.
+- **The guard for this already existed and only caught the wholesale version.**
+  Directly above the lookup is a check that refuses the run if no title starts
+  with a known prefix, with a comment saying *every title looks new and the run
+  makes a second copy of the whole register.* That is this fault described
+  exactly, and guarded only when it happens to all 355 entries at once. One at a
+  time it is the same fault, quieter, and the run looks normal — which is worse,
+  because nothing invites you to look.
+- **Found by** reading output that was three lines when one was expected. The
+  run did not fail, print a warning, or exit non-zero. `--check` was green
+  before it and green after it: it validates the register against itself and
+  the register was never wrong — both entries kept their original, now stale,
+  links. Nothing in the repository could have detected this, and nothing did;
+  the count was the only evidence.
+- **Fixed by** keying on the entry identifier, `[A-Z]{2}-\d+`, which is the one
+  part of a heading the register promises not to reword or reuse. Two pieces
+  beyond the swap, both needed:
+
+  **A reworded heading now renames the issue.** Without that the tracker keeps
+  showing an entry's old story for ever, which is the same drift this file
+  exists to stop, just slower than a duplicate.
+
+  **The lowest-numbered issue wins, deterministically.** `gh` lists newest
+  first, so taking the first match would have made each *duplicate* canonical
+  and left the original — the one the register links to — open permanently. The
+  first issue filed for an entry is the one to keep.
+- **Proved by breaking it.** The heading of NW-010 was reworded on purpose and
+  `--dry-run` asked: it answers `NW-010  #536: would retitle` where the old code
+  would have proposed a new issue. The register was restored in the same step,
+  so it was never left edited.
+- **This is NW-009 twice.** That entry was this script treating an unrecognised
+  argument as consent to write to a public tracker; this one is the same script
+  writing to it again over a difference nobody asked it to care about. The
+  common shape is a tool that reaches the network on a guess about intent.
+  NW-009's guard was about *which mode* — it does not and could not have
+  covered *which issue*.
+
+### NW-010 — Two answers to "which card is this machine", differing on the cable
+
+[#536](https://github.com/neogentrics/ReconOS/issues/536)
+
+- **Found in** `kernel/core/logport.c`, on 18 September 2026, by the network
+  session, by reading the kernel session's new log port on merge — because it
+  is the first consumer of this interface written by somebody who did not write
+  the interface.
+- **Was** `netdev_route` decides a device is usable when it is `up`, has
+  `link`, and has an address. `logport.c` needed one address to advertise and
+  to listen on, with no destination to route toward, so `netdev_route` could
+  not answer it. There was no `netdev_primary`, so it walked the device table
+  itself and asked `up && ip` — leaving out the cable.
+
+  Two predicates for "a card you can use", in two files, differing on exactly
+  the field NW-003 had just given a meaning to. The one that picks the address
+  a machine advertises was the one that did not care whether the wire was in.
+- **What it would cost.** The log port exists for the boot where the disk
+  cannot record the fault — the machine you would otherwise diagnose by
+  photographing a panel, which this project has now done four times. Its
+  failure mode here is to print and listen on an address nothing can reach,
+  which looks like a working log port right up until somebody needs it.
+- **Honestly: it was latent, not live, and the guard was a coincidence in
+  another file.** A cableless card does not normally hold an address, because
+  NW-003 made `net_bring_up` skip DHCP when there is no cable — so `ip` was
+  doing `link`'s job by accident. It stops being an accident with a static
+  address, or with a cable pulled after the lease: both drivers call
+  `update_link` on every poll, so `link` goes false under a live address and
+  nothing else changes. Measured rather than assumed — the poll call sites are
+  `e1000.c:469` and `r8169.c:472`, in `*_poll` rather than at attach.
+- **Found by** the interface gaining a second caller. This is the finding the
+  track was set up to produce, arriving from the opposite direction to the one
+  expected: not a driver that would not fit underneath, but a consumer that
+  reached for something above and found nothing there. The kernel session wrote
+  the evidence down themselves — *"There is no `netdev_primary` — I reached for
+  one and it does not exist"* — which is worth more than the missing function,
+  because it is the only kind of proof that an interface lacks something a
+  caller needs rather than something it might need.
+- **Fixed by** `netdev_primary()`, and by giving both predicates names in one
+  place: `has_cable` (`up && link`) for broadcasts, which must not require an
+  address because DHCP has to send before it has one, and `is_addressable`
+  (that, and an address) for everything else. `netdev_route` and
+  `netdev_primary` now ask the same function rather than two copies that agreed
+  on the day they were written. `logport.c` calls it; its reasoning — *first
+  addressable rather than first, so a machine with two cards reports the one
+  somebody can reach* — was right and is kept, since the cable is the half of
+  "come up" its own copy could not enforce.
+- **The test, and both ways it was made to fail.** `the_primary_device_has_a_cable`
+  in `nic_test.c` puts every other device down first, because `netdev_primary`
+  returns the *first* qualifying device and the test's registers last — the same
+  trap the broadcast half of NW-003's test fell into and stayed green in.
+  Restoring logport's `up && ip` to `netdev_primary`, leaving `netdev_route`
+  alone so nothing else could catch it, turns it red with *"a card with no cable
+  was offered as this machine's address"*. Making it choose nobody at all turns
+  the control red with *"so this test cannot say anything about the cable"*.
+  Both directions were run, not just the first.
+
 ### NW-009 — A script that writes to a public tracker treated an unknown argument as consent
 
 [#527](https://github.com/neogentrics/ReconOS/issues/527)
@@ -7910,6 +8025,8 @@ lands on any screen. Verified by photograph at 800x600, 1280x800 and 1920x1200.
 
 ### KF-216 — The loader drew on a fifth of the screen the machine had
 
+[#450](https://github.com/neogentrics/ReconOS/issues/450)
+
 > **The panel is not 1920x1080, measured 17 September 2026.** Kali on the
 > Gateway reports the connector directly:
 >
@@ -9307,6 +9424,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
+
+[#496](https://github.com/neogentrics/ReconOS/issues/496)
 
 > **Seen a second time, 17 September 2026, matrix 70** -- and the heading's
 > *once* is now wrong, which is left standing rather than edited so the change

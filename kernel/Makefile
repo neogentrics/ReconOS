@@ -270,7 +270,32 @@
 # The 0.3.7 above is not superseded by it. Those seven patches are the network
 # track's and each one names an entry; this minor is the log port's. Both
 # numbers mean what their paragraphs say.
-VERSION := 0.4.0
+#
+# **0.4.2 on 18 September 2026: two patches, both found by the merge itself.**
+#
+# NW-010 -- `logport.c` is the first consumer of this kernel's network
+# interface written by somebody who did not write the interface, and it reached
+# for a `netdev_primary` that did not exist. Its comment says so outright. So it
+# walked the device table by hand and asked `up && ip` where routing asks
+# `up && link && ip`: two answers to "which card is this machine", differing on
+# the cable, with the one that picks the advertised address being the one that
+# did not care about the wire.
+#
+# This is the finding the network track was set up to produce, arriving from the
+# opposite direction to the one expected. The brief was that a second *driver*
+# would show which parts of the interface were about networking and which were
+# about virtio. What actually showed it was a second *caller*, reaching upward
+# and finding nothing there.
+#
+# NW-011 -- `scripts/make-issues.py` identified a register entry by its full
+# title, and a title is prose. Closing NW-003 and NW-008 reworded their
+# headings, so both looked new, and the run filed duplicates on a public
+# tracker. Keyed on the identifier now, which is the one part of a heading the
+# register promises not to reword.
+#
+# Neither is a capability, so neither moves the minor. 0.4.0 stands as the log
+# port's, and these are two fixes laid on top of it.
+VERSION := 0.4.2
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

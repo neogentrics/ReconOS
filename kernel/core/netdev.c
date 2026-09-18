@@ -279,6 +279,55 @@ struct net_device *netdev_by_name(const char *name)
 	return NULL;
 }
 
+/* The two questions the stack asks about a device, each with a name, because
+ * they are not the same question and the difference is load-bearing.
+ *
+ * `has_cable` is what a **broadcast** needs: up, and a wire in it. It
+ * deliberately does not ask for an address, because DHCP has to send before it
+ * has been given one -- see the comment in `netdev_route`.
+ *
+ * `is_addressable` is what everything else needs: that, and an address to be
+ * the source of.
+ *
+ * **These exist as functions because the second one had been written twice.**
+ * `netdev_route` asked `up && link && ip`; `logport.c` asked `up && ip` and
+ * left out the cable, having reached for a `netdev_primary` that did not exist
+ * and walked the table itself instead. The two answers differ on exactly the
+ * field NW-003 had just given a meaning to -- which is NW-010, and the reason
+ * the fix is one predicate rather than two that agree today. */
+static bool has_cable(const struct net_device *d)
+{
+	return d && d->up && d->link;
+}
+
+static bool is_addressable(const struct net_device *d)
+{
+	return has_cable(d) && d->ip;
+}
+
+/* The device to give out as this machine's address, when the question has no
+ * destination to route toward.
+ *
+ * **Added because a caller reached for it, not because an interface wanted
+ * rounding out.** `logport.c` needs one address to print and to listen on, and
+ * has no destination to route toward, so `netdev_route` cannot answer it. The
+ * comment there says plainly that it looked for this and found nothing.
+ *
+ * First addressable rather than first: a machine with two cards where only one
+ * has come up should report the one somebody can reach. That is `logport`'s
+ * own reasoning and it is right; it just could not enforce it, because the
+ * cable is the half of "come up" its copy of the test left out. */
+struct net_device *netdev_primary(void)
+{
+	unsigned i;
+
+	for (i = 0; i < device_count; i++)
+		if (is_addressable(&devices[i]))
+			return &devices[i];
+
+	return NULL;
+}
+
 struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop)
 {
 	unsigned i;
@@ -293,7 +342,7 @@ struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop)
 	 * every test above configures its device by hand first. */
 	if (dst == IPV4_BROADCAST) {
 		for (i = 0; i < device_count; i++) {
-			if (!devices[i].up || !devices[i].link)
+			if (!has_cable(&devices[i]))
 				continue;
 
 			if (next_hop)
@@ -322,7 +371,7 @@ struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop)
 		 * opinion about -- and that is exactly why the gap was
 		 * invisible: with one driver, the field could not disagree with
 		 * anything. */
-		if (!d->up || !d->link || !d->ip)
+		if (!is_addressable(d))
 			continue;
 
 		/* On the same wire: the frame goes straight to the host. */

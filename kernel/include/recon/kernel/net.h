@@ -308,6 +308,17 @@ struct net_device *netdev_by_name(const char *name);
  * an ordinary answer on a machine with no network. */
 struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop);
 
+/* This machine's address, for a caller with no destination to route toward.
+ *
+ * Returns the first device that is up, has a cable in it, and has an address,
+ * or null when no device has all three. Asking `netdev_route` instead requires
+ * inventing a destination, and the answer would be about that destination.
+ *
+ * **Use this rather than walking `netdev_at` with a test of your own.** The
+ * one caller that did diverged from routing on whether the cable matters, and
+ * a machine can then advertise an address that nothing can reach -- NW-010. */
+struct net_device *netdev_primary(void);
+
 /* A driver hands a received frame here, from any context including an
  * interrupt. The buffer is queued and the worker thread takes it from there;
  * ownership passes, and the driver must not touch it again. */

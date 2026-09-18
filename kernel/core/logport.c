@@ -21,26 +21,23 @@ enum logport_state {
 	LOGPORT_LISTENING
 };
 
-/* The first device that has an address.
+/* The address this machine gives out.
  *
- * There is no `netdev_primary` -- I reached for one and it does not exist.
- * `netdev_route` answers for a destination and this question has none, so it
- * is the table, walked. First-with-an-address rather than first: a machine
- * with two cards where only one has come up should report the one somebody
- * can reach. */
-static struct net_device *addressed_device(void)
-{
-	unsigned i;
-
-	for (i = 0; i < netdev_count(); i++) {
-		struct net_device *d = netdev_at(i);
-
-		if (d && d->up && d->ip != IPV4_ANY)
-			return d;
-	}
-
-	return NULL;
-}
+ * **This was a private walk of the device table and is now `netdev_primary`.**
+ * The note that stood here said a `netdev_primary` had been reached for and
+ * did not exist, so the table was walked by hand -- and the hand-written test
+ * asked `up && ip` where routing asks `up && link && ip`. The card with no
+ * cable in it was therefore a card this file would offer as the address to
+ * connect to, and a card routing would refuse to send out of.
+ *
+ * That is NW-010. The reasoning in the original note was right and is kept in
+ * `netdev_primary`: first *addressable* rather than first, so a machine with
+ * two cards reports the one somebody can reach. Leaving the cable out is the
+ * one thing that stopped it doing that.
+ *
+ * Reaching for a function that does not exist is worth more than the missing
+ * function. It is the only evidence available that an interface is short of
+ * something a caller actually needs, rather than something it might. */
 
 static enum logport_state state = LOGPORT_UNASKED;
 static struct socket *listener;
@@ -223,7 +220,7 @@ bool logport_start(void)
 	 * worked around. A listener on 0.0.0.0 would "succeed" on a machine
 	 * with no network and print a port nobody can reach, which is the
 	 * confident wrong answer this project keeps refusing to give. */
-	dev = addressed_device();
+	dev = netdev_primary();
 
 	if (!dev) {
 		state = LOGPORT_NO_ADDRESS;
@@ -273,7 +270,7 @@ void logport_print_summary(void)
 		break;
 	}
 
-	dev = addressed_device();
+	dev = netdev_primary();
 
 	if (!dev) {
 		kputs("  log port     : listening, and the address it was given "
