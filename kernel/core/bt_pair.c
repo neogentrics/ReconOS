@@ -91,6 +91,22 @@ void bt_pairing_close(struct bt_pairing *p)
 	p->window_open = false;
 }
 
+bool bt_pairing_set_pin(struct bt_pairing *p, const u8 *pin, u8 len)
+{
+	/* The bound lives here so that callers do not each have to know it.
+	 * A PIN longer than the field holds is a configuration mistake, and
+	 * refusing says so at the point it is made rather than at the point
+	 * a device asks. */
+	if (!len || len > BT_PIN_MAX)
+		return false;
+
+	kmemset(p->pin, 0, sizeof(p->pin));
+	kmemcpy(p->pin, pin, len);
+	p->pin_len = len;
+
+	return true;
+}
+
 void bt_pairing_remember(struct bt_pairing *p, const u8 *addr, const u8 *key,
 			 u8 key_type)
 {
@@ -209,6 +225,29 @@ u32 bt_pairing_event(struct bt_pairing *p, const u8 *ev, u32 len, u8 *out,
 			return 0;
 
 		if (!may_answer(p, addr)) {
+			p->refused++;
+			return addr_command(out, HCI_OP_PIN_CODE_NEG_REPLY,
+					    addr);
+		}
+
+		/* **A length nothing had validated, feeding a fixed copy.**
+		 *
+		 * `pin_len` is a public field. `bt_pairing_init` sets it to
+		 * four, and `bt_pairing_set_pin` now bounds it -- but the
+		 * struct is in a header and the field can be written
+		 * directly, and this copy would take whatever it said into a
+		 * 23-byte buffer on the stack.
+		 *
+		 * Found by listing every `kmemcpy` with a variable length and
+		 * asking what bounds it. Every other one is bounded by a
+		 * check a few lines above; this one was bounded by a
+		 * convention.
+		 *
+		 * Refused rather than clamped: a clamped PIN is a *different*
+		 * PIN, and pairing then fails for a reason nobody can see. A
+		 * negative reply is the same answer this file gives every
+		 * other request it will not serve. */
+		if (p->pin_len > BT_PIN_MAX) {
 			p->refused++;
 			return addr_command(out, HCI_OP_PIN_CODE_NEG_REPLY,
 					    addr);
@@ -563,6 +602,86 @@ bool bt_pairing_self_test(void)
 			kputs("  btpair: a failed Simple Pairing Complete was "
 			      "read as success\n");
 			ok = false;
+		}
+	}
+
+	/* --- a PIN length nothing had bounded ---------------------------
+	 *
+	 * `pin_len` fed a copy into a 23-byte buffer and was bounded only by
+	 * the convention that only `bt_pairing_init` wrote it. The field is
+	 * public, so the convention was the whole guarantee.
+	 *
+	 * Both halves are checked: the setter refuses an impossible length,
+	 * and the copy refuses one that got through anyway.
+	 */
+	{
+		static const u8 four[4] = { '1', '2', '3', '4' };
+		u8 pinreq[8];
+		u8 big[BT_PIN_MAX + 8];
+		unsigned i;
+
+		for (i = 0; i < sizeof(big); i++)
+			big[i] = 'X';
+
+		bt_pairing_init(&p);
+
+		if (!bt_pairing_set_pin(&p, four, 4) || p.pin_len != 4 ||
+		    p.pin[0] != '1' || p.pin[3] != '4') {
+			kputs("  btpair: a four-character PIN was not "
+			      "accepted\n");
+			ok = false;
+		}
+
+		if (bt_pairing_set_pin(&p, big, BT_PIN_MAX + 1)) {
+			kputs("  btpair: a PIN longer than the field holds "
+			      "was accepted by the setter\n");
+			ok = false;
+		}
+
+		if (bt_pairing_set_pin(&p, four, 0)) {
+			kputs("  btpair: an empty PIN was accepted\n");
+			ok = false;
+		}
+
+		/* The setter refused, so the length must be the old one. */
+		if (p.pin_len != 4) {
+			kprintf("  btpair: a refused PIN still changed the "
+				"length to %u\n", p.pin_len);
+			ok = false;
+		}
+
+		/* And the copy itself, against a field written directly --
+		 * which the header now says not to do, and which the struct
+		 * being public still allows. The reply must be refused and
+		 * nothing past the reply's end may be touched. */
+		pinreq[0] = HCI_EV_PIN_CODE_REQ;
+		pinreq[1] = BT_ADDR_LEN;
+		kmemcpy(pinreq + 2, addr, BT_ADDR_LEN);
+
+		bt_pairing_allow(&p, addr);
+		p.pin_len = BT_PIN_MAX + 40;	/* as a stray write would */
+
+		kmemset(out, 0xD3, sizeof(out));
+		n = bt_pairing_event(&p, pinreq, sizeof(pinreq), out,
+				     sizeof(out));
+
+		if (n != 3 + BT_ADDR_LEN ||
+		    out[0] != (u8)(HCI_OP_PIN_CODE_NEG_REPLY & 0xFF)) {
+			kprintf("  btpair: an impossible PIN length drew %u "
+				"bytes of opcode %02x, expected a negative "
+				"reply -- the alternative is copying that "
+				"many bytes into a 23-byte buffer\n", n,
+				out[0]);
+			ok = false;
+		}
+
+		for (i = n; i < sizeof(out); i++) {
+			if (out[i] != 0xD3) {
+				kprintf("  btpair: byte %u past the reply was "
+					"overwritten\n", i);
+				ok = false;
+				break;
+			}
 		}
 	}
 

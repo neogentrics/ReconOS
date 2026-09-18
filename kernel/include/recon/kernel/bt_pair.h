@@ -119,7 +119,13 @@ struct bt_pairing {
 
 	/* The PIN offered for legacy pairing, and its length. Legacy devices
 	 * overwhelmingly use "0000", and a wrong one is a refusal rather than
-	 * a risk. */
+	 * a risk.
+	 *
+	 * **Set these with `bt_pairing_set_pin`, not directly.** `pin_len`
+	 * feeds a copy into a fixed buffer, and it was bounded only by the
+	 * convention that nothing wrote it except `bt_pairing_init`. It is
+	 * checked at the copy now as well, but a length that never becomes
+	 * wrong is better than one caught later. */
 	u8 pin[BT_PIN_MAX];
 	u8 pin_len;
 
@@ -148,6 +154,11 @@ void bt_pairing_init(struct bt_pairing *p);
 /* Opens the window for one device, and closes it again. */
 void bt_pairing_allow(struct bt_pairing *p, const u8 *addr);
 void bt_pairing_close(struct bt_pairing *p);
+
+/* Sets the legacy PIN. False for an empty one or one longer than the field
+ * holds, which is a configuration mistake worth hearing about where it is
+ * made rather than where a device asks. */
+bool bt_pairing_set_pin(struct bt_pairing *p, const u8 *pin, u8 len);
 
 /* Hands a previously stored key back, so a known device does not pair twice. */
 void bt_pairing_remember(struct bt_pairing *p, const u8 *addr, const u8 *key,

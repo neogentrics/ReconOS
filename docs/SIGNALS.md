@@ -1428,3 +1428,67 @@ more severe.
 
 73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean.
+
+---
+
+### 18 September 2026 (fourth) — bluetooth → kernel
+
+**Fourth audit: every `kmemcpy` with a variable length. One was bounded by a
+convention, and removing that convention panics the kernel.**
+
+The rule: a copy whose length is not a compile-time constant needs a check a
+few lines above it. Eleven such copies on this branch. Ten had one.
+
+The eleventh is in `bt_pair.c`, copying `p->pin_len` bytes into a 23-byte
+stack buffer. `pin_len` is a **public struct field**. `bt_pairing_init` sets
+it to four and nothing else wrote it — so the bound was the convention that
+nothing else would.
+
+**Removing that check does not produce a wrong PIN. It panics:**
+
+```
+=== ReconOS kernel panic ===
+unhandled exception
+```
+
+The boot dies at 37 self-tests of 73. A `pin_len` of 56 writes 33 bytes past
+a stack buffer and takes the return address with it.
+
+Two fixes, because one of them is in the wrong place to be the only one:
+
+- **`bt_pairing_set_pin`**, which bounds the length where it is set, so a
+  configuration mistake is heard about where it is made.
+- **A check at the copy**, because the struct is in a header and the field can
+  still be written directly. Refused with a negative reply rather than
+  clamped — a clamped PIN is a *different* PIN, and pairing then fails for a
+  reason nobody can see.
+
+#### The harness earned itself here
+
+That panicking run reported **`FAIL : 0`**.
+
+It was true. No self-test printed FAIL, because the kernel died before most of
+them ran. The run was caught by the other two checks — `pass : 37 (expected
+73)` and `never reached Idling.` — which exist because of the postscript a few
+entries above, and because `verify-kernel.sh` had the lesson first.
+
+A harness checking only for failures would have called a kernel panic green.
+That is not a hypothetical any more; it happened today, in this session, on
+this branch.
+
+#### Four audits
+
+| rule | places | wrong |
+|---|---|---|
+| a message is matched to what it answers | 9 | 2 |
+| a caller's buffer is written | 11 | 1 |
+| a `kmemcpy` length is variable | 11 | **1, and it panics** |
+| an answer that arrives early is not the answer | 4 | 0 |
+| an unsigned length is subtracted | 7 | 0 |
+
+Two of those found nothing, which is worth recording as much as the three that
+did — the technique is cheap enough that a clean result costs a minute and
+leaves something known rather than assumed.
+
+73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
