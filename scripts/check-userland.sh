@@ -24,21 +24,34 @@
 # worked on ReconOS for two days while this header went on naming it as the
 # blocker. The list is what is measured; the paragraph explaining it was not.
 #
-# What is left is three groups, and only one of them is large:
+# **18 September 2026: this paragraph is stale for the second time, and the
+# second correction is the interesting one.** It has listed the same three
+# groups since the allocator landed, and the middle group -- vendored headers,
+# eight files -- has been empty since v0.4.48. The one before it named malloc
+# as the blocker for two days after malloc worked.
 #
-#   **The compositor: fifteen files.** wayland-server-core.h and wlr/. This is
-#   the real remaining work and it is the board's `display-boundary` row, not
-#   a library gap -- a program on the ReconOS kernel draws on the framebuffer
-#   device, and does not speak Wayland to itself.
+# The file already carries the rule and went on breaking it: *the list is what
+# is measured; the paragraph explaining it was not.* So this version says less
+# and says it about a measurement that exists.
 #
-#   **Vendored headers: eight files** want stb_image.h or stb_truetype.h,
-#   which need third_party/ on the include path and a hosted <math.h>.
+# `scripts/port-blockers.sh` prints what is left, with a line count, every
+# time it is run. At the time of writing that is **seventeen sources, 12,090
+# lines**, and the shape has changed: there is no longer a group of files held
+# by one missing thing each. What remains is
 #
-#   **One missing thing each: the rest.** realpath (recon_fs.c -- closed in
-#   v0.4.53; it was written and declared in no header), pid_t
-#   (recon_cmd.c, recon_control_panel.c), signal.h, sys/time.h, dlfcn.h,
-#   ifaddrs.h, zlib.h, mbedtls, libdrm. Each names one thing and is worth one
-#   piece of work.
+#   the compositor itself and the wayland halves of six seams -- which are
+#   supposed to be there, and are the board's `display-boundary` row;
+#
+#   third-party libraries: mbedTLS, zlib, and `dlopen`. ReconOS will want a
+#   crypto library and a way to load a module, and those are the questions,
+#   not the headers;
+#
+#   two files left off deliberately, below, and `recon_net.c` wanting
+#   `ifaddrs.h`, which is a real question about how a machine lists its own
+#   interfaces.
+#
+# **Run the report rather than reading this.** A paragraph that has been wrong
+# twice about the same thing is a paragraph to stop trusting.
 #
 # **The list is checked rather than trusted.** A file that grows a `malloc` is
 # removed from it deliberately, with the reason; a file that loses its last one
@@ -177,6 +190,13 @@ fi
 # two button codes out of Linux's input-event-codes.h, which recon_inject.h now
 # writes down itself and main.c holds a _Static_assert against.
 #
+# Added 18 September 2026: src/recon_codec.c, on one #define. The blocker
+# report said sys/mman.h and the include was not in the file -- it was inside
+# the half of minimp3 that takes a path, opens it, and maps it. Nothing here
+# ever called that half, and it must not: every file in this system arrives
+# through recon_fs, which is what keeps a path inside the root. MINIMP3_NO_STDIO
+# closes a door that was standing open and takes 857 lines with it.
+#
 # Note for whoever adds the next one: this list is split on whitespace, so a
 # "#" inside the string below is not a comment and every word on the line
 # becomes a file the check looks for. Notes go here, above it.
@@ -254,6 +274,7 @@ src/recon_stb.c
 src/recon_shell.c
 src/recon_cmd.c
 src/recon_apps.c
+src/recon_codec.c
 "
 
 out=$(mktemp -d)

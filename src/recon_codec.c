@@ -21,6 +21,30 @@
 /* One translation unit gets the implementation, and this is it. */
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_FLOAT_OUTPUT_DISABLED
+
+/*
+ * --- And it does not get to open files ---
+ *
+ * minimp3 ships a second half that takes a *path*: it opens the file itself,
+ * maps it with `mmap`, and decodes out of the mapping. Convenient, and wrong
+ * here for a reason that has nothing to do with the port.
+ *
+ * **Every file in this system arrives through `recon_fs`**, which is what
+ * keeps a path inside the ReconOS root, refuses one that climbs out of it, and
+ * is the only thing that knows where the volume actually is. A library opening
+ * its own files reaches around all of that -- and it would do it with the
+ * host's `open`, on a host path, which on ReconOS is not a path at all.
+ *
+ * Nothing here ever called it. `recon_codec.c` uses `mp3dec_ex_open_buf` and
+ * its three companions, all of which take bytes somebody else has already
+ * read. So this costs nothing and closes a door that was standing open.
+ *
+ * It is also what kept 857 lines off a compiler with no Linux under them:
+ * `scripts/port-blockers.sh` reported `sys/mman.h` against this file, and the
+ * include was not in it -- it was inside the half that was never used. A
+ * blocker in borrowed code, for a feature this system must not have.
+ */
+#define MINIMP3_NO_STDIO
 #include "minimp3_ex.h"
 
 #include "recon_codec.h"

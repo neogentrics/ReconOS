@@ -9,6 +9,52 @@ way for the two to disagree.
 
 ---
 
+## v0.4.70 — a door in the audio decoder that was standing open
+
+**68 of 68**, and the port is out of accidents. What does not build with no
+Linux underneath is seventeen sources and 12,090 lines, and every one of them
+is the compositor, a wayland half of a seam, a third-party library, or a file
+left off on purpose.
+
+### The blocker was not in our code
+
+`scripts/port-blockers.sh` reported `sys/mman.h` against `src/recon_codec.c`,
+857 lines, **zero markers**. The include is not in that file. It is in
+`third_party/minimp3_ex.h`, inside `#ifndef MINIMP3_NO_STDIO`.
+
+minimp3 ships a second half that takes a **path**: it opens the file itself,
+maps it with `mmap`, and decodes out of the mapping. Convenient, and wrong
+here for a reason that has nothing to do with the port.
+
+**Every file in this system arrives through `recon_fs`** — which is what keeps
+a path inside the ReconOS root, refuses one that climbs out of it, and is the
+only thing that knows where the volume actually is. A library opening its own
+files reaches around all of that, and it would do it with the host's `open` on
+a host path, which on ReconOS is not a path at all.
+
+Nothing ever called it. `recon_codec.c` uses `mp3dec_ex_open_buf` and its three
+companions, every one of which takes bytes somebody else has already read. So
+`#define MINIMP3_NO_STDIO` costs nothing, closes a door that was standing open,
+and takes 857 lines with it.
+
+That it was also a port blocker is the smaller half. A vendored library able to
+open files behind the filesystem layer is a thing to find whether or not it
+stops a compiler.
+
+### And a paragraph that has now been wrong twice
+
+`scripts/check-userland.sh` opens with an explanation of what is left. It named
+malloc as the blocker for two days after malloc worked, was corrected, and has
+since gone stale again: its middle group — *vendored headers, eight files* —
+has been empty since v0.4.48.
+
+The file carries the rule it broke: *the list is what is measured; the
+paragraph explaining it was not.* So the paragraph says less now, points at
+`port-blockers.sh`, and ends by saying that a paragraph wrong twice about the
+same thing is one to stop trusting.
+
+---
+
 ## v0.4.69 — the network stack, driven by a real socket
 
 `recon_net.c` from **30.73% to 65.92%**, and the eighteen functions nothing had
