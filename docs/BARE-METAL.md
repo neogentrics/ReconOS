@@ -117,13 +117,53 @@ believed: `scripts/check-disk-safety.sh`.
   and its 3.6 TB disks are not the same silicon, and a partition table ReconOS
   misparses is a partition table it still only *reads*.
 - It says nothing about what happens if the machine is reset mid-boot.
-- It does not cover the medium itself, which ReconOS **may** write to: it saves
-  its boot log to a writable ReconOS volume. That is the USB stick, and that is
-  wanted.
+
+**And the medium is not written to either**, which is a correction to what this
+document first said. An earlier draft claimed ReconOS would save its boot log to
+the stick. It does not: the medium is a FAT32 EFI system partition, not a
+ReconOS volume, and the boot says so in as many words —
+
+```
+boot log     : no ReconOS medium is writable here, so it stayed in memory
+transfers    : 1 read, 0 written, 0 flushed
+```
+
+Zero writes on the *boot-from-stick* path too, not just the disks-attached one.
+Good for safety and bad for evidence, and it is the second reason the serial
+cable matters: **there will be no log file afterwards.** Whatever is not captured
+while it is on screen is gone when the power goes off.
 
 ---
 
-## The procedure
+## The procedure, rehearsed
+
+**Everything below except the card itself has been run**, on the same path the
+server will take: legacy BIOS, booting from a USB stick, with a network card
+attached. Not the UEFI path, because the server has no UEFI.
+
+```
+qemu-system-x86_64 -m 512M \
+  -drive if=none,id=stick,format=raw,file=reconos-medium.img \
+  -device usb-ehci,id=ehci \
+  -device usb-storage,bus=ehci.0,drive=stick,bootindex=0 \
+  -netdev user,id=n0 -device e1000,netdev=n0
+```
+
+```
+ReconOS kernel 0.3.5
+e1000: eth0 link up, 1000 Mb full duplex
+e1000: eth0 at 52:54:00:12:34:56, 8254x 100E, 32 receive buffers, ...
+net: eth0 is 10.0.2.15, via 10.0.2.2
+net: the gateway answered in 251 us
+```
+
+So the medium builds, the BIOS boot path works from a stick, the kernel starts,
+a card attaches and the whole network path runs. **Three things are left that
+the rehearsal cannot cover**, and they are the whole point of doing it for real:
+
+- the Realtek's actual registers, which no emulator has;
+- whether the Radeon produces a picture;
+- the physical stick and that board's BIOS.
 
 ### Before the window — no downtime, done in advance
 
@@ -178,8 +218,14 @@ believed: `scripts/check-disk-safety.sh`.
    returns the machine to Debian without anybody editing a setting under
    pressure.
 
-8. **At ReconOS's menu, let it start ReconOS.** Do not choose recovery and do
-   not choose an installed system.
+8. **A menu may or may not appear, and either is correct.** Rehearsed in the
+   rig, none did — `boot menu : never offered -- 0 entries found and no menu
+   ran`. On the server it probably *will*, because `menu_discover` looks for
+   installed systems and there is a Debian on `sda`.
+
+   If it appears: **let the countdown run out, or choose ReconOS.** The default
+   is ReconOS and the countdown is short. Do not choose recovery and do not
+   choose the installed system.
 
 9. **Read the three things that matter**, in order:
 
