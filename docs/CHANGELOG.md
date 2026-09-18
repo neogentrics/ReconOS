@@ -9,6 +9,82 @@ way for the two to disagree.
 
 ---
 
+## v0.4.71 — installing a skin somebody else wrote
+
+`recon_theme.c` from **64.9% to 79.4%** of 993 lines. Nineteen functions
+nothing had ever run are ten, and 244 untouched lines are 58.
+
+### What the measurement had to survive first
+
+The first run of the instrument said **49 of 66 functions, 596 lines**. It was
+wrong, and finding out why is the part worth keeping: it ran three *drawing*
+suites — titlebar, widget, desktop-frame — because those are what link the
+theme. `tests/test_theme.c` exists and is the suite that actually exercises it,
+and it was not in the list.
+
+Measured against the right one: 19 functions, 244 lines. A number from an
+instrument pointed at the wrong thing is a number, and it nearly cost a suite
+written for code that was already tested.
+
+### The gap was one thing
+
+Not scattered. `recon_theme_install` and the `inspect_theme_file` under it —
+**75 lines, and the header makes four specific promises about them**, every one
+silent when it breaks:
+
+- read and parsed *before* it is copied, so a file that is not a skin is
+  refused rather than left in the folder for the next start to trip over
+- a name already taken is refused, because a file cannot shadow a built-in —
+  copying one in under an existing name puts a file in place the system then
+  ignores, and somebody would have installed a skin, seen it listed, and be
+  looking at the built-in with no way to tell
+- administrator only
+- nothing left behind on failure
+
+Every refusal in the new tests is followed by asking whether a file appeared. A
+version that copied first and validated after would pass a test that only
+checked the return value.
+
+And the other half: the setters the Control Panel's Appearance page calls —
+`set_role`, `set_gradient`, `set_metric`, `describe` — none of which had run.
+What makes them worth checking is not that they return true. It is that the
+value comes **back**, and back again after the skins are read from disk, which
+is what a restart is. A setter that changed only what was in memory would pass
+everything else.
+
+### Four of my own expectations were wrong, and three were instructive
+
+- **`Midnight` is a built-in.** My "a skin installs" fixture took its name, so
+  the install was refused for exactly the right reason and the test I wrote to
+  prove installing works proved the *shadow rule* instead. The Midnight case
+  now sits where it belongs, in the shadow test, as a second built-in.
+- **`write_file` wrote nothing and said nothing.** `/Temp` existed;
+  `/Temp/from-somebody` did not. A fixture nobody wrote is indistinguishable
+  from one that was, and the failure surfaced three steps later as "installing
+  a skin does not work". It is loud now.
+- **Calling `install` twice.** Once in the check and once in a diagnostic
+  beside it — so the second was refused for the name the first had taken.
+- **`0xFFEDE7F0`, not `0xEDE7F0`.** The parser gives a file's `RRGGBB` an
+  opaque alpha, which is right: a skin file has no way to say *transparent
+  text*, and a colour with a zero alpha byte draws as nothing. The check
+  expected the six digits it had typed and reported that installing a skin
+  loses its colours.
+
+The last is the one to keep. **Every one of those was a test being wrong about
+code that was right** — which is the failure mode a suite written after the
+fact has, and the reason each of them is written down beside the check rather
+than quietly corrected.
+
+### And the backslash trap, for the third time today
+
+A heredoc eats a backslash level, so `"...\n"` in a script becomes a real
+newline inside a C string literal. The build then fails, the run uses the
+previous binary, and the failure looks like the code rather than the edit. It
+is in my notes and it caught me anyway; the fix, again, is to write the script
+with a tool that does not.
+
+---
+
 ## v0.4.70 — a door in the audio decoder that was standing open
 
 **68 of 68**, and the port is out of accidents. What does not build with no

@@ -222,6 +222,300 @@ static bool listed(const char *name) {
  * comes up as the default at the next sign-in, which looks like the rename
  * having quietly undone itself.
  */
+/* Somewhere to put a file that is not in the skins folder, which is where a
+ * skin somebody was sent would actually be. */
+#define INBOX "/Temp/from-somebody"
+
+static void say_why(const char *reason) {
+    printf("    refused: %s\n",
+        reason != NULL ? reason : "(it did not say)");
+}
+
+/*
+ * The folder the fixtures live in, made once.
+ *
+ * `/Temp` exists; `/Temp/from-somebody` did not, and `recon_fs_write`
+ * into a folder that is not there writes nothing and says so to nobody.
+ * Which is how a missing `mkdir` surfaced three steps later as
+ * "installing a skin does not work".
+ */
+static void inbox_ready(void) {
+    recon_fs_mkdir("/", "/Temp");
+    recon_fs_mkdir("/", INBOX);
+}
+
+/* Loud when it cannot write. A fixture nothing wrote is
+ * indistinguishable from one that was, and every check after it is
+ * then measuring an empty folder. */
+static void write_file(const char *path, const char *text) {
+    if (!recon_fs_write("/", path, text, strlen(text))) {
+        printf("    could not write the fixture %s: %s\n", path,
+            recon_fs_last_error());
+    }
+}
+
+static void test_installing_a_skin_somebody_wrote(void) {
+    printf("installing a skin from a file\n");
+
+    inbox_ready();
+
+    /*
+     * A real one, with the two things `inspect_theme_file` looks for: a name,
+     * and at least one role. Colours are `role = RRGGBB`, and a role ending
+     * `.to` is the far end of a ramp -- which is in here because a skin
+     * somebody wrote will have them and a fixture that avoided them would be
+     * testing an easier file than the one that arrives.
+     */
+    write_file(INBOX "/Foundry" RECON_THEME_EXT,
+        "# A skin from somewhere else\n"
+        "name = Foundry\n"
+        "description = Dark, with a blue cast\n"
+        "window.frame = 1B1420\n"
+        "window.frame.to = 2A2036\n"
+        "surface.text = EDE7F0\n");
+
+    /*
+     * Called once and the result kept, which is not tidiness. The first
+     * version called `install` inside the check and again in a diagnostic
+     * beside it -- so the second call was refused for the name being taken
+     * by the first, and reported that installing a skin does not work.
+     */
+    bool installed = recon_theme_install(INBOX "/Foundry" RECON_THEME_EXT);
+
+    check(installed, "a skin file installs");
+    if (!installed) {
+        say_why(recon_theme_last_error());
+    }
+    check(listed("Foundry"), "and is in the list");
+    check(recon_fs_exists("/", RECON_DIR_THEMES "/Foundry" RECON_THEME_EXT),
+        "with a file where skins live");
+
+    /*
+     * The colours came with it. A skin that installed and then drew as the
+     * default would be an install that looked like it worked.
+     */
+    check(recon_theme_set("Foundry"), "it can be put on");
+
+    /*
+     * Asked of the skin rather than of the screen.
+     *
+     * `recon_theme_color` answers what will be *drawn*, which is the skin's
+     * colour after a tint has had it -- so a machine with a tint on would
+     * fail this check while the install had worked perfectly. `_of` reads
+     * what the file said, which is the question an install is answerable for.
+     */
+    int at = -1;
+
+    for (int i = 0; i < recon_theme_count(); i++) {
+        struct recon_theme_info info;
+
+        if (recon_theme_at(i, &info) && strcmp(info.name, "Foundry") == 0) {
+            at = i;
+        }
+    }
+    check(at >= 0, "and can be found in the list");
+
+    recon_color straight_away = at >= 0
+        ? recon_theme_color_of(at, RECON_THEME_SURFACE_TEXT) : 0;
+
+    /* And again after the skins are read from disk, which is what a restart
+     * is. If these two differ, the install put the file down and did not read
+     * it -- so the skin is listed, can be chosen, and draws as the default
+     * until the machine is restarted. */
+    recon_theme_finish();
+    recon_theme_init();
+
+    at = -1;
+    for (int i = 0; i < recon_theme_count(); i++) {
+        struct recon_theme_info info;
+
+        if (recon_theme_at(i, &info) && strcmp(info.name, "Foundry") == 0) {
+            at = i;
+        }
+    }
+
+    recon_color after_reload = at >= 0
+        ? recon_theme_color_of(at, RECON_THEME_SURFACE_TEXT) : 0;
+
+    /*
+     * `0xFFEDE7F0`, not `0xEDE7F0`. A file writes `RRGGBB` and the parser
+     * gives it an opaque alpha, which is right -- a skin file has no way to
+     * say "transparent text" and a colour with a zero alpha byte would draw
+     * as nothing at all. The first version of this check expected the six
+     * digits it had typed and reported that installing a skin loses its
+     * colours.
+     */
+    check(after_reload == 0xFFEDE7F0u, "with the colours the file gave it");
+    check(straight_away == after_reload,
+        "AND IT DID NOT NEED A RESTART -- a skin that is listed, can be "
+        "chosen, and draws as the default until the machine restarts is an "
+        "install that looks like it worked");
+
+    recon_theme_set("Classic");
+}
+
+static void test_a_file_that_is_not_a_skin(void) {
+    printf("files that are not skins\n");
+
+    inbox_ready();
+
+    /*
+     * --- What "nothing is left behind" is worth ---
+     *
+     * The header says a file is read and parsed *before* it is copied, so
+     * that one which is not a skin is refused rather than left in the folder
+     * for the next start to trip over. That is the whole claim, and a version
+     * that copied first and validated after would pass a test that only
+     * checked the return value.
+     *
+     * So every refusal below is followed by asking whether a file appeared.
+     */
+    write_file(INBOX "/notes.txt", "This is not a skin. It is a note.\n");
+    check(!recon_theme_install(INBOX "/notes.txt"),
+        "a file with no name and no roles is refused");
+    check(!recon_fs_exists("/", RECON_DIR_THEMES "/notes.txt"),
+        "and nothing is left in the skins folder");
+
+    /* Named, and says nothing else. A name alone is not a skin: every colour
+     * would come from the default, so what installed would be the default
+     * under another name. */
+    write_file(INBOX "/Empty" RECON_THEME_EXT, "name = Empty\n");
+    check(!recon_theme_install(INBOX "/Empty" RECON_THEME_EXT),
+        "a file with a name and no colours is refused");
+    check(!listed("Empty"), "and is not in the list");
+
+    /* Roles, and no name. There is nothing to call it. */
+    write_file(INBOX "/Nameless" RECON_THEME_EXT, "surface.text = 112233\n");
+    check(!recon_theme_install(INBOX "/Nameless" RECON_THEME_EXT),
+        "a file with colours and no name is refused");
+
+    check(!recon_theme_install(INBOX "/no-such-file" RECON_THEME_EXT),
+        "and a file that is not there is refused");
+    check(!recon_theme_install(NULL), "as is no path at all");
+}
+
+static void test_a_skin_cannot_shadow_one_that_exists(void) {
+    printf("installing over a name already taken\n");
+
+    inbox_ready();
+
+    /*
+     * The sharp half: a *built-in* skin has no file, so copying one in under
+     * its name would put a file in place that the system then ignores -- and
+     * somebody would have installed a skin, seen it listed, and be looking at
+     * the built-in one with no way to tell.
+     */
+    write_file(INBOX "/Classic" RECON_THEME_EXT,
+        "name = Classic\n"
+        "surface.text = FF0000\n");
+
+    check(!recon_theme_install(INBOX "/Classic" RECON_THEME_EXT),
+        "a name a built-in skin already has is refused");
+    check(recon_theme_set("Classic"), "the built-in is still there");
+    check(recon_theme_color(RECON_THEME_SURFACE_TEXT) != 0xFF0000u,
+        "AND IT IS STILL THE BUILT-IN -- a file that shadowed it would be a "
+        "skin the system lists and does not use");
+
+    /* And one of ours, which does have a file. */
+    write_file(INBOX "/Foundry" RECON_THEME_EXT,
+        "name = Foundry\n"
+        "surface.text = 00FF00\n");
+    check(!recon_theme_install(INBOX "/Foundry" RECON_THEME_EXT),
+        "and so is a name an installed skin already has");
+
+    /*
+     * `Midnight` is a built-in too, and it is here because this test was
+     * written with it as the *installed* skin -- it is not, and the install
+     * above was refused for the right reason while the check said the wrong
+     * thing about why. Two built-ins rather than one, said correctly.
+     */
+    write_file(INBOX "/Midnight" RECON_THEME_EXT,
+        "name = Midnight\n"
+        "surface.text = 0000FF\n");
+    check(!recon_theme_install(INBOX "/Midnight" RECON_THEME_EXT),
+        "a second built-in's name is refused the same way");
+}
+
+static void test_editing_writes_the_file(void) {
+    printf("changing a skin writes it down\n");
+
+    check(recon_theme_copy("Classic", "Editable", "A skin to edit"),
+        "a skin of our own to change");
+
+    /*
+     * Every setter here is one the Control Panel's Appearance page calls, and
+     * none of them had ever run. What makes them worth checking is not that
+     * they return true: it is that the value comes *back* -- a setter that
+     * wrote nowhere would look identical from the call site.
+     */
+    check(recon_theme_set_role("Editable", RECON_THEME_SURFACE_TEXT, 0x123456u),
+        "a colour is set");
+    check(recon_theme_describe("Editable", "Changed"),
+        "and a description");
+
+    check(recon_theme_set_role("Editable", RECON_THEME_WINDOW_FRAME,
+        0x101010u), "a ramp's near end, which is the role's own colour");
+    check(recon_theme_set_gradient("Editable", RECON_THEME_WINDOW_FRAME,
+        true, 0x202020u), "and its far end, which is all a gradient is");
+
+    check(recon_theme_set_metric("Editable", RECON_METRIC_TITLE_HEIGHT,
+        true, 30), "and a measurement");
+
+    /*
+     * Read back by index rather than by putting the skin on, because that is
+     * what the Appearance page does: it shows a skin's colours in a list
+     * without switching to it, and `_of` is the only way to ask.
+     */
+    int at = -1;
+
+    for (int i = 0; i < recon_theme_count(); i++) {
+        struct recon_theme_info info;
+
+        if (recon_theme_at(i, &info) && strcmp(info.name, "Editable") == 0) {
+            at = i;
+        }
+    }
+    check(at >= 0, "the skin can be found in the list");
+
+    if (at >= 0) {
+        check(recon_theme_color_of(at, RECON_THEME_SURFACE_TEXT) == 0x123456u,
+            "the colour reads back");
+        check(recon_theme_metric_of(at, RECON_METRIC_TITLE_HEIGHT) == 30,
+            "and so does the measurement");
+
+        recon_color from = 0;
+        recon_color to = 0;
+
+        check(recon_theme_gradient_of(at, RECON_THEME_WINDOW_FRAME, &from, &to),
+            "the ramp is a ramp");
+        check(from == 0x101010u && to == 0x202020u, "with both ends");
+    }
+
+    /*
+     * And it survives the skin being forgotten and read again, which is what
+     * a restart is. A setter that changed only what was in memory would pass
+     * every check above.
+     */
+    recon_theme_finish();
+    recon_theme_init();
+
+    at = -1;
+    for (int i = 0; i < recon_theme_count(); i++) {
+        struct recon_theme_info info;
+
+        if (recon_theme_at(i, &info) && strcmp(info.name, "Editable") == 0) {
+            at = i;
+        }
+    }
+    check(at >= 0 && recon_theme_color_of(at, RECON_THEME_SURFACE_TEXT) == 0x123456u,
+        "and it is still there after the skins are read again");
+
+    check(!recon_theme_set_role("Classic", RECON_THEME_SURFACE_TEXT, 0x000000u),
+        "a built-in skin refuses to be edited");
+    check(!recon_theme_set_role("Nothing At All", RECON_THEME_SURFACE_TEXT, 0u),
+        "and so does one that is not there");
+}
+
 static void test_renaming(void) {
     printf("renaming a skin\n");
 
@@ -852,6 +1146,10 @@ int main(void) {
     test_saying_a_measurement();
     test_a_colour_and_its_ramp();
     test_renaming();
+    test_installing_a_skin_somebody_wrote();
+    test_a_file_that_is_not_a_skin();
+    test_a_skin_cannot_shadow_one_that_exists();
+    test_editing_writes_the_file();
     test_glass();
     test_tint();
     test_damaged_file();
