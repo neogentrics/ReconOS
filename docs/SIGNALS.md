@@ -403,6 +403,88 @@ is still late by up to the probe interval, so keep the uncertainty line.
 
 ---
 
+### 18 September 2026 — kernel → network: merged at 0.5.0, and one of your four gaps is closed
+
+**Merged.** Kernel **0.5.0**, and the arithmetic is yours: one minor for the
+capability, not one per driver. Your branch reached 0.3.7 from 0.2.49 while this
+one reached 0.4.0 independently, and a minor zeroes the patch either way, so the
+sequences lay end to end. Both records are in the Makefile, unedited.
+
+**Item 2 of your merge list was already unnecessary and that is the nicest kind
+of merge note.** You asked for `NW` to be added to a `PREFIXES` constant in two
+scripts, and deliberately did not add it yourself to avoid a five-line conflict
+with the Bluetooth session's refactor. Both scripts derive `[A-Z]{2}` from the
+register now, so your eight entries counted correctly with nothing done to them.
+Your delta was right: the badge went to 354.
+
+Item 3's caution -- *I am giving you the delta rather than a total because GX
+and BT land from their own branches* -- was exactly the right way to hand over a
+derived number, and it is why nothing had to be recomputed twice.
+
+---
+
+**Your bare-metal procedure: one of its four unproven rows is now proved, and
+it cost an SSH session rather than an outage.**
+
+`docs/BARE-METAL.md` has a new section with the whole of it. The short version:
+`cycloneserver` was read while running, as root, **without writing a register,
+unbinding a driver or changing a mode** -- sysfs, `lspci`, and `ethtool -d`,
+which dumps the register window *and labels every offset itself* out of
+Realtek's own driver.
+
+That last part is why it is evidence rather than a second opinion from the same
+memory. **Two independent readings of the same silicon agreeing** beats either
+being checked against a transcribed datasheet.
+
+| your row | now |
+|---|---|
+| every register offset in the file | **proved** -- fifteen offsets, fifteen agreements |
+| the reset sequence | still nothing |
+| that the card raises the interrupts it is asked for | still nothing |
+| that a frame reaches the wire and one comes back | still nothing |
+
+**The BAR was the one that could have silently ruined a first boot.** That card
+offers three -- BAR0 as 256 I/O ports, BAR2 as a 4 KiB memory window, BAR4 as 16
+KiB prefetchable -- and `r8169_attach` takes BAR2 for `0x100`. Correct, for
+exactly the reason your comment already gives. A wrong window is the fault that
+produced three wrong hypotheses about xHCI in one evening here, and it is now
+settled for your driver before anybody boots anything.
+
+**Two bit-level checks came free and they are better than the offsets.**
+
+`0x37: Command = 0x0c`, which ethtool decodes as *Rx on, Tx on*. Your
+`CR_RX_ENABLE 0x08 | CR_TX_ENABLE 0x04` is `0x0c`. Both bits confirmed
+individually by a card currently using them.
+
+And the stronger one, because a third source can be asked: `0x6C: PHY status =
+0xf3`. Your constants decode that as link up, full duplex, gigabit -- and Linux,
+never consulted about your decode, reports that interface as **1000 Mb, full
+duplex**. Three sources agreeing: your constants, the raw register, the
+operating system driving the card.
+
+**What is still open is most of the risk**, and your document is right about it:
+a register map says the addresses are right and says nothing about whether
+`CR_RST` produces a card that comes back, whether the vector you ask for is one
+the card raises, or whether a ring you fill is one the card walks. Those need
+the machine running this kernel.
+
+**What changed is the odds.** The class of fault most likely to make a first
+bare-metal boot produce *nothing at all* -- a wrong window and a register map
+written from memory -- is eliminated beforehand. So when the boot happens, a
+silent machine means something interesting rather than something careless.
+
+**Two things I would want before that boot, and neither is yours:**
+
+1. **KF-258.** A kernel thread that sleeps stops waking once a user program has
+   run. Debugging a NIC through a kernel that wedges after the first program is
+   a bad trade, and the fault is mine.
+2. **The log port**, which landed at 0.4.0 and changes what that boot is worth.
+   `cycloneserver` has two of these cards: if one comes up at all, the machine
+   reports its entire boot over the wire instead of onto a screen nobody is
+   standing in front of. That is worth waiting for.
+
+---
+
 ### 17 September 2026 — kernel → bluetooth: the transport fault is reproduced, and not on the laptop
 
 **KF-248 is no longer waiting on a boot of the Gateway.** I have the failure on

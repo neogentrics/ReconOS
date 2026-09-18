@@ -281,3 +281,108 @@ unchanged.
 - **Not the firewall.** OPNsense is doing a job.
 - **Not unattended.** This is not a thing to run while nobody is watching, and
   it is not a thing to run on a schedule.
+
+---
+
+## What was checked without booting anything, 18 September 2026
+
+**The table above says four things are *proved by nothing*. One of them no
+longer is**, and closing it cost an SSH session rather than a server outage.
+
+`cycloneserver` was read while it was running, over SSH, as root, **without
+writing a single register, unbinding a driver or changing a mode**. Everything
+below comes from sysfs, `lspci`'s own decode of config space, and `ethtool -d`
+-- which dumps the card's register window *and labels every offset itself*,
+because the Linux driver knows what they are.
+
+That last part is what makes this evidence rather than a second opinion from
+the same memory: **ethtool's labels come from Realtek's driver, not from ours.**
+Two independent readings of the same silicon agreeing is worth more than either
+being checked against a datasheet somebody transcribed.
+
+### The two cards
+
+```
+05:00.0  10ec:8168 rev 0c   RTL8168g/8111g   enp5s0  1000 Mb full
+08:00.0  10ec:8168 rev 06   RTL8168e/8111e   ens1    1000 Mb full
+```
+
+Both are the `8168` device id this driver claims, and `REALTEK_VENDOR 0x10EC`
+reads straight out of config space as `ec 10` -- little-endian, as it should be.
+
+### The base address register, which was the one that could have been wrong
+
+The card offers **three**:
+
+```
+BAR0  io   256 bytes
+BAR2  mem  4096 bytes      <- 64-bit, at 0xfe500000
+BAR4  mem  16384 bytes     <- 64-bit, prefetchable
+```
+
+`r8169_attach` takes **BAR2** and maps `0x100` of it. That is correct, and it
+is correct for the reason the code already gives -- BAR0 is the same registers
+as I/O ports, which `core/` may not touch because port access is an x86
+instruction. **A wrong BAR here is the exact fault that produced three wrong
+hypotheses about xHCI in one evening**, and it is now settled for this driver
+by measurement rather than by reading.
+
+### Every register offset the driver uses, against ethtool's own labels
+
+| `r8169.c` | offset | what the card's own driver calls it | |
+|---|---|---|---|
+| `R_IDR0` | 0x00 | MAC Address | ✔ |
+| `R_MAR0` | 0x08 | Multicast Address Filter (two words = eight bytes) | ✔ |
+| `R_TNPDS` | 0x20 | Tx Normal Priority Ring Addr (two words = 64-bit) | ✔ |
+| `R_CR` | 0x37 | Command | ✔ |
+| `R_TPPOLL` | 0x38 | *(between Command and Interrupt Mask, unlabelled in this dump)* | — |
+| `R_IMR` | 0x3C | Interrupt Mask, 16-bit | ✔ |
+| `R_ISR` | 0x3E | Interrupt Status, 16-bit | ✔ |
+| `R_TCR` | 0x40 | Tx Configuration, 32-bit | ✔ |
+| `R_RCR` | 0x44 | Rx Configuration, 32-bit | ✔ |
+| `R_CFG9346` | 0x50 | EEPROM Command | ✔ |
+| `R_PHYSTATUS` | 0x6C | PHY status | ✔ |
+| `R_RMS` | 0xDA | RX packet maximum size, 16-bit | ✔ |
+| `R_CPLUSCMD` | 0xE0 | C+ Command, 16-bit | ✔ |
+| `R_RDSAR` | 0xE4 | Rx Ring Addr, 64-bit | ✔ |
+| `R_MTPS` | 0xEC | Early Tx threshold | ✔ |
+
+**Fifteen offsets, fifteen agreements, none of them previously run against
+hardware.**
+
+### Two bit-level checks, which are better than the offsets
+
+**The command register.** The card reads `0x37: Command = 0x0c`, and ethtool
+decodes that as *Rx on, Tx on*. This driver defines `CR_RX_ENABLE 0x08` and
+`CR_TX_ENABLE 0x04`. `0x08 | 0x04` is `0x0c`. The two bits are confirmed
+individually, by a card that is currently using them.
+
+**The PHY status decode, which is the stronger of the two** because a third,
+independent source can be asked. The card reads `0x6C: PHY status = 0xf3`:
+
+```
+0xf3 = 1111 0011
+        bit 0  set  -> PHY_FULL_DUPLEX  (0x01)
+        bit 1  set  -> PHY_LINK_OK      (0x02)
+        bit 2  clear -> not 10M         (0x04)
+        bit 3  clear -> not 100M        (0x08)
+        bit 4  set  -> PHY_1000M        (0x10)
+```
+
+Decoded by this driver's constants that is *link up, full duplex, gigabit* --
+and Linux, which was never consulted about the decode, reports the same
+interface as **1000 Mb, full duplex**. Three sources agree: our constants, the
+raw register, and the operating system driving the card.
+
+### What this does not close, and it is most of the risk
+
+**The reset sequence, the interrupts, and a frame on the wire are all
+untouched.** Reading a register window says the addresses are right; it says
+nothing about whether writing `CR_RST` and waiting produces a card that comes
+back, whether the vector this driver asks for is one the card raises, or
+whether a descriptor ring this driver fills is one the card walks.
+
+Those need the machine to be running **this** kernel, and the procedure above
+is still the way to find out. What has changed is the odds: the class of fault
+most likely to make a first bare-metal boot produce nothing at all -- a wrong
+window and a register map read from memory -- has been eliminated beforehand.
