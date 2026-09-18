@@ -7465,6 +7465,36 @@ lands on any screen. Verified by photograph at 800x600, 1280x800 and 1920x1200.
 
 ### KF-216 — The loader drew on a fifth of the screen the machine had
 
+> **The panel is not 1920x1080, measured 17 September 2026.** Kali on the
+> Gateway reports the connector directly:
+>
+> ```
+> [CONNECTOR:161:eDP-1]: status: connected
+>         physical dimensions: 260x140mm
+>         fixed modes:
+>                 "1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798
+>                 "1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798
+> fb0  virtual_size 1366,768   stride 5504   bits_per_pixel 32
+> ```
+>
+> Two fixed modes, both 1366x768, on a panel 260 mm wide -- about 11.6
+> inches, which is the size this machine is. `B125HAN02.201` is a 12.5-inch
+> 1920x1080 part, so **the firmware's VBT names a panel this machine does not
+> have.** A VBT carries entries for every panel a board was ever built with;
+> reading one and believing it is how a driver ends up setting a mode the
+> glass cannot show.
+>
+> This does not change the entry's fault or its fix -- 800x600 was wrong
+> either way, and the loader now reports 1366x768 on that machine. It changes
+> where a driver may take the mode **from**: the connector, never the VBT.
+>
+> Two things this also confirms, and both are the kind that only real hardware
+> can give: Linux reports `stride 5504` for a 1366-pixel line, which is
+> **exactly** what ReconOS reports on the same panel -- so the pitch handling
+> is right against an independent implementation rather than against itself --
+> and `8086:3185` is the correct table entry for this machine.
+
+
 [#450](https://github.com/neogentrics/ReconOS/issues/450)
 
 - **Found:** 14 September 2026, from the firmware's own setup screen. Its VBT
