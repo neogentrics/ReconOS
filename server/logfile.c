@@ -59,14 +59,9 @@ long logfile_name(unsigned long number, char *out, size_t room)
 	return (long)(LOGFILE_DIGITS + sizeof(SUFFIX) - 1);
 }
 
-/*
- * Is this name a segment, and which one?
- *
- * Exactly six digits and then `.log`, and nothing else at all. `7.log` is not
- * a segment and neither is `0000001.log`: both would sort wrongly against the
- * ones this writes, and a name that sorts wrongly is a log read out of order.
- */
-static int segment_number(const char *name, size_t len, unsigned long *out)
+/* See `logfile.h` for the rule, and for why it is one function rather than a
+ * copy in each of the two places that need it. */
+int logfile_is_segment(const char *name, size_t len, unsigned long *out)
 {
 	static const char SUFFIX[] = ".log";
 	unsigned long n = 0;
@@ -104,7 +99,7 @@ unsigned long logfile_next(const char *names, size_t len)
 		while (at < len && names[at] != '\0')
 			at++;
 
-		if (segment_number(names + start, at - start, &n)) {
+		if (logfile_is_segment(names + start, at - start, &n)) {
 			if (!any || n > highest)
 				highest = n;
 			any = 1;

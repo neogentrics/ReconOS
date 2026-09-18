@@ -241,6 +241,21 @@ static struct logbook LOGBOOK;
  *
  * `force` writes a short segment rather than waiting for a full one.
  */
+/*
+ * Where the log stands on the volume.
+ *
+ * Declared up here with the ring it mirrors rather than beside the functions
+ * that maintain it, because the endpoints that *report* it are defined before
+ * those. See `log_volume_open` and `log_volume_flush` further down.
+ */
+static struct {
+	unsigned long next;		/* the segment number to write */
+	unsigned long flushed;		/* entries already written out */
+	int ready;			/* the directory was read */
+	unsigned long segments;		/* written this boot */
+	unsigned long refused;		/* flushes that could not be written */
+} LOGVOL;
+
 static void log_volume_flush(int force);
 
 /*
@@ -1062,6 +1077,225 @@ static int handle_resolve(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/*
+ * Reading the log back.
+ *
+ * --- Why these are guarded when `GET /api/log` is not ---
+ *
+ * The ring is a **snapshot**: the last sixty-four requests, bounded, current,
+ * and the thing a monitor needs to see that a machine is alive. `auth.h`
+ * leaves reads open for exactly that.
+ *
+ * The segments are **history**. Every path ever asked for on this machine,
+ * from every boot it has had, for as long as the volume has existed. That is a
+ * different thing to hand a stranger, and the difference is not one of degree:
+ * a snapshot tells you what is happening, an archive tells you what the people
+ * who use this machine do.
+ *
+ * So the line is drawn between *current state* and *accumulated record* rather
+ * than between reading and writing. It is written here because it is the first
+ * place in this server where those two do not coincide.
+ *
+ * --- Why the caller gives a number and never a name ---
+ *
+ * `GET /api/log/segment?n=42` and not `?name=000042.log`.
+ *
+ * A name from a caller is a path to be validated, and every validation of a
+ * path is a chance to get it wrong -- `..`, a separator, a NUL, an encoding
+ * that decodes to one of those later. `multipart.h` sets out at length why
+ * this server refuses such names rather than repairing them.
+ *
+ * A **number** has no such shape. It is parsed as digits, bounded, and handed
+ * to `logfile_name`, which is the same function that wrote the file. The path
+ * is *constructed* here and never assembled from anything a caller typed, so
+ * there is no traversal to refuse. That is not a check that passes; it is a
+ * check that cannot be reached.
+ */
+
+/* Read one whole file off the volume. Returns bytes, or negative.
+ *
+ * Whole, because a segment is written whole and a partial one is a log with a
+ * hole in it that nothing announces. */
+static long read_whole(const char *path, char *out, size_t room)
+{
+	i64 fd = recon_open_path(path, OPEN_READ);
+	long total = 0;
+
+	if (fd < 0)
+		return -1;
+
+	for (;;) {
+		i64 n = recon_read((int)fd, out + total,
+		                   (u64)(room - 1 - (size_t)total));
+
+		if (n <= 0)
+			break;
+		total += (long)n;
+		if ((size_t)total >= room - 1)
+			break;		/* does not fit; see the caller */
+	}
+
+	recon_close((int)fd);
+	out[total] = '\0';
+	return total;
+}
+
+/*
+ * Which segments the volume holds.
+ *
+ * Reported as numbers rather than names, because a number is what the other
+ * endpoint takes -- handing back a name a caller then sends home would invite
+ * exactly the path this design avoids.
+ */
+static int handle_log_segments(const struct http_request *r, const char *body,
+                               size_t body_len, struct http_response *out,
+                               void *ctx)
+{
+	static char names[4096];
+	static char json[2048];
+	long need;
+	size_t at = 0;
+	int n, first = 1;
+
+	(void)r; (void)body; (void)body_len; (void)ctx;
+
+	need = (long)recon_call6(SYS_LIST, (u64)(unsigned long)LOGFILE_DIR,
+	                         sizeof(LOGFILE_DIR) - 1,
+	                         (u64)(unsigned long)names, sizeof(names),
+	                         0, 0);
+	if (need < 0) {
+		http_response_simple(out, 503, "text/plain",
+		                     "503 Service Unavailable: no volume\n", 35);
+		return HTTP_OK;
+	}
+	if ((size_t)need > sizeof(names))
+		return HTTP_EINTERNAL;	/* more listing than room: see below */
+
+	n = snprintf(json, sizeof(json), "{\"segments\":[");
+	if (n < 0 || (size_t)n >= sizeof(json))
+		return HTTP_EINTERNAL;
+
+	/*
+	 * Walked with the same rule `logfile_next` uses -- six digits and
+	 * `.log`, nothing else -- rather than reported raw. A directory may
+	 * hold whatever somebody put there, and a listing that hands back
+	 * every name is a listing of the volume rather than of the log.
+	 */
+	while (at < (size_t)need) {
+		size_t start = at;
+		unsigned long number;
+		int m;
+
+		while (at < (size_t)need && names[at] != '\0')
+			at++;
+
+		if (logfile_is_segment(names + start, at - start, &number)) {
+			m = snprintf(json + n, sizeof(json) - (size_t)n,
+			             "%s%lu", first ? "" : ",", number);
+			if (m < 0 || (size_t)(n + m) >= sizeof(json))
+				return HTTP_EINTERNAL;
+			n += m;
+			first = 0;
+		}
+		at++;
+	}
+
+	{
+		int m = snprintf(json + n, sizeof(json) - (size_t)n,
+		                 "],\"next\":%lu,\"written_this_boot\":%lu}\n",
+		                 LOGVOL.next, LOGVOL.segments);
+
+		if (m < 0 || (size_t)(n + m) >= sizeof(json))
+			return HTTP_EINTERNAL;
+		n += m;
+	}
+
+	http_response_simple(out, 200, "application/json", json, (size_t)n);
+	return HTTP_OK;
+}
+
+/*
+ * One segment, as text.
+ *
+ * The number comes from the query string and the **path is built from it**;
+ * see the top of this block for why that removes a class of fault rather than
+ * checking for it.
+ */
+static int handle_log_segment(const struct http_request *r, const char *body,
+                              size_t body_len, struct http_response *out,
+                              void *ctx)
+{
+	static char text[LOG_ENTRIES_MAX * (LOG_LINE_MAX + 48) + 256];
+	char name[LOGFILE_NAME_MAX];
+	char path[64];
+	struct http_form q;
+	const char *want;
+	unsigned long number = 0;
+	size_t at, i;
+	long got;
+	int rc;
+
+	(void)body; (void)body_len; (void)ctx;
+
+	rc = http_form_parse(r->query, recon_strlen(r->query), &q);
+	if (rc != HTTP_OK)
+		return rc;
+
+	want = http_form_get(&q, "n");
+	if (!want) {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: one n\n", 23);
+		return HTTP_OK;
+	}
+
+	/* Digits and nothing else. A number with a sign, a space or a letter
+	 * in it is not a segment this wrote. */
+	for (i = 0; want[i]; i++) {
+		if (want[i] < '0' || want[i] > '9') {
+			http_response_simple(out, 400, "text/plain",
+			                     "400 Bad Request: n is digits\n",
+			                     29);
+			return HTTP_OK;
+		}
+		if (number > LOGFILE_MAX_NUMBER) {
+			http_response_simple(out, 404, "text/plain",
+			                     "404 Not Found\n", 14);
+			return HTTP_OK;
+		}
+		number = number * 10 + (unsigned long)(want[i] - '0');
+	}
+	if (i == 0) {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: n is digits\n", 29);
+		return HTTP_OK;
+	}
+
+	if (logfile_name(number, name, sizeof(name)) < 0) {
+		http_response_simple(out, 404, "text/plain",
+		                     "404 Not Found\n", 14);
+		return HTTP_OK;
+	}
+
+	at = sizeof(LOGFILE_DIR) - 1;
+	for (i = 0; i < at; i++)
+		path[i] = LOGFILE_DIR[i];
+	path[at++] = '/';
+	for (i = 0; name[i]; i++)
+		path[at++] = name[i];
+	path[at] = '\0';
+
+	got = read_whole(path, text, sizeof(text));
+	if (got < 0) {
+		http_response_simple(out, 404, "text/plain",
+		                     "404 Not Found\n", 14);
+		return HTTP_OK;
+	}
+
+	http_response_simple(out, 200, "text/plain; charset=utf-8", text,
+	                     (size_t)got);
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
 	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS, 0 },
 	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS, 0 },
@@ -1071,6 +1305,11 @@ static const struct http_route ROUTES[] = {
 	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS, 1 },
 	{ "POST", "/api/upload",  1, handle_upload,    0, 0, 1 },
 	{ "GET",  "/api/resolve", 1, handle_resolve,   0, &RESOLVER, 1 },
+	/* The archive, guarded. The ring at `/api/log` is a snapshot and stays
+	 * open; these are every path this machine has ever been asked for. See
+	 * the block above `handle_log_segments`. */
+	{ "GET",  "/api/log/segments", 1, handle_log_segments, 0, 0, 1 },
+	{ "GET",  "/api/log/segment",  1, handle_log_segment,  0, 0, 1 },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
 	 * the volume can serve something larger than this program's memory. */
@@ -1155,13 +1394,6 @@ static const struct service WEB_SERVICE = {
  * available -- see `server/logfile.h` for why appending is not.
  */
 
-static struct {
-	unsigned long next;		/* the segment number to write */
-	unsigned long flushed;		/* entries already written out */
-	int ready;			/* the directory was read */
-	unsigned long segments;		/* written this boot */
-	unsigned long refused;		/* flushes that could not be written */
-} LOGVOL;
 
 /*
  * Find where the last run stopped.

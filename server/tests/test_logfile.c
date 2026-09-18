@@ -250,6 +250,40 @@ int main(void)
 		   "no buffer");
 	}
 
+	/* --- the rule itself, now that two places use it ------------------------
+	 *
+	 * `logfile_next` continues the numbering with it and the endpoint that
+	 * lists segments reports with it. Checked directly rather than only
+	 * through the listing, because a public function with one indirect
+	 * caller is a function whose edges nobody has looked at. */
+	{
+		unsigned long n = 99;
+
+		ok(logfile_is_segment("000000.log", 10, &n) && n == 0,
+		   "the lowest name");
+		n = 99;
+		ok(logfile_is_segment("123456.log", 10, &n) && n == 123456,
+		   "and the highest six digits allow");
+
+		n = 99;
+		ok(!logfile_is_segment("9.log", 5, &n), "too few digits");
+		ok(!logfile_is_segment("0000001.log", 11, &n), "too many");
+		ok(!logfile_is_segment("00000a.log", 10, &n),
+		   "a letter among them");
+		ok(!logfile_is_segment("000001.txt", 10, &n), "the wrong suffix");
+		ok(!logfile_is_segment("000001.log.bak", 14, &n),
+		   "something after it");
+		ok(!logfile_is_segment("000001", 6, &n), "no suffix at all");
+		ok(!logfile_is_segment("", 0, &n), "an empty name");
+		ok(n == 99, "and not one of those wrote a number");
+
+		/* The length decides, not a terminator: a listing is names
+		 * back to back and this is handed the span of one. */
+		ok(logfile_is_segment("000007.log000008.log", 10, &n)
+		   && n == 7,
+		   "the length bounds it, so a run of names reads as the first");
+	}
+
 	printf("  %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

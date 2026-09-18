@@ -107,6 +107,23 @@ long logfile_name(unsigned long number, char *out, size_t room);
 unsigned long logfile_next(const char *names, size_t len);
 
 /*
+ * Is this name one of ours, and which number?
+ *
+ * Exported because two places need the answer and they must not each decide
+ * it: `logfile_next` uses it to continue the numbering, and the endpoint that
+ * lists segments uses it to report only the log's own files rather than
+ * everything in the directory. Two copies of this rule would eventually list a
+ * name that `logfile_next` ignores, which is a segment nobody can read.
+ *
+ * Exactly six digits and `.log`, and nothing else at all: `7.log` is not one
+ * and neither is `0000001.log`. Both would sort wrongly against the names this
+ * writes, and a name that sorts wrongly is a log read out of order.
+ *
+ * Returns 1 and sets `*number` when it is, 0 when it is not.
+ */
+int logfile_is_segment(const char *name, size_t len, unsigned long *number);
+
+/*
  * Render the entries from `first` up to (not including) `book->written`.
  *
  * `first` is a count-since-boot, not a ring index: the ring holds the last

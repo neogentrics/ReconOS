@@ -109,7 +109,7 @@ the same two things: a static file handler and a JSON API.
 | Services and daemon inspector | **partial** | `GET /api/services` — state, polls, faults, restarts |
 | Directory and user manager | spec | waits on LDAP |
 | Performance monitor | spec | `SYS_MACHINE` gives some of it today |
-| Event viewer and log explorer | **partial** | `GET /api/log` — every request answered, with the count of any dropped |
+| Event viewer and log explorer | **built** | `GET /api/log` for the live ring, `GET /api/log/segments` and `GET /api/log/segment?n=` for the durable archive on the volume — **history from previous boots, read back over HTTP**. The archive is guarded; the ring is not |
 | Task and job scheduler | spec | waits on a timer |
 
 ### Graphical desktop and remote access
