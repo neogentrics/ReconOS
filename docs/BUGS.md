@@ -9528,14 +9528,38 @@ boot log.
 > `rename-crash-test.sh` beside something doing heavy I/O rather than beside
 > something burning CPU.
 >
-> #### One operational fact this surfaced, which is separate and real
+> #### One operational fact this surfaced — and the first version of it, written here, was wrong
 >
-> `RECON_TREE_LOCK` protects a **worktree**, not the machine. Four sessions with
-> four worktrees hold four different locks and run four matrices at once, each
-> starving the others — which is how the graphics session's run came to see
-> 14 Hz. The lock's granularity is wrong for the resource that is actually
-> scarce, and the honest name for what it prevents is "two runs sharing a tree",
-> not "two runs sharing a computer".
+> Three matrices were running at once when the graphics session saw 14 Hz. I
+> wrote that `RECON_TREE_LOCK` makes the lock per-worktree and that its
+> granularity is wrong for the scarce resource. **That is backwards**, and the
+> graphics session corrected it with the line itself:
+>
+> ```sh
+> LOCKFILE=${RECON_TREE_LOCK:-/tmp/reconos-kernel-tree.lock}
+> ```
+>
+> **The default is one path for the whole machine.** A session that leaves the
+> variable alone serialises with every other session that leaves it alone. The
+> granularity is right by design; it is being *overridden* — and this session
+> is one of the two overriding it:
+>
+> ```
+> ReconOS-matrix    RECON_TREE_LOCK=/tmp/reconos-matrix-tree.lock   <- mine
+> ReconOS-network   RECON_TREE_LOCK=/tmp/reconos-network-tree.lock
+> ReconOS-graphics  unset -> the shared default
+> ```
+>
+> So the starvation is not a missing mechanism somebody has to build. It is two
+> sessions opting out of one that already works, and the fix is a line each
+> rather than a design.
+>
+> **Why this session set it** is in `reference-reconos-matrix-worktree`: so a
+> matrix could run while the other session edited the kernel worktree. That
+> reason is still sound for *trees* — two worktrees genuinely are two trees —
+> and it silently gave up the machine-wide serialisation that came free with the
+> default. The cost was recorded as "processor contention"; the bill is a
+> filesystem test failing on a starved host.
 >
 > Their failure images are kept at
 > `/home/neoge/reconos-verify-failures/20260918-054447`.
