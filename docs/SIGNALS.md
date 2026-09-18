@@ -351,6 +351,37 @@ the boot says so: *"1 card(s) can raise one, 2 cannot and are polled"*. Both
 real drivers return false. The only implementation that returns true is the
 self-test's, which is why that test does not accept false as proof.
 
+#### What you are merging that is still unproven, said once and plainly
+
+**The r8169 has still never touched silicon**, and nothing in this signal
+changes that. The section further down explains why — IOMMU group 0 holds
+twelve devices including a mounted 3.6 TB volume, so passing one of the
+server's NICs through means taking the NAS down, which is Joshua's call. What
+follows is new since that was written and sharpens what a bare-metal run would
+actually test.
+
+**The server's two Realteks are different revisions** — rev 0c at `05:00.0` and
+rev 06 at `08:00.0` — and **the driver does not branch on revision at all.** It
+reads the byte from PCI config, stores it, prints it, and configures every
+RTL8168 identically. Counted rather than remembered: `revision` appears three
+times in `r8169.c`, at its declaration, its assignment, and the `kprintf`.
+
+That is a deliberate choice this branch made and has never been able to test,
+and one machine tests it for free, because both cards are already in it.
+`docs/BARE-METAL.md` now carries the outcomes as a table rather than a
+sentence, and the interesting row is **both cards named, one lease**: it would
+say the revision that got a lease is the one the common path suits, and name
+the other as needing per-revision handling the driver does not have. Without
+that written down, the same result reads like a partial failure instead of the
+most informative outcome available.
+
+**What has been proved, so the two are not confused:** the *device layer* above
+the driver ran on a two-card machine for the first time, with two e1000s — both
+attach, both lease, both answer the gateway, and `netdev_primary` picks `eth0`.
+That exercises `netdev_register`, the naming, `net_bring_up`'s loop and NW-010's
+function against a plurality of devices. It says nothing whatever about
+Realtek silicon.
+
 #### Two small things done to your entries, both verifiable
 
 `KF-216` and `KF-237` had issues on the tracker — #450 and #496 — and no link in
