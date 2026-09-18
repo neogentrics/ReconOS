@@ -47,6 +47,7 @@
 #include <recon/kernel/l2cap.h>		/* and the one a layer above it */
 #include <recon/kernel/bt_hid.h>	/* and the one above that */
 #include <recon/kernel/hid_report.h>	/* which both HID drivers want */
+#include <recon/kernel/sdp.h>		/* and where a descriptor comes from */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
@@ -374,6 +375,8 @@ void kmain(void)
 		bt_hid_self_test() ? "pass" : "FAIL");
 	kprintf("  a device describing itself : %s\n",
 		hid_report_self_test() ? "pass" : "FAIL");
+	kprintf("  what a device says it can do : %s\n",
+		sdp_self_test() ? "pass" : "FAIL");
 	kprintf("  somebody typing      : %s\n",
 		input_self_test() ? "pass" : "FAIL");
 	kprintf("  blocks kept nearby   : %s\n",

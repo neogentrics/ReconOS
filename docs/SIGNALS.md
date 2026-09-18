@@ -820,3 +820,70 @@ None of it has touched a byte from a real device. That is the honest caveat and
 it does not change until KF-248 lands.
 
 **Nothing blocked and nothing to merge.**
+
+---
+
+### 17 September 2026 (eighth) — bluetooth → kernel
+
+**SDP, and it closes a gap this branch had written down as open.**
+
+`kernel/core/sdp.c` reads a service record. Two things come out of it that
+nothing else could answer:
+
+- **the report descriptor**, attribute `0x0206`. Over USB a descriptor is
+  fetched with a control transfer; over Bluetooth it is an SDP attribute, and
+  without this `hid_report.c` had no way to be handed one.
+- **whether the device supports boot mode**, attribute `0x020E`. `bt_hid.h`
+  records that a Bluetooth HID device is not obliged to offer boot protocol,
+  which made "fall back to boot" a fallback that might not exist. This is the
+  attribute that says, per device, whether it does — so the question is
+  answerable before asking and being refused.
+
+#### Written from the encoding, then checked
+
+Every constant was derived from the descriptor byte's two fields and then
+checked against BlueZ 5.72's `sdp.h` — `SDP_UINT16 0x09`, `SDP_UUID16 0x19`,
+`SDP_SEQ8 0x35`, `SDP_BOOL 0x28`, `SDP_TEXT_STR8 0x25` all decompose exactly as
+predicted, and the HID attribute identifiers are theirs verbatim.
+
+Said plainly because `bt_hid.h` has the opposite note attached to it. These
+could be verified; those could not.
+
+#### The two traps, both the same shape as ones already met
+
+The size index is three bits and **is not a count**: 0 to 4 mean 1, 2, 4, 8 and
+16 bytes. Index 4 is sixteen, and 128-bit UUIDs are exactly what a service
+class list opens with — so a walker treating the index as a count loses its
+place on the first record it meets. Same shape as the HID item length that
+encodes 0, 1, 2, **4**.
+
+And nil is the one type whose index 0 means *no* data where every other type's
+means one byte. Missing it steps a byte into the following element every time.
+
+SDP is also big-endian, where L2CAP and HCI are not. Two byte orders a few
+bytes apart, which is the hazard `usb_storage.c` names for SCSI inside its
+wrappers.
+
+#### Breakages: seven red, one no-op, one bad test fixture
+
+Seven went red: size index 4 as four bytes, nil treated normally, integers read
+little-endian, a 64-bit value truncated instead of refused, a declared length
+past the end accepted, an absent attribute returning its neighbour, and the
+boot flag ignored.
+
+**The record in the test was wrong before the parser was.** Its outer sequence
+declared 23 bytes of content and carried 20, and the parser refused it —
+correctly. The comment now carries a per-line byte column so the arithmetic is
+checkable by eye.
+
+**And one patch was a no-op.** The eighth case named `e->data[0]` where the
+code has `e.data[0]`, so it never applied and its green said nothing. That is
+the second time this session the breaking apparatus was the fault rather than
+the code; the first was a patch inserted after an early-continue it could never
+reach. Both were caught by the assertion in the patch helper firing, which is
+the only reason they were not read as passes.
+
+69 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
+
+**Nothing blocked and nothing to merge.**
