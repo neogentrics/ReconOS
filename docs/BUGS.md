@@ -8282,6 +8282,72 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-259 — Six paths failed about processors that had been preempted perfectly well
+
+[#540](https://github.com/neogentrics/ReconOS/issues/540)
+
+- **Found:** 18 September 2026, matrix 73, six paths red at once:
+
+  ```
+  PVH 2 processors, no ticks
+  PVH 4 processors, no ticks
+  PVH 8 processors, no ticks
+  device tree 2 processors, no ticks
+  ...
+      PVH, 2 processors    FAILED -- online, and not one of them was preempted
+        cpu 0        : online, hw 0x0, 4 ticks, 0 switches
+        cpu 1        : online, hw 0x1, 0 ticks, 0 switches
+  ```
+
+- **Six paths at once, immediately after a merge, is a story that writes
+  itself** -- and the story was wrong. The merge before it brought two network
+  drivers and an interrupt hook that claims a vector, so "the NIC drivers broke
+  SMP interrupts" was sitting there ready to be believed.
+
+  **It reproduced with no network device attached at all**, which killed that in
+  one command. Then the pre-merge kernel reproduced the same `cpu 1: 0 ticks`
+  while *passing* -- so the tick counts printed beside the failure were not the
+  failure either, and the merge was innocent.
+
+- **What it actually was.** `verify-kernel.sh` reads the preemption evidence out
+  of the boot report with an anchored expression:
+
+  ```sh
+  sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks$/\1/p'
+  ```
+
+  Note `ticks$`. **And the commit before the merge appended a field to exactly
+  that line**, for KF-258: the summary could not distinguish a thread that is
+  about to run from one that can never be chosen, so it now says which.
+
+  ```
+  thread 2     : idle-001, running, 2 ticks, idle-for-this-cpu
+  ```
+
+  The anchor stops matching, `idle_ticks` comes back empty, and the check
+  reports that nothing was preempted about a machine that preempted normally.
+
+- **A boot report is an interface.** It is read by a person, and it is also
+  parsed by seventeen sub-scripts and the run that drives them. Adding a word to
+  a line is an ABI change to every one of them, and nothing in this tree says so
+  -- there is no list of which lines are load-bearing, and the only way to find
+  out is `grep` before editing a `kprintf`.
+
+- **It failed closed, and that is the only reason this was cheap.** An anchored
+  expression that stops matching produces an empty answer, and the check treats
+  empty as failure. The same fault in the other direction -- a looser pattern
+  that matched something wrong -- would have gone on reporting `pass` about
+  preemption nobody was measuring any more, on every SMP path, indefinitely.
+  **This is the shape of KF-247 with the sign flipped**, and it is the good sign.
+
+- **Fixed:** `ticks.*$`. The expression wanted the number and had no business
+  insisting the line ended there. Verified by feeding it both the new
+  `running, ... , idle-for-this-cpu` line and the `ready` line beside it: it
+  takes the first and ignores the second, which is what it always meant.
+
+- **Status:** fixed, kernel 0.5.0. No kernel code changed -- the kernel was
+  right and its reader was not.
+
 ### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
 
 [#534](https://github.com/neogentrics/ReconOS/issues/534)
