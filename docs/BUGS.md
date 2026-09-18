@@ -7838,6 +7838,94 @@ boot log.
 
 ### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
 
+> ### Narrowed, 18 September 2026, and it is not the idle path
+>
+> The entry below blames the idle path. **That was wrong**, and it is left
+> standing above this note because the reasoning that produced it is the
+> reasoning somebody else would repeat.
+>
+> **The discriminator is a user program, not an idle machine.** Counting
+> completed sleeps in the same kernel, same command, one word apart:
+>
+> ```
+> with the first screen : 1
+> with noinit           : 4
+> ```
+>
+> `noinit` is the only difference, and all it does is not start `recon-init`.
+> A machine that runs no user program sleeps and wakes indefinitely; a machine
+> that starts one stops after the first sleep. So the idle path is a bystander
+> -- it was suspect only because "the machine has gone quiet" and "the first
+> program has started" happen at nearly the same moment, and I took the first.
+>
+> **The thread table at the moment it wedges**, printed from inside the
+> sleeper immediately after its first sleep returns:
+>
+> ```
+> thread 0  : boot,       ready,   188 ticks
+> thread 31 : recon-init, ready,     0 ticks
+> thread 30 : logport,    running,   0 ticks
+> thread 2  : kworker,    finished,  1 ticks
+> thread 1  : idle-000,   ready,     4 ticks
+> ```
+>
+> **`recon-init` is READY and has had zero ticks.** It has never been given the
+> processor. `pick_next` takes a thread only when
+> `t->state == THREAD_READY && t->off_cpu` and its `idle_for` and `pinned_to`
+> allow this processor -- so a thread that is READY and never picked is either
+> not `off_cpu`, or is being passed over for a reason the summary does not
+> show. Both the boot thread and `idle-000` are marked idle-for-this-processor
+> and are last resorts, so with a program *ready*, the picker believes there is
+> work and the two waiters are skipped.
+>
+> That is a **scheduling** fault, and it is a much better place to look than
+> the timer wheel: the sleeper's timer fires correctly (`timer_next_deadline`
+> was observed returning the right deadline, 107 ms out, and the idle path
+> armed it).
+>
+> **Adding a `kprintf` to `power_idle_wait` makes it go away** -- four sleeps
+> complete instead of one. So it is timing-sensitive, which is consistent with
+> a race around a thread becoming runnable rather than with a wrong constant.
+>
+> **Its likely relative is KF-150** -- *about one boot in sixty, a user program
+> does not finish, and nothing says why* -- which has been open since before
+> any of this and is a user program not being run. That is the same sentence.
+>
+> **Deliberately not patched.** The fix belongs in `pick_next` or in whatever
+> sets `off_cpu`, and the scheduler is the one file in this tree where a wrong
+> guess produces intermittent faults nobody can attribute -- KF-150 may already
+> be one. The evidence above is worth more than a patch written from it in the
+> same hour.
+>
+> **That next step is done, and it eliminated its own hypothesis.**
+> `sched_print_summary` now prints whether a READY thread is actually pickable
+> and whether it is an idle thread, and the wedge re-run says:
+>
+> ```
+> thread 0  : boot,       ready,  195 ticks, idle-for-this-cpu
+> thread 31 : recon-init, ready,    0 ticks
+> thread 30 : logport,    running,  0 ticks
+> thread 1  : idle-000,   ready,    4 ticks, idle-for-this-cpu
+> ```
+>
+> `recon-init` carries **neither** marker: it is READY, it *is* `off_cpu`, and
+> it is not an idle thread. So it is fully eligible and `pick_next` should
+> return it on the next call. **It is not a picker-eligibility fault**, which
+> was the leading candidate an hour ago and is now ruled out by one word of
+> output.
+>
+> What remains is the program's **lifetime**: `noinit` -- which differs only by
+> not starting it -- sleeps indefinitely, so it is `recon-init` running and
+> exiting that breaks the sleeper, not its existing. The next thing to look at
+> is teardown: `timer_sleep_ns` keeps its `struct sleeper` and `struct timer`
+> **on the caller's stack**, and a timer still filed against freed or corrupted
+> memory is a callback writing somewhere it does not own. KF-209 was a teardown
+> freeing pages it should not have, in this same path.
+>
+> Then re-measure KF-150 -- *about one boot in sixty, a user program does not
+> finish* -- against whatever it turns out to be.
+
+
 [#534](https://github.com/neogentrics/ReconOS/issues/534)
 
 - **Found:** 17 September 2026, building the log port, and found because the
