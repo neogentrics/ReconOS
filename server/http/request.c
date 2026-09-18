@@ -480,6 +480,7 @@ static int frame(struct http_request *r)
 {
 	size_t i;
 	int seen_length = 0;
+	int seen_host = 0;
 
 	r->has_length = 0;
 	r->content_length = 0;
@@ -511,7 +512,37 @@ static int frame(struct http_request *r)
 			r->content_length = v;
 			r->has_length = 1;
 		}
+
+		/*
+		 * `Host`, and the same rule for the same reason.
+		 *
+		 * **Two of these is the fault above wearing a different
+		 * name.** A proxy taking the first and this server taking the
+		 * last are two readers disagreeing about which machine a
+		 * request was for -- which is how a cache is poisoned and how
+		 * a password-reset link is made to point somewhere else. The
+		 * parser refused two `Content-Length` headers from the day it
+		 * was written and accepted two `Host` headers until 0.24.0,
+		 * with the argument for refusing them sitting six lines above.
+		 */
+		if (seq(n, "host")) {
+			if (seen_host)
+				return HTTP_ESMUGGLE;
+			seen_host = 1;
+		}
 	}
+
+	/*
+	 * HTTP/1.1 requires one. RFC 7230 puts it as plainly as that
+	 * specification ever puts anything: a server **must** answer 400 to a
+	 * 1.1 request without it.
+	 *
+	 * Not required of HTTP/1.0, which predates the field -- and a 1.0
+	 * client is not asking to be routed by name, so nothing downstream
+	 * needs it.
+	 */
+	if (r->minor >= 1 && !seen_host)
+		return HTTP_EMALFORMED;
 
 	return HTTP_OK;
 }
@@ -654,4 +685,64 @@ const char *http_reason(int status)
 	default:  return "Unknown";
 	}
 #undef RECON_STATUS_CASE
+}
+
+/* --- which machine a request was for ---------------------------------------
+ *
+ * See `http.h` for the rule. The work here is deciding where a name ends,
+ * which is the whole of it: a port, a trailing dot, and the brackets that
+ * protect an address made of colons.
+ */
+
+/* How much of `host` is the name, ignoring any `:port` after it. */
+static size_t host_name_length(const char *host)
+{
+	size_t i = 0;
+
+	/*
+	 * A bracketed literal. Everything up to and including `]` is the name,
+	 * colons and all -- `[::1]:80` is one address and a port, and cutting
+	 * at the first colon would leave `[`.
+	 */
+	if (host[0] == '[') {
+		while (host[i] && host[i] != ']')
+			i++;
+		if (host[i] == ']')
+			i++;
+		return i;
+	}
+
+	while (host[i] && host[i] != ':')
+		i++;
+	return i;
+}
+
+int http_host_matches(const char *pattern, const char *header)
+{
+	size_t plen, hlen, i;
+
+	if (!pattern || !header || !pattern[0] || !header[0])
+		return 0;
+
+	plen = host_name_length(pattern);
+	hlen = host_name_length(header);
+
+	/*
+	 * A single trailing dot is the root form of the same name:
+	 * `example.com.` and `example.com` are one host. Taken off both sides
+	 * so a configured name and an arriving one need not agree about it.
+	 */
+	if (plen > 1 && pattern[plen - 1] == '.')
+		plen--;
+	if (hlen > 1 && header[hlen - 1] == '.')
+		hlen--;
+
+	if (plen == 0 || plen != hlen)
+		return 0;
+
+	for (i = 0; i < plen; i++)
+		if (lower(pattern[i]) != lower(header[i]))
+			return 0;
+
+	return 1;
 }

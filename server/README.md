@@ -29,10 +29,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.23.0 |
+| **Version** | 0.24.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
-| **Checks** | 781 across nineteen suites, by `scripts/server-tests.sh` |
+| **Checks** | 826 across nineteen suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -174,8 +174,8 @@ project builds with, and following them left two suites unbuildable.
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 94 | one request, and every way of writing two |
-| `server_http_serve` | 43 | the server over a real socket, `serve.c` unmodified |
+| `server_http` | 123 | one request, and every way of writing two |
+| `server_http_serve` | 59 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
@@ -282,6 +282,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.24.0** | **Name-based virtual hosts -- and the header they dispatch on had never been enforced.** A site now carries a name and a `next`; the first whose name matches answers, one with no name claims everything, and a name nobody claims gets **421** rather than 404, because the resource may well exist and this is simply not the machine that has it. Picked **per request**, not per connection: a keep-alive client may ask two sites down one socket, and the pipelined pair proving it is the check that fails against every shape that decides once. Watched failing at 9 of 59 against a dispatch that always answers with the head of the chain -- and the 200s still passed, which is why the body is the site's own context rather than the route's. Building it found the older fault: `request.c` accepted **HTTP/1.1 with no `Host` at all**, and accepted **two `Host` headers**, in the same file that has refused two `Content-Length` headers since 0.0.2 on the stated grounds that *agreement is not the property that makes a message safe, being unambiguous is.* The one header that says which machine is being addressed was the one header that rule had never been applied to. Both are 400 now, HTTP/1.0 untouched, measured on the machine before and after. VF-028. |
 | **0.23.0** | **The log can be read back, including from boots that have already ended.** Writing segments without a way to read them is half a feature: `GET /api/log/segments` lists what the volume holds and `GET /api/log/segment?n=` returns one as text. **The caller gives a number and never a name** — the path is built by the same function that wrote the file, so traversal is not refused, it is unreachable. Confirmed against `../../etc/passwd`, `%2e%2e%2f`, a bare filename, a negative, scientific notation and a value given twice: every one 400 or 404, none of them by a path check. These two are **guarded** while `GET /api/log` stays open, which is the first place on this server where the line falls between *current state* and *accumulated record* rather than between reading and writing — a snapshot says what is happening, an archive says what the people who use this machine do. |
 | **0.22.0** | **The access log survives a reboot, and the reason it could not was wrong.** It had been recorded since 0.12.0 that appending needed `O_APPEND`, which the C library drops — but appending needs the *ability* to append, and `SYS_SEEK` exists. The real blocker, measured: plain `OPEN_WRITE` is refused, `OPEN_CREATE` (*must not already exist*) **succeeds** on a file that does, and `OPEN_REPLACE` (*must exist*) is **refused** on one. The only door that opens contradicts its own documentation. So the shape changed instead: `SYS_CREATE` writes a file whole and refuses to overwrite, because ReconFS writes whole files — a log that appends is impossible here and a log that **rotates** is natural. Names are zero-padded so a lexical sort is a chronological one, and the next number comes from the directory, because a server starting again at zero would fail every write from its second boot onwards **silently**. Watched failing at 10 of 34 against exactly that version. And the number that exposed a second fault: 211 requests against two segments when six were due — `requests_served` had been counting connection-pool *steps* since 0.16.0, reading three times the truth on the dashboard for five versions. Eleven requests moved it by thirty-three. VF-026, VF-027. |
 | **0.21.2** | **The upload endpoint had never been shown to keep anything.** It has existed since 0.15.0 and was verified every way except the one that matters: no test had ever checked that a file was still there after a reboot — and inside one boot, a write that reached the volume and one that did not look identical. The cause was not difficulty, it was a missing disk: the 16 GB image lived in `/tmp`, which is shared with the other sessions here and cleaned without warning, and it vanished twice in one day. `scripts/server-disk.sh` now builds it under `kernel/build/` where nothing else reaches. Measured across two boots on one volume: 201, then 409 for the same name, then a **restart with a new token**, the web root reporting *already there* rather than rewritten, the same name still 409, and an unused name 201. Accepted and kept are different claims. VF-025. |

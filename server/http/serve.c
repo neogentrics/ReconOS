@@ -640,6 +640,32 @@ static void note(const struct http_site *site, const struct http_request *req,
 	site->log(site->log_ctx, req, status, now - before);
 }
 
+/*
+ * The site a request is for, or NULL if none of them will own it.
+ *
+ * The first whose `host` matches wins; a site with `host` NULL claims
+ * anything that reaches it, which is what makes a single-site server behave
+ * exactly as it did before virtual hosts existed.
+ *
+ * A request with no `Host` cannot reach here on HTTP/1.1 -- `request.c`
+ * refuses that outright -- so the only callers with an empty one are 1.0
+ * clients, which predate the field and get the default site.
+ */
+static const struct http_site *pick_site(const struct http_site *first,
+                                         const struct http_request *req)
+{
+	const char *host = http_header_get(req, "host");
+	const struct http_site *s;
+
+	for (s = first; s; s = s->next) {
+		if (!s->host)
+			return s;		/* the default claims it */
+		if (host && http_host_matches(s->host, host))
+			return s;
+	}
+	return 0;
+}
+
 /* --- connections, several at once ----------------------------------------
  *
  * --- Why there is a pool here and not a process per connection ---
@@ -1128,8 +1154,34 @@ static int conn_step(struct http_conn *c)
 		return 1;
 	}
 
-	if (!conn_answer(c, c->site))
-		conn_drop(c);
+	/*
+	 * Which site this request is for.
+	 *
+	 * Walked here rather than at accept, because `Host` is in the request
+	 * and a connection may carry several -- a keep-alive client is
+	 * entitled to ask two different sites down one socket, and a server
+	 * that decided once at accept would answer the second with the first
+	 * one's routes.
+	 */
+	{
+		const struct http_site *pick = pick_site(c->site, &c->req);
+
+		if (!pick) {
+			/*
+			 * 421, and not 404. The resource may well exist; this
+			 * machine is not the one that has it, and 421 is the
+			 * status that says exactly that. A 404 would tell a
+			 * client the name was right and the path was wrong.
+			 */
+			send_status(c->fd, 421, c->site->server_name,
+			            c->site->bytes_sent);
+			note(c->site, &c->req, 421, c->sent_before);
+			conn_drop(c);
+			return 1;
+		}
+		if (!conn_answer(c, pick))
+			conn_drop(c);
+	}
 	return 1;
 }
 

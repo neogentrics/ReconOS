@@ -44,7 +44,8 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 736 checks across eighteen suites, several connections at once, writes guarded, running on the machine |
+| Web / API server | server | **built** | `server/http/` — several connections at once, name-based virtual hosts, writes guarded, running on the machine. **The check count deliberately is not repeated here**: this row carried *736 across eighteen suites* for four versions after both numbers stopped being true, and `server/README.md` is the one place a script compares against the run (VF-024) |
+| Name-based virtual hosts | server | **built** | one listener, a chain of sites, the first whose name matches answers; a name nobody claims gets 421. The machine runs a single site with **no** name, which answers to anything — so what is proved there is that adding the dispatch changed nothing for a server that has one site. See `docs/WEB.md` §4 |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine, and **uploads now proved to survive a reboot** (VF-025). `scripts/server-disk.sh` makes the volume |
 | DNS **resolver** (client) | server | **built** | `server/dns.c` — 72 checks, **resolving real names on the machine**. A resolver is a *connected* datagram, which this kernel has had all along |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | a *server* must reply to whoever asked, which needs `recvfrom`. The blocked half; see VF-017 for how the entry came to cover both |

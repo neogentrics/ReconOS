@@ -136,6 +136,32 @@ int http_request_parse(const char *buf, size_t len, struct http_request *into);
 int http_status_for(int verdict);
 
 /*
+ * Does this `Host` header name the same machine as `pattern`?
+ *
+ * Pure, and here rather than in `serve.c` because it is a rule about what a
+ * name means rather than about dispatching on one -- and because a rule with a
+ * suite is a rule somebody can check.
+ *
+ * `pattern` is what a site was configured with, `header` is what arrived.
+ *
+ * **Case-insensitive**, because host names are. **The port is ignored**: a
+ * client reaching `example.com` on a non-standard port sends
+ * `example.com:8080`, and it is the same machine. **A single trailing dot is
+ * the root form of the same name** and matches, which is the rule `dns.h`
+ * already takes for the names it encodes.
+ *
+ * An address in brackets keeps its colons: `[::1]:80` is the literal `[::1]`
+ * on port 80, and a port-stripper that cut at the first colon would turn it
+ * into `[`. That is the one shape here that is easy to get wrong and silently
+ * matches nothing afterwards.
+ *
+ * Returns 1 on a match, 0 otherwise. A NULL or empty pattern matches nothing --
+ * a site with no name is not a site that answers to every name, which would be
+ * the opposite of what a caller leaving it unset meant.
+ */
+int http_host_matches(const char *pattern, const char *header);
+
+/*
  * Every status this server can send, with its reason phrase.
  *
  * **One list, because two drifted.** `http_reason` used to carry its own switch
@@ -168,6 +194,7 @@ int http_status_for(int verdict);
 	X(415, "Unsupported Media Type")                       \
 	X(416, "Range Not Satisfiable")                        \
 	X(417, "Expectation Failed")                           \
+	X(421, "Misdirected Request")                          \
 	X(431, "Request Header Fields Too Large")              \
 	X(500, "Internal Server Error")                        \
 	X(501, "Not Implemented")                              \

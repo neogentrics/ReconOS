@@ -124,7 +124,7 @@ can run, not by what it can send.
 | **File upload** | **built, small** | `POST /api/upload` — `multipart.c` parses it and it is written to `/System/Uploads`, which **nothing serves**. Bounded by time rather than by the 64 KiB cap: see VF-013, about fifteen kilobytes today. |
 | **Streaming a request body to disk** | **blocked** | a body is read whole into one buffer before a handler runs, so an upload cannot exceed it. Needs the request side to stream, which is the mirror of the response sink built in 0.8.0. |
 | **File download** | **built** | streams from the volume in 8 KiB blocks, and resumes: `Range`, `If-Range`, 206 and 416. |
-| **Server-sent events** | **unblocked** | the sink it needed now exists; the event framing is not written. |
+| **Server-sent events** | **blocked** | the sink it needs exists, and that is necessary rather than sufficient: dispatch is synchronous, so a handler runs to completion and the connection moves on. There is no way to emit an event a minute later without holding the process. **This row said *unblocked* for four versions while the long-polling row beside it named the exact thing that was missing** -- two rows about one property, disagreeing, in a file whose job is to say what can be built. Corrected 0.24.0. |
 | **WebSocket** | specified | needs the `Upgrade` handshake, SHA-1 for the accept key, and a framing layer. The connection stops being HTTP after the handshake, so it needs its own loop. |
 | **Long-polling** | **unblocked, not built** | a request can now be parked without occupying the only process — `HTTP_CONNS_MAX` of them. What is missing is a handler that can be resumed, since dispatch is still synchronous. |
 | **CGI-style external programs** | **blocked** | nothing in user mode can start a program — `KERNEL-WANTS.md` carries the entry. |
@@ -286,9 +286,10 @@ which is the client having declined it.
 |---|---|---|
 | Path routing, prefix and exact | **built** | a prefix must end on a `/` boundary, so `/api` never claims `/apifoo` |
 | Method routing, with 405 rather than 404 | **built** | the difference tells a client whether the resource exists |
-| `Host`-based virtual hosts | specified | the header is parsed and kept; nothing dispatches on it |
+| `Host`-based virtual hosts | **built** | a site carries a name and a `next`; the first whose name matches answers, one with no name claims everything, and a name nobody claims gets **421** rather than 404 -- the resource may exist, and this is not the machine that has it. Picked per request rather than per connection, because a keep-alive client may ask two sites down one socket. `http_host_matches` ignores the port and a trailing dot, and keeps a bracketed IPv6 literal whole. 0.24.0. |
 | SNI | **blocked** | follows TLS |
 | Path parameters (`/api/service/{name}`) | specified | |
+| Refusing a request with no `Host`, or two | **built** | HTTP/1.1 without `Host` is 400, and **two `Host` headers are 400 even when they agree** -- the same rule `Content-Length` has had since 0.0.2, which this file's own doctrine demanded and this parser had never applied to the one header that says which machine is being addressed. HTTP/1.0 is unaffected: it predates the field. 0.24.0. |
 | Redirects | **built** (transport) | `extra_name`/`extra_value` carries `Location` |
 
 ---

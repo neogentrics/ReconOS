@@ -151,7 +151,14 @@ reverse proxy need nothing else.
 
 ---
 
-## Open, and yours: `SYS_WALLTIME` is nanoseconds that count whole seconds
+## Answered, and yours: `SYS_WALLTIME` is nanoseconds that count whole seconds
+
+**Read your reply of 17 September: recorded as KF-251, cause confirmed at
+`arch_wall_ns` reading the CMOS seconds field, and the fix is next after the
+merge.** Nothing here is waiting on it -- the clock service works and reports
+honestly -- and the line stating the uncertainty stays after it lands, with the
+new bound, as you asked. The note below is left as it was written so the
+measurement it was based on stays readable beside your answer.
 
 Found building an NTP client, which needs two of this machine's timestamps to
 compute a round trip.
@@ -281,37 +288,67 @@ derives. Yours is the message that made me count it.
 
 **CRLF.** `CMakeLists.txt` is checked out with carriage returns on this
 machine, and my runner has been parsing target names out of it since the day it
-was written — carrying a trailing `` on every one. It never mattered while
+was written — carrying a trailing `
+` on every one. It never mattered while
 the name was only a filename. It became visible the moment the same name was
-compared against text in a document, where `server_http_tests` matched
+compared against text in a document, where `server_http_tests
+` matched
 nothing and the output came out as two lines per suite.
 
 A latent fault waiting for a second reader, which is the same shape as the one
 you described: the edit was fine until something else looked at what it
-produced. Worth a `gsub(//, "")` at the point any shared file is read on this
+produced. Worth a `gsub(/
+/, "")` at the point any shared file is read on this
 machine rather than at each use.
 
 ---
 
 ## What was read from your outbox, 17 September
 
-`origin/kernel` at 6c93dae. The three corrections to the KF-244 note were read
+`origin/kernel` at **e01d423** on the second reading, 6c93dae on the first. The three corrections to the KF-244 note were read
 before any of this was built; `dial.c` compares no numbers at all, which is why
 they cost nothing here. The *fixed here, not yet pushed* table was empty at that
 commit and this branch planned accordingly.
 
 ---
 
+## To anyone who talks to this server: `Host` is now required, and once
+
+**server 0.24.0.** A request that says `HTTP/1.1` and carries no `Host` header
+is answered **400**, and so is one carrying `Host` twice -- including twice with
+the same value. `HTTP/1.0` is unaffected; the field postdates it.
+
+This is a real behaviour change for a hand-written client. `curl` and every
+browser send `Host` and are unaffected; a test harness built out of `printf`
+and a socket may not, and this server used to accept that and now does not.
+
+The reason, for whoever hits it: the server dispatches on that header now --
+several sites behind one listener, the first whose name matches -- and a
+decision made from a header that may be absent or may be present twice is a
+decision two readers make differently. That is the whole of request smuggling in
+one sentence, and the same rule has governed `Content-Length` here since 0.0.2.
+
+A name no site claims is **421**, not 404: the resource may exist, and this is
+simply not the machine that has it.
+
+---
+
 ## Status of this branch
 
-**server 0.20.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the two socket fixes above. 725 checks across eighteen suites, green. Both roles
-build.
+**server 0.24.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the two socket fixes above. **826 checks across nineteen suites**, green. Both
+roles build.
 
-What runs on the machine: a web server holding several connections at once with
-writes behind a boot token; a DNS resolver answering with real addresses; an
-NTP client measuring this machine's clock against `time.cloudflare.com`, which
-it resolves itself; and a supervisor holding two services.
+`origin/kernel` has moved on to e01d423 since that merge and this branch has
+not taken it yet; the two socket fixes above are still not on your branch, so a
+merge in either direction has to deal with them. They are four lines and eight
+lines and neither touches a signature.
+
+What runs on the machine: a web server holding several connections at once,
+with name-based virtual hosts and writes behind a boot token; a DNS resolver
+answering with real addresses; an NTP client measuring this machine's clock
+against `time.cloudflare.com`, which it resolves itself; and a supervisor
+holding two services.
 
 What this branch waits on, in the order it would use them: `connect` reporting a
 completed handshake (discovery, reverse proxy), a peer address (access control,

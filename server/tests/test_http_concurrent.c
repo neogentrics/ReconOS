@@ -107,8 +107,20 @@ static struct http_site SITE = {
 	/* routes, count, ctx, name, log, log_ctx, bytes_sent, idle, now_ms,
 	 * unblock. No `idle` and no clock: on a host there is nothing to yield
 	 * to, and the deadline this suite cares about is the client's. */
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/conc",
-	0, 0, 0, 0, 0, unblock, 0, 0
+	/*
+	 * Named rather than positional.
+	 *
+	 * Every field added to `struct http_site` used to break all three of
+	 * these at once -- `idle`, then `now_ms`, then `unblock`, then `host`
+	 * and `next` -- each time a compiler error in a test that had nothing
+	 * to do with the change. Naming them means a new field is simply
+	 * absent here, which is what a test that does not care about it should
+	 * say.
+	 */
+	.routes = ROUTES,
+	.route_count = sizeof(ROUTES) / sizeof(ROUTES[0]),
+	.server_name = "ReconOS/conc",
+	.unblock = unblock
 };
 
 /* --- clients --------------------------------------------------------------- */

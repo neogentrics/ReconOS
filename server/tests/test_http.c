@@ -276,6 +276,79 @@ int main(void)
 		   "a head larger than HTTP_REQUEST_MAX");
 	}
 
+	/* --- Host, and why two of them is the same fault as two lengths --------
+	 *
+	 * This parser refused two `Content-Length` headers from the day it was
+	 * written, with the reason set out in its own comment: *agreement is
+	 * not the property that makes a message safe, being unambiguous is.*
+	 * It accepted two `Host` headers until 0.24.0, with that argument
+	 * sitting six lines above the place it was not applied.
+	 *
+	 * Two of these is a proxy and an origin disagreeing about **which
+	 * machine a request was for** -- which is how a cache is poisoned and
+	 * how a password-reset link is made to point somewhere else. */
+	refuses("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", HTTP_ESMUGGLE,
+	        "two different Host headers");
+	refuses("GET / HTTP/1.1\r\nHost: a\r\nHost: a\r\n\r\n", HTTP_ESMUGGLE,
+	        "two that agree are still two");
+	refuses("GET / HTTP/1.1\r\nhost: a\r\nHOST: b\r\n\r\n", HTTP_ESMUGGLE,
+	        "and the field name folds, so a change of case is not a second"
+	        " field");
+
+	/* RFC 7230 puts it as plainly as that specification puts anything: a
+	 * server must answer 400 to a 1.1 request without one. */
+	refuses("GET / HTTP/1.1\r\n\r\n", HTTP_EMALFORMED, "HTTP/1.1 with no Host at all");
+	refuses("GET / HTTP/1.1\r\nConnection: close\r\n\r\n", HTTP_EMALFORMED,
+	        "nor does another header stand in for it");
+
+	/* 1.0 predates the field, and a 1.0 client is not asking to be routed
+	 * by name -- so requiring it there would refuse messages that are
+	 * correct. */
+	accepts("GET / HTTP/1.0\r\n\r\n", "GET", "/", "");
+	accepts("GET / HTTP/1.0\r\nHost: m16\r\n\r\n", "GET", "/", "");
+
+	ok(verdict("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", &r)
+	   == HTTP_ESMUGGLE,
+	   "two Hosts is reported as smuggling, which is what it is");
+
+	/* --- which machine a request was for ------------------------------------
+	 *
+	 * The rule a virtual host is dispatched on. The bracketed-literal case
+	 * is the one that is easy to get wrong: a port-stripper that cuts at
+	 * the first colon turns `[::1]:80` into `[`, which then matches
+	 * nothing, quietly, for ever. */
+	ok(http_host_matches("example.com", "example.com"), "the plain case");
+	ok(http_host_matches("example.com", "EXAMPLE.COM"),
+	   "host names fold -- they are not case-sensitive");
+	ok(http_host_matches("EXAMPLE.com", "example.COM"), "in both directions");
+	ok(http_host_matches("example.com", "example.com:8080"),
+	   "a port is not part of the name");
+	ok(http_host_matches("example.com:80", "example.com"),
+	   "on either side");
+	ok(http_host_matches("example.com", "example.com."),
+	   "a single trailing dot is the root form of the same name");
+	ok(http_host_matches("example.com.", "example.com"), "and either way");
+	ok(http_host_matches("m16", "m16"), "a bare name");
+	ok(http_host_matches("[::1]", "[::1]"), "a bracketed address");
+	ok(http_host_matches("[::1]", "[::1]:80"),
+	   "with a port after the bracket, which is where a port may be");
+	ok(http_host_matches("[fe80::1]", "[FE80::1]"), "and it folds too");
+
+	ok(!http_host_matches("example.com", "example.org"), "a different name");
+	ok(!http_host_matches("example.com", "www.example.com"),
+	   "a subdomain is a different machine -- no wildcards here");
+	ok(!http_host_matches("www.example.com", "example.com"),
+	   "and the parent is not the child");
+	ok(!http_host_matches("example.com", "example.com.evil.test"),
+	   "nor is a name that merely begins with it");
+	ok(!http_host_matches("example.com", ""), "an empty header");
+	ok(!http_host_matches("", "example.com"),
+	   "and an empty pattern matches nothing rather than everything");
+	ok(!http_host_matches(0, "example.com"), "no pattern");
+	ok(!http_host_matches("example.com", 0), "no header");
+	ok(!http_host_matches("[::1]", "::1"),
+	   "the brackets are part of the literal, not decoration");
+
 	/* --- statuses ---------------------------------------------------------- */
 	ok(http_status_for(HTTP_ESMUGGLE) == 400, "smuggling answers 400");
 	ok(http_status_for(HTTP_EMETHOD) == 501, "an unimplemented method answers 501");

@@ -263,6 +263,36 @@ struct http_route {
 };
 
 struct http_site {
+	/*
+	 * The name this site answers to, or NULL for "any".
+	 *
+	 * NULL is what a server with one site sets, and is the behaviour this
+	 * had before virtual hosts existed: every request is this site's,
+	 * whatever `Host` says.
+	 *
+	 * Set it, and a request whose `Host` names something else is **not**
+	 * this site's -- it goes to the next in the chain, and if nothing
+	 * claims it the server answers 421. A machine that answers to every
+	 * name it is asked about is how a cache is poisoned and how a link in
+	 * an email is made to point somewhere it should not.
+	 */
+	const char *host;
+
+	/*
+	 * The next site to try, or NULL.
+	 *
+	 * A chain rather than an array so that a server with one site is
+	 * exactly what it was: `host` NULL, `next` NULL, and not one line of
+	 * the dispatch behaves differently. Adding a second site is setting a
+	 * pointer.
+	 *
+	 * Order matters and is the site author's: the first whose `host`
+	 * matches wins, and a site with `host` NULL claims everything from
+	 * there on -- so a default belongs last, and one placed first is a
+	 * configuration that silently ignores every site after it.
+	 */
+	const struct http_site *next;
+
 	const struct http_route *routes;
 	size_t                   route_count;
 	void                    *ctx;

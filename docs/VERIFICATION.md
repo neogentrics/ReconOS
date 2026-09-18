@@ -789,3 +789,66 @@ None.
   when its segment is written, not when it is recorded. Up to
   `LOGFILE_FLUSH_EVERY` entries live only in the ring, and a machine that loses
   power loses them. That is the weakness an append-only log would not have.
+
+### VF-028 -- the header virtual hosts dispatch on had never been enforced
+
+- **What was being built** Name-based virtual hosts: a site carries a name, the
+  first whose name matches a request's `Host` answers, and a name nobody claims
+  gets 421.
+- **What was found on the way** `request.c` accepted **HTTP/1.1 with no `Host`
+  at all**, and accepted **two `Host` headers** -- in the file that has refused
+  two `Content-Length` headers since 0.0.2, with the doctrine written above it:
+  *agreement is not the property that makes a message safe, being unambiguous
+  is.* The rule had been applied to the header that says how long a message is
+  and never to the header that says **which machine it is for**, which is the
+  one a dispatch is about to make a decision with.
+- **Measured against the parser, before and after:**
+
+```
+before   HTTP/1.1 with no Host    verdict=0    status=0
+         two different Hosts      verdict=0    status=0
+
+after    HTTP/1.1 with no Host    verdict=-2   status=400
+         two different Hosts      verdict=-8   status=400
+         HTTP/1.0 with no Host    verdict=0    status=0    (unchanged)
+```
+
+- **And on the machine**, a server-role boot with the console on :80, six
+  requests over the loopback forward:
+
+```
+ordinary request, Host present                HTTP/1.1 200 OK
+HTTP/1.1 with no Host at all                  HTTP/1.1 400 Bad Request
+two different Host headers                    HTTP/1.1 400 Bad Request
+two identical Host headers                    HTTP/1.1 400 Bad Request
+HTTP/1.0 with no Host (predates the field)    HTTP/1.1 200 OK
+a name this machine was never given           HTTP/1.1 200 OK
+```
+
+  The last two are the ones worth reading. HTTP/1.0 predates the field and is
+  untouched. And the console answers to a name it was never given **on
+  purpose**: its site has no name, which claims everything, and that is what
+  every server here did before this version. A machine that starts refusing
+  names after an upgrade nobody asked for is a worse outcome than the fault.
+
+  Two identical `Host` headers are refused as well. Not an oversight: a
+  duplicate that agrees is still a message with two answers to one question,
+  and a reader that resolves it by comparison is a reader that resolves it.
+  `Content-Length` has been refused on the same grounds for twenty-three
+  versions.
+
+- **The dispatch, watched failing** against `pick_site` rewritten to answer with
+  the head of the chain every time -- the exact shape of a server that ignores
+  `Host`: **9 of 59 checks in `test_http_serve`**. The fifty that still passed
+  are the interesting half. Every 200 passed, because the head of the chain
+  serves the same routes; every check of a *name* passed when the name happened
+  to be the head's. What failed was the second site's context, the second site's
+  `Server` header, every 421, and the pipelined pair.
+- **So the body of the test response is the site's own `ctx`**, not the route's.
+  Both sites share one route table deliberately: a check that read the path
+  would pass with the dispatch deleted.
+- **What is not proved on the machine** A second named site. `server_init.c`
+  configures one site with no name, so what a boot shows is that adding the
+  dispatch changed nothing for a server that has one site. The chain itself is
+  proved over a real socket in the host suite, against `serve.c` unmodified --
+  which is the same standard every other property of this server is held to.

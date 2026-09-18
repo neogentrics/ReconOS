@@ -170,8 +170,20 @@ static struct http_site SITE = {
 	 * to. `unblock` is not -- the server holds several connections at
 	 * once and a blocking socket would stop the loop on whichever one
 	 * went quiet. See `serve.h`. */
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/stream",
-	0, 0, 0, 0, 0, unblock, 0, 0
+	/*
+	 * Named rather than positional.
+	 *
+	 * Every field added to `struct http_site` used to break all three of
+	 * these at once -- `idle`, then `now_ms`, then `unblock`, then `host`
+	 * and `next` -- each time a compiler error in a test that had nothing
+	 * to do with the change. Naming them means a new field is simply
+	 * absent here, which is what a test that does not care about it should
+	 * say.
+	 */
+	.routes = ROUTES,
+	.route_count = sizeof(ROUTES) / sizeof(ROUTES[0]),
+	.server_name = "ReconOS/stream",
+	.unblock = unblock
 };
 
 /* --- the client ------------------------------------------------------------ */

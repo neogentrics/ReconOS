@@ -171,16 +171,31 @@ static int allow_if_word(const struct http_request *r, const char *body,
 }
 
 static struct http_site GUARDED_SITE = {
-	GUARDED_ROUTES, sizeof(GUARDED_ROUTES) / sizeof(GUARDED_ROUTES[0]),
-	0, "ReconOS/guarded", 0, 0, 0, 0, 0, unblock, allow_if_word, 0
+	/*
+	 * Named rather than positional.
+	 *
+	 * Every field added to `struct http_site` used to break all three of
+	 * these at once -- `idle`, then `now_ms`, then `unblock`, then `host`
+	 * and `next` -- each time a compiler error in a test that had nothing
+	 * to do with the change. Naming them means a new field is simply
+	 * absent here, which is what a test that does not care about it should
+	 * say.
+	 */
+	.routes = GUARDED_ROUTES,
+	.route_count = sizeof(GUARDED_ROUTES) / sizeof(GUARDED_ROUTES[0]),
+	.server_name = "ReconOS/guarded",
+	.unblock = unblock,
+	.allow = allow_if_word
 };
 
 /* The same routes with **no policy at all**. A guarded route here must answer
  * 500: the site asked for a guard it did not supply, and serving the request
  * anyway is the one outcome nobody wanted. */
 static struct http_site BARE_SITE = {
-	GUARDED_ROUTES, sizeof(GUARDED_ROUTES) / sizeof(GUARDED_ROUTES[0]),
-	0, "ReconOS/bare", 0, 0, 0, 0, 0, unblock, 0, 0
+	.routes = GUARDED_ROUTES,
+	.route_count = sizeof(GUARDED_ROUTES) / sizeof(GUARDED_ROUTES[0]),
+	.server_name = "ReconOS/bare",
+	.unblock = unblock
 };
 
 static struct http_site SITE = {
@@ -188,8 +203,60 @@ static struct http_site SITE = {
 	 * to. `unblock` is not -- the server holds several connections at
 	 * once and a blocking socket would stop the loop on whichever one
 	 * went quiet. See `serve.h`. */
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1",
-	0, 0, 0, 0, 0, unblock, 0, 0
+	.routes = ROUTES,
+	.route_count = sizeof(ROUTES) / sizeof(ROUTES[0]),
+	.server_name = "ReconOS/0.1",
+	.unblock = unblock
+};
+
+
+/* --- virtual hosts, over a real socket ------------------------------------
+ *
+ * `test_http.c` proves `http_host_matches` against strings. What only a socket
+ * can show is that the server **dispatches** on the answer: that the site whose
+ * name was asked for is the site that answers, with its own routes, its own
+ * context and its own `Server` header -- and that a name nobody claims is
+ * refused rather than handed to whoever happens to be first in the chain.
+ *
+ * Two named sites and **no default**, deliberately. A default would answer
+ * everything and hide exactly the failure worth catching.
+ */
+
+/* Reports which site's context it was called with, which is how the parent
+ * tells the two apart. The path cannot do it: both sites share this table, so
+ * a check that looked at the path would pass with the dispatch removed
+ * entirely. */
+static int handle_whoami(const struct http_request *r, const char *body,
+                         size_t body_len, struct http_response *out, void *ctx)
+{
+	const char *name = ctx ? (const char *)ctx : "(nobody)";
+
+	(void)r; (void)body; (void)body_len;
+	http_response_simple(out, 200, "text/plain", name, strlen(name));
+	return HTTP_OK;
+}
+
+static const struct http_route VHOST_ROUTES[] = {
+	{ "GET", "/who", 1, handle_whoami, 0, 0, 0 },
+};
+
+static struct http_site BETA_SITE = {
+	.host = "beta.recon",
+	.routes = VHOST_ROUTES,
+	.route_count = sizeof(VHOST_ROUTES) / sizeof(VHOST_ROUTES[0]),
+	.ctx = (void *)"beta",
+	.server_name = "ReconOS/beta",
+	.unblock = unblock
+};
+
+static struct http_site ALPHA_SITE = {
+	.host = "alpha.recon",
+	.next = &BETA_SITE,
+	.routes = VHOST_ROUTES,
+	.route_count = sizeof(VHOST_ROUTES) / sizeof(VHOST_ROUTES[0]),
+	.ctx = (void *)"alpha",
+	.server_name = "ReconOS/alpha",
+	.unblock = unblock
 };
 
 /* --- the client ---------------------------------------------------------- */
@@ -263,8 +330,8 @@ static int starts_with(const char *s, const char *p)
 int main(void)
 {
 	unsigned port = 18080;
-	unsigned guard_port = 0, bare_port = 0;
-	int guard_listener = -1, bare_listener = -1;
+	unsigned guard_port = 0, bare_port = 0, vhost_port = 0;
+	int guard_listener = -1, bare_listener = -1, vhost_listener = -1;
 	int listener = -1;
 	pid_t child;
 	char reply[8192];
@@ -344,8 +411,18 @@ int main(void)
 			bare_port++;
 			tries++;
 		}
+		/* And one for the chain of named sites. Its own port, because
+		 * each of the other three has a site with no name, which claims
+		 * every request that reaches it -- the opposite of what this
+		 * one is for. */
+		tries = 0;
+		vhost_port = bare_port + 1;
+		while (tries < 32 && (vhost_listener = http_listen(vhost_port)) < 0) {
+			vhost_port++;
+			tries++;
+		}
 	}
-	if (guard_listener < 0 || bare_listener < 0) {
+	if (guard_listener < 0 || bare_listener < 0 || vhost_listener < 0) {
 		printf("  FAIL  no free port for the guarded sites\n");
 		return 1;
 	}
@@ -353,6 +430,8 @@ int main(void)
 	      fcntl(guard_listener, F_GETFL, 0) | O_NONBLOCK);
 	fcntl(bare_listener, F_SETFL,
 	      fcntl(bare_listener, F_GETFL, 0) | O_NONBLOCK);
+	fcntl(vhost_listener, F_SETFL,
+	      fcntl(vhost_listener, F_GETFL, 0) | O_NONBLOCK);
 
 	child = fork();
 	if (child < 0) {
@@ -387,15 +466,21 @@ int main(void)
 			int rc = http_serve_once(listener, &SITE);
 			int g  = http_serve_once(guard_listener, &GUARDED_SITE);
 			int b  = http_serve_once(bare_listener, &BARE_SITE);
+			/* The head of the chain, not each site in turn: one
+			 * listener, and `serve.c` walks from there. Looping
+			 * over the chain here would be this suite doing the
+			 * dispatch it exists to check. */
+			int v  = http_serve_once(vhost_listener, &ALPHA_SITE);
 
-			if (rc < 0 || g < 0 || b < 0)
+			if (rc < 0 || g < 0 || b < 0 || v < 0)
 				break;
-			if (rc == 0 && g == 0 && b == 0)
+			if (rc == 0 && g == 0 && b == 0 && v == 0)
 				usleep(200);	/* nothing to do; do not spin */
 		}
 		close(listener);
-	close(guard_listener);
-	close(bare_listener);
+		close(guard_listener);
+		close(bare_listener);
+		close(vhost_listener);
 		_exit(0);
 	}
 
@@ -681,6 +766,124 @@ int main(void)
 
 		ok(*GUARD_SAW > 0, "the policy was actually consulted");
 	}
+
+	/* --- virtual hosts, and the name nobody claims ------------------------
+	 *
+	 * `vhost_port` is served by the chain ALPHA -> BETA. Neither has `host`
+	 * NULL, so nothing on this listener answers to a name it was not given.
+	 *
+	 * Every check below would also pass against a server that ignored
+	 * `Host` entirely **if both sites shared a context**, which is why they
+	 * do not: the body is the picked site's own `ctx`, so a dispatch that
+	 * always chose the head of the chain says `alpha` where `beta` belongs.
+	 */
+	exchange(vhost_port, "GET /who HTTP/1.1\r\nHost: alpha.recon\r\n"
+	                     "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a named site answers a request for its own name");
+	ok(strstr(reply, "\r\n\r\nalpha") != 0,
+	   "and the handler ran with that site's context");
+
+	exchange(vhost_port, "GET /who HTTP/1.1\r\nHost: beta.recon\r\n"
+	                     "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "so does the second site in the chain");
+	ok(strstr(reply, "\r\n\r\nbeta") != 0,
+	   "with its own context, not the head of the chain's");
+	/* The `Server` header comes from the site, and the listener was started
+	 * with ALPHA. If this says `alpha` the routes were picked and the rest
+	 * of the site was not, which is the half-done dispatch worth naming. */
+	ok(strstr(reply, "Server: ReconOS/beta") != 0,
+	   "the whole site is picked, not only its routes");
+
+	/* The three shapes `http_host_matches` exists for, now over a socket
+	 * rather than as strings -- a rule with a suite and no caller is a rule
+	 * nobody applies. */
+	exchange(vhost_port, "GET /who HTTP/1.1\r\nHost: ALPHA.RECON\r\n"
+	                     "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(strstr(reply, "\r\n\r\nalpha") != 0, "a shouted name is the same name");
+
+	exchange(vhost_port, "GET /who HTTP/1.1\r\nHost: beta.recon:8080\r\n"
+	                     "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(strstr(reply, "\r\n\r\nbeta") != 0, "a port does not change the machine");
+
+	exchange(vhost_port, "GET /who HTTP/1.1\r\nHost: alpha.recon.\r\n"
+	                     "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(strstr(reply, "\r\n\r\nalpha") != 0, "the root form is the same name");
+
+	/* --- and what must not be claimed ------------------------------------ */
+	exchange(vhost_port, "GET /who HTTP/1.1\r\nHost: gamma.recon\r\n"
+	                     "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 421 Misdirected Request\r\n"),
+	   "a name no site claims answers 421, with the phrase");
+	ok(strstr(reply, "\r\n\r\nalpha") == 0 && strstr(reply, "\r\n\r\nbeta") == 0,
+	   "and runs no handler on the way");
+
+	/* A name that begins with a site's name. A comparison that stopped at
+	 * the pattern's length would hand `alpha.recon.example.com` to alpha,
+	 * which is somebody else's machine answering for this one. */
+	exchange(vhost_port, "GET /who HTTP/1.1\r\nHost: alpha.recon.example.com\r\n"
+	                     "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 421 Misdirected Request\r\n"),
+	   "a longer name that starts with a site's name is not that site");
+
+	/*
+	 * No `Host` at all. Only HTTP/1.0 can get this far -- `request.c`
+	 * refuses a 1.1 request without one -- and a chain with no default has
+	 * nothing to give it. The head of the chain answering here would mean
+	 * every nameless request landing on whichever site happened to be
+	 * configured first.
+	 */
+	exchange(vhost_port, "GET /who HTTP/1.0\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 421 Misdirected Request\r\n"),
+	   "a request with no name does not fall to the first site");
+
+	/*
+	 * Two requests, two sites, one connection.
+	 *
+	 * This is the case that decides where the dispatch belongs. A server
+	 * that picked the site when it accepted would answer both of these with
+	 * the first one's site, and every single-request check above would
+	 * still pass. Sent together rather than in turn, because the host's
+	 * `recv` blocks and reading between them would stop on the second.
+	 */
+	{
+		int fd = dial(vhost_port);
+		const char *a, *b;
+
+		ok(fd >= 0, "one connection for two sites");
+		{
+			/* Counted by the compiler rather than by hand. A length
+			 * written out here and then edited is a second request
+			 * that arrives truncated, and a check that fails for the
+			 * suite's arithmetic rather than for the server. */
+			static const char BOTH[] =
+				"GET /who HTTP/1.1\r\nHost: alpha.recon\r\n\r\n"
+				"GET /who HTTP/1.1\r\nHost: beta.recon\r\n"
+				"Connection: close\r\n\r\n";
+
+			send(fd, BOTH, sizeof(BOTH) - 1, 0);
+		}
+		slurp(fd, reply, sizeof(reply));
+		close(fd);
+
+		a = strstr(reply, "\r\n\r\nalpha");
+		b = strstr(reply, "\r\n\r\nbeta");
+		ok(a != 0 && b != 0,
+		   "both sites answer down the one socket");
+		ok(a != 0 && b != 0 && a < b,
+		   "each request reaching the site it asked for, in order");
+	}
+
+	/* --- and the site with no name at all --------------------------------
+	 *
+	 * `port` is served by SITE, whose `host` is NULL. It must answer to
+	 * anything, because that is what every server here did before virtual
+	 * hosts existed and none of them was reconfigured. */
+	exchange(port, "GET / HTTP/1.1\r\nHost: someone.else.example\r\n"
+	               "Connection: close\r\n\r\n", reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a site with no name still answers to every name");
 
 	kill(child, SIGTERM);
 	waitpid(child, 0, 0);
