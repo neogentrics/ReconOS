@@ -33,18 +33,46 @@ procedure closes and the only gap it closes.**
 
 ## What success looks like
 
-Two lines on the console, and they are the same two the emulated Intel already
-produces:
+**Two cards, not one.** This is the part an earlier version of this document
+got wrong: it showed a single `r8169` line, and the machine has two Realteks
+bonded. They are **different revisions** — rev 0c at `05:00.0` and rev 06 at
+`08:00.0` — so a run where one works and the other does not is a real possible
+outcome and the most informative one available.
 
 ```
 r8169: eth0 at <the card's own MAC>, RTL8168 rev 0c, 32 receive buffers, ...
+r8169: eth1 at <the card's own MAC>, RTL8168 rev 06, 32 receive buffers, ...
 net: eth0 is 192.168.10.x, via 192.168.10.1
+net: eth1 is 192.168.10.y, via 192.168.10.1
 net: the gateway answered in NNN us
 ```
 
 A DHCP lease from the real network and an ICMP echo answered by the real
-OPNsense box. Anything less is a result too — `no address; nothing offered one`
-is a true line about a real network and tells us where the driver stopped.
+OPNsense box.
+
+**Read both `r8169` lines and compare the revisions**, because the driver does
+not branch on revision at all. It reads the byte from PCI config, stores it, and
+prints it — every RTL8168 is configured identically, which is a choice this
+branch made deliberately and has never been able to test. Two cards one revision
+apart in one machine is the cheapest experiment anybody will ever get for
+whether that choice holds, and it costs nothing extra: they are both already in
+there.
+
+**What each outcome means:**
+
+| what appears | what it says |
+|---|---|
+| both cards, both leases | the driver works on real Realtek silicon, and revision does not matter here |
+| both cards named, one lease | **the most interesting result.** The revision the working one reports is the one the common path suits; the other needs per-revision handling this driver does not have |
+| both cards named, no lease | the rings or the interrupts, not the revision — the same code failed twice on two different chips |
+| one card named | the other was not recognised at probe. Compare its PCI id against the `switch (d->device)` in `r8169_attach` — it accepts 8169, 8168, 8161 and 8136 and declines 8125 by name |
+| no cards named | the driver did not attach. `arch/x86_64/storage.c` is where it is bound |
+
+Anything less is a result too — `no address; nothing offered one` is a true line
+about a real network and tells us where the driver stopped. So is
+`ethN has no cable; not asking for an address`, which is NW-003's line and
+means the driver read the link register and believed it: a claim about the
+silicon, from a card that has never met this code.
 
 ---
 
