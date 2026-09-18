@@ -414,8 +414,32 @@ static const char *app_state_name(const struct recon_app_info *info) {
     switch (info->state) {
     case RECON_APP_NOT_RESPONDING: return "Not responding";
     case RECON_APP_MINIMIZED:      return "Minimized";
-    default:                       return "Running";
+    default:                       break;
     }
+
+    /*
+     * --- The five seconds nothing was said in ---
+     *
+     * An application is only called *not responding* once it has been asked to
+     * close and has ignored the request for five seconds -- long enough that a
+     * program saving a file is not accused of hanging. That number is right.
+     *
+     * What was wrong is what the list said in the meantime. Close was pressed,
+     * the request went, and this column carried on saying **Running** --
+     * identical to a moment before, and identical to every other application
+     * on the list. Nothing anywhere said that anything had been asked. So the
+     * five seconds read as a button that had not worked, and the obvious thing
+     * to do about that is press it again, or reach for End Task.
+     *
+     * `recon_app_info` has carried `close_requested` all along. It was written
+     * by `recon_apps.c` and **nothing anywhere read it** -- found by asking
+     * which struct members are only ever assigned, which is the same question
+     * that turned up `required` in v0.4.65.
+     */
+    if (info->close_requested) {
+        return "Closing";
+    }
+    return "Running";
 }
 
 /* --- Drawing --- */

@@ -9,6 +9,97 @@ way for the two to disagree.
 
 ---
 
+## v0.4.66 — asking the whole tree what it knows and does not do
+
+v0.4.65 found `required` by hand: listing the members of one struct and asking
+which ones nothing outside the parser mentions. **The finding was not
+`required`. The finding was the question.**
+
+`scripts/knows-and-does-not-do.py` asks it of every struct in
+`include/`.
+
+### The first version was wrong, which is most of what the script is
+
+It reported four findings. **The first one checked was a false positive** —
+`usage` on a command registration is read by `src/recon_cmd.c`, which reaches
+the struct through `recon_modules.h` rather than including `recon_module.h`
+itself. Following includes transitively turned all four into nothing.
+
+Then a worse fault, and the one worth writing down. The question it asked was
+*"does anything read this member"*, and it counted the file that **fills the
+member in** as a reader. So `required`, whose only mention outside the header
+was `f->required = has_attribute(...)`, looked read. **The check could not
+fail**, which is worse than not having it — and this project has now hit that
+exact shape often enough that finding it in my own instrument is unsurprising
+rather than embarrassing.
+
+The question it asks now is sharper and needs no convention about which source
+owns which header: **is every mention of this member an assignment?** A member
+that is only ever written is precisely a thing the system records and never
+acts on.
+
+### Checked the only way an instrument can be
+
+Run against the commit before `required` was enforced, it finds `required`.
+Run against the commit after, it does not. A check that can fail.
+
+### What it found
+
+Eight members, and one of them had a consequence somebody could see.
+
+**`recon_app_info.close_requested`** — written by `recon_apps.c`, read by
+nothing.
+
+An application is only called *not responding* once it has been asked to close
+and has ignored the request for five seconds. That number is right: long enough
+that a program saving a file is not accused of hanging.
+
+What was wrong is what the task manager said in the meantime. Close was
+pressed, the request went, and the State column carried on saying **Running** —
+identical to a moment before, and to every other application on the list.
+Nothing anywhere said that anything had been asked. So the five seconds read as
+a button that had not worked, and the obvious thing to do about that is press
+it again.
+
+It says **Closing** now. The information was already there.
+
+### The other seven, reported rather than fixed
+
+- `recon_ocr_match.score`, `runner_up`, `runner_up_score` — the matcher decides
+  with local values and stores these for a caller that does not exist. The
+  header says the runner-up is *carried* because the gap between the two is
+  most of what confidence means, and carried is exactly what it is.
+- `recon_ocr_result.lines`, `recon_mail_message.size`,
+  `recon_process.session`, `recon_widget_button.behind` — each is a figure this
+  system has and shows nobody. None of them is wrong; each is a small thing a
+  page could say and does not.
+
+They stay on the list, which is the point of the list.
+
+### A client that declines to close
+
+None of this was watchable. `tests/decor_client.c` exits the moment it is asked
+to go, so every close in this system was instant and the whole path after it —
+Closing, then Not responding, then the offer to force — could not be reached
+from outside.
+
+`--ignore-close` keeps the window up. That is a real thing rather than a
+contrivance: a program with unsaved work is entitled to put a question up
+instead of going, and what the desktop does about a window that will not leave
+is worth being able to watch.
+
+`scripts/closing-state-shot.sh` photographs both states one second and eight
+seconds after End Task. The coordinates in it were read off the running program
+with `ui hits` rather than guessed.
+
+### The numbers
+
+**70 members could not be told apart** from another struct using the same name,
+and the script says so rather than guessing. That is the honest edge of a
+text-matching instrument in a language with no types to ask.
+
+---
+
 ## v0.4.65 — what a form knows and does not do
 
 The board's *form-gaps* row named two things this viewer still could not do.

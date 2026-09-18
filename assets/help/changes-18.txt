@@ -1,67 +1,75 @@
-The freestanding check had stopped checking, and I broke it.
+<input type="file"> fell through the input dispatch to the default, so the
+viewer drew it as a text box. A photograph of a page with two file fields
+on it shows them indistinguishable from the name field beside them.
 
-scripts/check-userland.sh builds its compile line across ten continued lines,
-and two versions ago I put explanatory comments *inside* that continuation. A
-# after a line continuation ends the command: the shell joins the lines,
-tokenises, and everything from the comment onwards runs as commands of its own.
+That is not merely unhelpful, it is an invitation: somebody types a filename
+into it, presses Send, and the server receives a word where it expected a
+document. The same failure as a table whose headings sit over the wrong
+columns — legible, and wrong.
 
-    ./scripts/check-userland.sh: line 260: -isystem: command not found
+And it went further than the drawing. The confirmation before sending counted
+those fields as answers — *"Send 3 answers to localhost?"* for a form with one
+real answer and two files it could not attach — and the body would have gone
+url-encoded to a server that had asked for multipart/form-data.
 
-So for three versions this check compiled without -Werror, without
--DRECONOS_VERSION, and without third_party on the path, while its output
-said it had used all three. Every flag after the first comment was silently
-gone.
+### Drawn as what it is, which the tree already had a shape for
 
-### The answer it gave was right, and that is luck rather than a defence
+RECON_HTML_FIELD_FILE, drawn like RECON_HTML_FIELD_BUTTON: visible,
+disabled, with a tip saying *"ReconOS's viewer cannot attach a file yet"*.
+The argument was already written next to that kind, for script-only buttons:
 
-The file list is hand-maintained and built from try_thirdparty.sh, a sweep
-that spells its flags on one line — so the files it added were measured
-properly even while the check was not measuring anything much. Re-running with
-the continuation fixed: 55 of 55, unchanged.
+> *"A page whose 'Show more' is simply missing looks like a page this failed to
+> read; one whose button is there and visibly does nothing says the true
+> thing."*
 
-Two instruments, and only the second one was intact. That is the whole
-reason this was findable, and it is not an argument for having one.
+Turned up a notch here, because a dead button cannot be typed into and a text
+box can. Tab skips it, and its words are the viewer's — a file input carries no
+value a page may set, because a page that could set one could read a path off
+somebody's disk.
 
-The comments are above the command now, with the trap written where the next
-person will be adding a flag.
+### A form that asks for multipart is refused, with a reason
 
-### And two real gaps found on the way there
+Url-encoded is not a degraded multipart body, it is an unintelligible one.
+The server looks for a boundary that is not there and finds nothing, and the
+failure it reports is its own — so somebody watching this viewer would see a
+page saying something went wrong, with no way to learn that what went wrong was
+the shape of the request.
 
-The library had no <limits.h>. Two vendored headers include it, the
-compiler's own chains to syslimits.h, and with -nostdinc there is nothing
-to chain to — *"no include path in which to search for limits.h"*. That is not
-the vendored code being awkward: a C library provides <limits.h> and this
-one did not.
+Refused before a body is built, and said where the reason is known: *"This
+form attaches a file, and ReconOS's viewer cannot attach one yet. Nothing was
+sent."*
 
-Every value in it is one of the compiler's own predefined macros rather than a
-number typed in, so the header cannot disagree with the compiler it is compiled
-by — which is the failure mode a hand-written one has, and it is silent. The
-minimums are (-MAX - 1) rather than literals, because -2147483648 is not
-an int: it is 2147483648 negated, which does not fit, so it promotes and
-changes the type of every comparison it takes part in. The same trap the tree
-already has written down about (int)~0U >> 1.
+Only multipart/form-data counts. enctype also takes text/plain, and
+anything unreadable is the page being wrong — reading the mark generously would
+refuse forms that work today, and refusing a form is a real cost.
 
-PATH_MAX is 1024, this system's, deliberately not Linux's 4096 — a difference
-that has bitten this project before, in recon_fs.c's note about an optimised
-glibc aborting the process over a short realpath buffer. 29 checks against
-the host's, because a header of nothing but macros looks like the one file
-that cannot be wrong and is the opposite: a wrong limit is silent.
+### And a file field in an ordinary form still sends, which is the precise part
 
-And third_party was being treated as ours. With -I the compiler holds
-vendored headers to the project's warnings, and -Werror then refused
-src/recon_ocr_match.c because stb_truetype.h defines two functions that
-file does not call. -isystem is the mechanism that exists for this and is
-what THIRD_PARTY.md already says those files are.
+A form that does not ask for multipart is not refused. The standard has
+such a form send a file field's *name* rather than its content, and a browser
+with no file chosen sends nothing after the equals sign.
 
-### 53 of 80 became 55
+This viewer has no file chosen either, so it sends the same thing. Proven
+against an echo server rather than argued: stray=&notes=ordinary.
 
-recon_ocr_match.c and recon_stb.c, both of which had been failing for
-reasons that were not about ReconOS at all.
+### 14 checks, three mutations, all caught
 
-recon_codec.c is the one that did not make it: with <limits.h> it got
-further and now wants <sys/mman.h>, because minimp3_ex.h maps files into
-memory to read them. That is a real dependency and a different question — this
-kernel has SYS_MAP, but what that vendored header wants it for is file
-loading, which ReconOS does another way.
+| the mutation | what the suite says |
+|---|---|
+| type=file falls through to a text box | 2 failures |
+| a multipart form is not marked | 1 failure |
+| any enctype counts as multipart | 2 failures |
+
+The third is the over-generous reading the comment warns about, and it is worth
+having a check for: it would not break anything visibly, it would just quietly
+stop ordinary forms working.
+
+### What is still missing
+
+A file picker, and a multipart encoder. recon_filedlg exists and is not
+reachable from recon_web.c at all, which is the next question rather than an
+oversight — a viewer that can open a file chooser is a viewer that can be asked
+to read anything on the disk, and what it may offer is a decision before it is
+code.
 
 ---

@@ -13,7 +13,13 @@
  * decorations, and does nothing else. It is not a test of ReconOS's drawing;
  * it is the thing ReconOS draws around.
  *
- *   decor_client [--client-side] [--width N] [--height N] [--title T]
+ *   decor_client [--client-side] [--ignore-close] [--width N] [--height N]
+ *                [--title T]
+ *
+ * `--ignore-close` keeps the window up when the compositor asks it to go,
+ * which is how everything the desktop does about a window that will not leave
+ * becomes watchable: "Closing", then "Not responding", then the offer to
+ * force.
  *
  * `--client-side` asks for the other mode, which is how the refusal path gets
  * exercised: a client that draws its own frame must not be given a second one.
@@ -55,6 +61,18 @@ struct client {
     int width, height;
     const char *title;
     bool client_side;
+
+    /*
+     * Ignore the compositor's request to close, and keep the window up.
+     *
+     * A real thing rather than a contrivance: a program with unsaved work is
+     * entitled to put a question up instead of going, and what the *desktop*
+     * does about a window that will not leave is worth being able to watch.
+     * Without a client that does this, every close in this system is instant
+     * and the whole path after it -- "Closing", then "Not responding", then
+     * the offer to force -- is unreachable from outside.
+     */
+    bool ignore_close;
 
     bool configured;
     bool closed;
@@ -311,6 +329,11 @@ static void toplevel_configure(void *data, struct xdg_toplevel *toplevel,
 static void toplevel_close(void *data, struct xdg_toplevel *toplevel) {
     struct client *c = data;
     (void)toplevel;
+
+    /* Asked, and declining. See `ignore_close`. */
+    if (c->ignore_close) {
+        return;
+    }
     c->closed = true;
 }
 
@@ -347,6 +370,8 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--client-side") == 0) {
             c.client_side = true;
+        } else if (strcmp(argv[i], "--ignore-close") == 0) {
+            c.ignore_close = true;
         } else if (strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
             c.width = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
