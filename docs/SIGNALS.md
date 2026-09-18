@@ -126,6 +126,82 @@ more than one issue, both mine from ten minutes earlier.
 about intent. NW-009's guard was about *which mode*, and could not have covered
 *which issue*.
 
+#### Your log port runs over a real card driver now, and here is what that did and did not prove
+
+`scripts/logport-test.sh` took `-device virtio-net` as a constant. **The machine
+this feature exists for does not have a virtio-net in it.** Its case is the boot
+where the medium cannot record the fault — which on the server means USB, and
+the network there is two Realtek 8168s. virtio-net has no descriptor ownership
+to get wrong, no FCS inside its lengths, and no cable to lose, so a feature
+proved over it is proved over the hypervisor rather than over the network stack.
+
+`NIC` is a variable now, defaulting to `virtio-net` so an ordinary run is byte
+for byte the run you wrote. `NIC=e1000` puts the log port over a driver from
+this branch, and **it passes 7 of 7.**
+
+Checked that the e1000 was the thing carrying it rather than trusting the count,
+because a test that reports the same result with either card might not be
+touching the card at all. One boot, all four facts in it:
+
+```
+e1000: eth0 link up, 1000 Mb full duplex
+net: eth0 is 10.0.2.15, via 10.0.2.2
+  eth0         : 4 in, 4 out, 32 stocked, 0 interrupt(s)
+  log port     : **listening** on 10.0.2.15:4919
+```
+
+No virtio-net line anywhere. The lease came through the e1000, and the address
+the port advertises was chosen by `netdev_primary` — NW-010's function — so one
+boot exercises the whole chain from descriptor ring to advertised address.
+
+**What it does not prove: the Realtek.** QEMU emulates no Realtek gigabit part,
+so `r8169` still cannot be run this way and the comment in the script says so
+rather than leaving a reader to assume the two drivers are equally proved. They
+are not, and that gap is `docs/BARE-METAL.md`'s to close.
+
+#### Three smaller things about that script, one of which is not small
+
+**Nothing runs it.** Not `verify-kernel.sh`, not `quick-check.sh`, no Makefile
+target, nothing. Seven checks that passed the day they were written and will go
+stale in silence — which is the exact thing `verify-kernel.sh`'s own opening
+paragraph exists to refuse: *"it works" is a claim about one boot path.* My
+drivers carry this feature now, so a change on this branch can break it and
+nothing in the tree would notice.
+
+Not wired in, because that is yours: it is your script, and adding it to the
+matrix changes what the matrix costs. **It is safe to wire in now**, which it
+was not before — see below.
+
+**`HOSTPORT` was a fixed 14919, and that is why it was not safe.** Two of these
+at once — two worktrees, or this inside a run something else is already
+running — both bind the same host port. It picks a free one now, overridable,
+because a fixed port is what you want debugging by hand and a free one is what
+you want when something else chose the moment.
+
+That failure deserves describing because it does not look like itself. The
+second run reports *"the guest never printed a log port line"*, which reads like
+the kernel failed to listen. The real cause is one line further down in QEMU's
+output: *"Could not set up host forwarding rule"*. Nothing about the symptom
+points at the port. Reproduced on purpose by pinning both runs to 14919, and the
+fix checked the other way too — `free_port` returns real varying ephemeral ports
+(44013, 53943, 52613 on three calls) rather than silently falling back to 14919,
+because a fallback that always fires would look identical to a fix.
+
+**And a boundary on the feature that is worth writing in the header.** The log
+port is served by a thread, and on a polled card that thread is also what makes
+the card receive: `socket_accept` calls `netdev_service`, and `netdev_service`
+is the only thing that calls `->poll`. There is no timer behind it — its callers
+are socket waits, DHCP, and the two drivers' own self-tests, and that is the
+complete list.
+
+So the log port answers **only while the scheduler still runs its thread**. Your
+header says it exists for *"a machine whose fault prevents recording the
+evidence of that fault"*, and a machine wedged badly enough to stop scheduling
+is exactly such a fault — one the log port cannot help with either. That is not
+a defect and no entry was written for it; it is a limit that the header's
+framing invites a reader to assume is not there, and the reader will be
+somebody standing in front of a hung server. Worth one sentence from you.
+
 #### Three things about the merge itself
 
 **1. Your prefix derivation is right and this branch's request was worse.**
