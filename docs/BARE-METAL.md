@@ -157,9 +157,10 @@ transfers    : 1 read, 0 written, 0 flushed
 ```
 
 Zero writes on the *boot-from-stick* path too, not just the disks-attached one.
-Good for safety and bad for evidence, and it is the second reason the serial
-cable matters: **there will be no log file afterwards.** Whatever is not captured
-while it is on screen is gone when the power goes off.
+Good for safety and bad for evidence: **there will be no log file
+afterwards.** Whatever is not captured while it is on screen is gone when the
+power goes off. That is the first of the two reasons the serial cable is not
+optional; the second is NW-013, and it is under step 3 of the procedure.
 
 ---
 
@@ -178,16 +179,28 @@ qemu-system-x86_64 -m 512M \
 ```
 
 ```
-ReconOS kernel 0.3.5
+ReconOS kernel 0.4.3
 e1000: eth0 link up, 1000 Mb full duplex
 e1000: eth0 at 52:54:00:12:34:56, 8254x 100E, 32 receive buffers, ...
+e1000: eth1 link up, 1000 Mb full duplex
+e1000: eth1 at 52:54:00:12:34:57, 8254x 100E, 32 receive buffers, ...
 net: eth0 is 10.0.2.15, via 10.0.2.2
-net: the gateway answered in 251 us
+net: the gateway answered in 569 us
+net: eth1 is 10.0.2.16, via 10.0.2.2
+net: the gateway answered in 63 us
 ```
 
+**Re-run at 0.4.3 with two cards**, because the first rehearsal was 0.3.5 with
+one and the machine has two. Both attach, both take their own lease, and both
+answer the gateway. `netdev_primary` — NW-010's function, which decides the
+address this machine advertises — picks `eth0`, the first that is up, cabled and
+addressed, which is what it is supposed to do and had never been watched doing
+it outside a self-test.
+
 So the medium builds, the BIOS boot path works from a stick, the kernel starts,
-a card attaches and the whole network path runs. **Three things are left that
-the rehearsal cannot cover**, and they are the whole point of doing it for real:
+two cards attach and the whole network path runs twice. **Three things are left
+that the rehearsal cannot cover**, and they are the whole point of doing it for
+real:
 
 - the Realtek's actual registers, which no emulator has;
 - whether the Radeon produces a picture;
@@ -215,12 +228,37 @@ the rehearsal cannot cover**, and they are the whole point of doing it for real:
    **Check `/dev/sdX` twice.** It is the one command in this document that can
    destroy something.
 
-3. **Get a serial cable if there is a header.** The AB350-Gaming has a COM
-   header. `arch_console_putc` writes to COM1 at 115200 8N1 on every x86 boot,
-   so a USB-to-serial adapter on that header captures **the entire boot log as
+3. **Get a serial cable. It is not optional, and there are now two
+   independent reasons.** The AB350-Gaming has a COM header.
+   `arch_console_putc` writes to COM1 at 115200 8N1 on every x86 boot, so a
+   USB-to-serial adapter on that header captures **the entire boot log as
    text** — far better evidence than photographing a screen, and it works even
-   if the Radeon never gets a usable mode. This is optional and it is the single
-   biggest improvement to the quality of the result.
+   if the Radeon never gets a usable mode.
+
+   **Reason one: nothing is written down.** No ReconOS medium is writable on
+   this path, so there is no log file afterwards. Whatever is not captured
+   while it is on screen is gone when the power goes off.
+
+   **Reason two, and it is the one that closed the last door: the log port
+   cannot be turned on here.** The kernel session's log port would have been
+   the second evidence channel — the boot log read over TCP, no disk involved,
+   which is exactly what this machine needs. It is switched on by the word
+   `logport` on the kernel command line, and **a BIOS boot carries no command
+   line at all.** `boot/bios/stage2.c` writes an empty string and never reads
+   `\reconos\cmdline`; the UEFI loader does. This machine is legacy BIOS.
+
+   Measured with a control rather than read off the source — one medium, one
+   cmdline file, booted both ways: under UEFI the report says
+   `command line : logport verbose` and the port listens; under BIOS neither
+   line appears. That is **NW-013**, and it is open.
+
+   The same gap takes `noinit` with it, which is what makes `xhci.c` print
+   PORTSC for every port as the controller comes up. So the USB diagnostic is
+   unavailable on the machine with the USB fault, which is the same shape as
+   the fault itself.
+
+   Two independent reasons for one cable is the strongest form that conclusion
+   can take. Do not treat this step as a nice-to-have.
 
 4. **Confirm physical access.** Somebody must be able to reach the machine's
    power button and plug in a keyboard. Without a BMC there is no substitute.
@@ -266,7 +304,9 @@ the rehearsal cannot cover**, and they are the whole point of doing it for real:
    - `net: ethN is 192.168.10.x` and `the gateway answered` — the whole path
      works on real silicon.
 
-10. **Capture it.** Serial log if there is one; photographs of the screen if not.
+10. **Capture it.** The serial log — and photographs of the screen as well,
+    not instead, because the two fail in different ways and neither can be
+    taken again once the power goes off.
     The boot summary at the end carries the counters — `N in, N out, N stocked,
     N interrupt(s)` — and those are what say whether the card is interrupting or
     being carried by the poll loop.

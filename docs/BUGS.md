@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-18, and each entry says why. They are listed because a register that only
+19, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -212,6 +212,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
+- **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -535,6 +536,81 @@ turned out to be true.
   Register offsets, the reset sequence, and the meaning of every bit are proved
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
+
+### NW-013 — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
+
+[#541](https://github.com/neogentrics/ReconOS/issues/541)
+
+- **Found in** `boot/bios/stage2.c`, on 18 September 2026, by the network
+  session, while working out whether the kernel session's new log port could be
+  turned on during the server boot in `docs/BARE-METAL.md`.
+- **Was** the BIOS loader writes an **empty string** into the handoff's cmdline
+  field and never reads `\reconos\cmdline`:
+
+  ```c
+  put_str((u8 *)h->cmdline, "", sizeof(h->cmdline));
+  ```
+
+  That is the only mention of `cmdline` in the file. The UEFI loader reads the
+  file properly, strips a trailing CR or LF, and passes it on. So every switch
+  this kernel has is a UEFI switch, and nothing says so.
+
+  Six of them: **`logport`, `verbose`, `noinit`, `recovery`, `poweroff`,
+  `restart`.**
+- **Measured, with a control, because reading the source is not proof.** One
+  medium, one `\reconos\cmdline` containing `logport verbose`, booted twice:
+
+  | | `command line` in the report | log port |
+  |---|---|---|
+  | BIOS | *(nothing — it was empty)* | none |
+  | UEFI | `command line : logport verbose` | listening on 10.0.2.15:4919 |
+
+  **The UEFI boot is the control and it was not optional.** Without it, "no log
+  port on BIOS" is equally well explained by a cmdline file written to the
+  wrong path or in the wrong format — in which case neither boot shows it and
+  the conclusion comes out wrong in the same direction as the guess. The file
+  was also read back off the image before booting, so "the file is there and
+  says what it should" is a measurement rather than an assumption.
+- **What it costs, and it lands exactly where it hurts most.** The machine in
+  `docs/BARE-METAL.md` is **legacy BIOS** — `/sys/firmware/efi` absent, recorded
+  in that document's own machine table. So on that machine:
+
+  **The log port cannot be switched on.** `logport.h` says it exists because
+  the kernel's own medium is USB and USB is the broken thing — KF-256, one
+  failed transfer wedging an endpoint for the rest of the boot. It exists for
+  the machine that cannot record its own failure, and on that machine there is
+  no way to ask for it.
+
+  **`noinit` cannot be switched on either**, and in `xhci.c` that is what
+  prints PORTSC for every port as the controller comes up and again after
+  powering. The diagnostic for a USB fault, unavailable on the machine with the
+  USB fault.
+
+  Both are the same shape as the fault they were built to diagnose: the
+  evidence-gathering depends on the thing that is broken.
+- **Found by** asking how a feature gets turned on rather than whether it
+  works. The log port passes its own test 7 of 7, over virtio-net and over
+  e1000, and every one of those runs enables it with QEMU's `-append` on the
+  `-kernel` path — which is neither of the two loaders. The matrix does the
+  same. **Nothing in the tree has ever tested the BIOS loader's command line,
+  so nothing could have failed.**
+- **Not fixed here, and the reason is ownership rather than difficulty.**
+  `boot/bios/stage2.c` is the boot track's file and it is the most dangerous
+  code in the project — a loader that breaks does not boot to tell you. This
+  branch measured it and is handing it over.
+
+  **The machinery is already there**, which is worth saying so nobody scopes it
+  as large: stage 2 mounts the FAT partition and reads `kernel-x86_64.elf` out
+  of `\reconos\` already, and `dir_find(drive, cluster, name, &size)` is
+  generic. Finding one more file in the same directory and reading it into
+  `h->cmdline` is a few lines on top of code that runs on every BIOS boot
+  today. The constraint to respect is size: `stage2.bin` is 11,476 bytes and
+  stage 1 reads a patched sector count.
+- **Until it is fixed**, `docs/BARE-METAL.md` says plainly that the serial cable
+  is the only evidence channel on that machine and is not optional — which it
+  had already concluded for a different reason, the medium not being writable.
+  Two independent reasons for the same cable is the strongest form that
+  conclusion can take.
 
 ### NW-012 — The issue listing asked for 500 rows and the tracker holds 408
 
