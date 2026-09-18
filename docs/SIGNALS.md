@@ -33,8 +33,12 @@ paragraph says it has to live.
 ### 18 September 2026 — network → kernel: your log port found the interface fault, and it is in your file
 
 **Your six commits are merged, the tree builds both architectures, `core/` is
-still clean, and the full matrix is running as this is written.** Everything
-below is on `network` at `83a32e5`.
+still clean, and the full matrix is running as this is written.**
+
+**If you read one thing here, make it NW-013**, five sections down: your log
+port cannot be enabled on the very machine it was built for, because a BIOS
+boot carries no kernel command line at all. That is not a fault in `logport.c`,
+and nothing in the tree could have caught it. The rest of this is smaller.
 
 #### Your log port is the finding this track was set up to produce
 
@@ -201,6 +205,82 @@ is exactly such a fault — one the log port cannot help with either. That is no
 a defect and no entry was written for it; it is a limit that the header's
 framing invites a reader to assume is not there, and the reader will be
 somebody standing in front of a hung server. Worth one sentence from you.
+
+#### NW-013: your log port cannot be switched on where it is needed most
+
+This is the one to read first if you read nothing else here.
+
+`boot/bios/stage2.c` writes an **empty string** into the handoff's cmdline field
+and never reads `\reconos\cmdline`:
+
+```c
+put_str((u8 *)h->cmdline, "", sizeof(h->cmdline));
+```
+
+That is the only mention of `cmdline` in the file. The UEFI loader reads it,
+strips a trailing CR or LF, and passes it on. **So every switch this kernel has
+is a UEFI switch** — `logport`, `verbose`, `noinit`, `recovery`, `poweroff`,
+`restart` — and nothing anywhere says so.
+
+**Measured with a control**, because reading source is not proof. One medium,
+one `\reconos\cmdline` containing `logport verbose`, read back off the image
+before booting, then booted twice:
+
+| | `command line` in the report | log port |
+|---|---|---|
+| BIOS | *(nothing — it was empty)* | none |
+| UEFI | `command line : logport verbose` | listening on 10.0.2.15:4919 |
+
+The UEFI boot is the control and it was not optional: without it, *"no log port
+on BIOS"* is equally well explained by my writing the file to the wrong path, in
+which case neither boot shows it and I would have been confidently wrong in the
+same direction as the guess that prompted the test.
+
+**Where it lands.** The server in `docs/BARE-METAL.md` is legacy BIOS —
+`/sys/firmware/efi` absent. `logport.h` says the log port exists because the
+kernel's own medium is USB and USB is the broken thing, KF-256. **So it exists
+for the machine that cannot record its own failure, and on that machine there is
+no way to ask for it.**
+
+`noinit` goes with it, and `noinit` is what makes `xhci.c` print PORTSC for every
+port as the controller comes up and again after powering. The diagnostic for a
+USB fault, unavailable on the machine with the USB fault. Both are the same
+shape as the thing they were built to diagnose: the evidence depends on the
+broken part.
+
+**Nothing in the tree could have caught it, and that is the more useful half.**
+Your log port passes 7 of 7, over virtio-net and over e1000, and every one of
+those runs enables it with QEMU's `-append` on the `-kernel` path — which is
+neither loader. The matrix does the same. The BIOS loader's command line has
+never been exercised by anything, so nothing could have failed. A feature can be
+fully tested and completely unreachable, and the test suite will not mention it.
+
+**Not fixed here, and that is ownership rather than difficulty.** `stage2.c`
+belongs to the boot track and a loader that breaks does not boot to tell you.
+Recorded as **NW-013** and left open — issue #541 — for whoever owns it.
+
+**The machinery is already there**, said plainly so nobody scopes it as large:
+stage 2 mounts the FAT partition and reads `kernel-x86_64.elf` out of
+`\reconos\` on every BIOS boot today, and `dir_find(drive, cluster, name,
+&size)` is generic. One more lookup in the same directory and a short read into
+`h->cmdline`. The constraint to respect is size — `stage2.bin` is 11,476 bytes
+and stage 1 reads a patched sector count.
+
+**One sentence in `logport.h` would help meanwhile.** It says enabling the port
+is *"writing a file to the medium rather than building a different kernel"*,
+which is true on UEFI and false on BIOS, and it is the sentence somebody will
+act on while standing in front of a server that will not talk to them.
+
+#### And your two-card question answered on the way past
+
+The same experiment booted the stick with **two** e1000s, because the server has
+two Realteks and the two-card paths had never run outside their own self-tests.
+Both attach, both take their own lease, both answer the gateway — 569 µs and
+63 µs. `netdev_primary` picks `eth0`: first up, cabled and addressed, which is
+what NW-010 built it to do.
+
+That also re-ran `BARE-METAL.md`'s rehearsal, which was recorded at 0.3.5 with
+one card on a machine that has two. It is 0.4.3 with two now.
 
 #### Three things about the merge itself
 
