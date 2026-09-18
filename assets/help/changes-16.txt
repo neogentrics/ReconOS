@@ -1,80 +1,92 @@
-scripts/check-userland.sh says how many sources build with no Linux under
-them. It says nothing about the rest, and the rest is where the decisions
-are.
+scripts/port-blockers.sh said it in one line last version: six files, 8,155
+lines, and between them they used exactly one thing from the compositor —
+the event loop. recon_session.c is three thousand lines about signing in and
+shutting down and mentioned wayland twice. recon_player.c is twelve hundred
+lines about playing a film and mentioned it not at all; it only held a
+wl_event_source so a frame could arrive on time.
 
-scripts/port-blockers.sh answers the other question: for every source that
-does not build, what stops it and how many lines it is holding. Three
-columns, and the shape to look for is a small marker count beside a large line
-count — a file that is about something else, held by an accident.
+include/recon_loop.h is the seam, and it is the fifth this project has drawn
+— after the allocator, the screen, the panel and the kernel.
 
-It was written because that shape keeps turning up and nobody keeps predicting
-it:
+62 of 85 sources now build with no libc under them, up from 58. Session,
+task manager, photos and player are among them.
 
-| | what was holding what |
-|---|---|
-| v0.4.42 | recon_ui.h pulled xkbcommon for one typedef. Twenty-four files. |
-| v0.4.44 | recon_ui.c was 3,100 lines of drawing, 28 of which said wlroots. |
-| v0.4.46 | recon_server.h — a whole compositor — included by five applications for one field, and by two of them for nothing at all. |
-| v0.4.57 | recon_appwin.c was 1,629 lines held by one forwarding function. |
+### The interface was written to what the callers already did
 
-Each time the file's own header had a theory about why it was stuck, and each
-time the theory was wrong.
+A timer is one-shot and re-armed by its own callback, and zero disarms.
+That is not a simplification of wayland's — it *is* wayland's, and more to the
+point it is what all six files already assumed. on_tick in recon_player.c
+ends by re-arming itself, and so do the audio top-up, the boot progress and the
+task manager's refresh.
 
-### recon_appwin.c is off wlroots, and it was one line
+Making it repeating instead would have been the quiet kind of wrong: every
+caller re-arms, so every rate in the desktop would have doubled — which
+reads as a machine that feels busy rather than one that is broken.
 
-Sixteen hundred lines about what a window *is* — its frame, its title, its
-buttons, where its edges are, what a drag on one of them means — and not one of
-them is about wayland. What held it was recon_appwin_node(), which forwards
-to recon_panel_node(win->panel), and recon_panel_node already lived in
-recon_ui_wlr.c: the file v0.4.44 split off for exactly this.
+### Two things it deliberately does not do
 
-So src/recon_appwin_wlr.c is the same split one layer up, and it is
-deliberately twenty-five lines. If it grew, the seam would be in the wrong
-place. What replaced the function here is recon_appwin_panel() — an
-accessor, not an internal header, because nothing needed to reach *inside* a
-window the way the presentation reaches inside a panel.
+It does not read a clock. recon_loop_tick takes the time. That is the
+same choice screen.c and shell_frame.c make, and it is what lets every
+interesting question be asked from a test rather than by watching a machine and
+counting: does it fire late, does it fire twice, does a callback that re-arms
+itself run away.
 
-The other include, <wlr/util/log.h>, was used by nothing.
+It does not poll. There is no poll in the interface, because ReconOS has
+none — putting one in the shape of the header would have been describing a
+mechanism that does not exist, and the first implementation would have had to
+invent it. Whoever owns the loop knows how it finds out and says so with
+recon_loop_readable.
 
-Two more went onto recon_server_facts.h, which is the file that exists to be
-*"the one place allowed to include recon_server.h on their behalf"*:
-recon_server_window_panel() (a window asking for something to draw on was
-reaching through server->layer_windows, which is a compositor idea a window
-has no other reason to know) and a declaration of recon_damage_all — one
-function, one definition, and what changes is which header a caller needs.
+### Two implementations, which is the point
 
-58 of 85 sources now build with no libc under them.
+src/recon_loop.c is a fixed table and no system call. src/recon_loop_wl.c
+wraps the compositor's, and its mapping is close because wayland's shape was
+the right one to copy — a seam that had to translate between two different
+ideas of a timer would be a seam with a bug in it.
 
-### And the report named the next piece in one line
+The wayland half refuses the driving calls rather than omitting them, so a
+caller that wandered onto the wrong half gets a null pointer rather than a link
+error somebody silences by adding a file. And recon_timer_is_armed answers
+-1 there, because wayland does not say and a guess would be worse than an
+admission.
 
-Twenty-seven sources still do not build, holding 32,593 lines. The report
-makes it obvious that they are not twenty-seven problems:
+### 57 checks, 14 of 14 mutations caught — and one of them deleted a guard
 
-| source | lines | mentions a compositor |
-|---|---|---|
-| recon_shell.c | 7,219 | 21 |
-| recon_cmd.c | 3,626 | 3 |
-| recon_session.c | 3,078 | 2 |
-| recon_taskmgr.c | 1,616 | 2 |
-| recon_player.c | 1,254 | 0 |
-| recon_photos.c | 1,190 | 0 |
-| recon_clock.c | 616 | 1 |
-| recon_audio.c | 401 | 1 |
+The first pass caught 12. One miss was a bad anchor. The other was the
+interesting one.
 
-Asking what those actually *use* gives one answer: the event loop.
-wl_event_loop_add_timer, wl_event_loop_add_fd, wl_event_source_remove,
-wl_event_source_timer_update. Nothing else.
+The clock-went-backwards guard was guarding against nothing. Its comment
+said unsigned arithmetic would wrap and every timer would come due in half a
+billion years. Deleting it changed no output — so I looked at why, instead of
+writing a test that would have made it appear load-bearing. Every use of the
+time is an addition or a comparison, and the one subtraction is already
+guarded by the check above it. The failure it described cannot happen here.
 
-Six files — 8,155 lines — are behind one seam that does not exist yet, and
-it is a seam for two things a system needs anyway: *call me back later*, and
-*tell me when this is ready to read*. That is a decision before it is code, so
-it is written down here rather than started at five in the morning.
+And it cost something real: with the clamp, a timer armed *after* a backward
+jump got a deadline relative to the old time and waited for the clock to catch
+up — fifty seconds late for a fifty-second jump. Gone, and the check that
+replaces it holds the behaviour that matters: a timer is armed relative to
+the clock its caller is reading.
 
-### One duplicate include
+That is the third comment this session to claim a guard and have none. The rule
+holds, and so does the way of finding out: delete the line and see whether
+anything notices.
 
-recon_photos.c included recon_server.h twice, three lines apart, with
-another include between them — which is how it hid: the list reads correctly if
-you stop at the first one. Harmless to the compiler, and exactly the sort of
-thing a report that reads every file turns up on the way past.
+### Four things the port turned up on the way
+
+- recon_clock.c reads before it judges now. Its handler took a mask and
+  decided *"the time server did not answer"* before reading anything. Reading
+  first tells apart the two cases that matter — nothing came back, and
+  something came back that is not SNTP — so the seam having no mask made the
+  diagnosis sharper, not poorer.
+- return 0; in callbacks that now return nothing, in five files. The
+  ordinary build reports that as a warning and lets it through; the
+  freestanding check refuses it. Stricter, and right to be.
+- recon_taskmgr.c used typeof, which is a GNU extension and not C11.
+  __typeof__ is the spelling that is legal in strict mode. Pre-existing, and
+  invisible until something compiled that file strictly.
+- getsid is declared and not defined in <unistd.h> now. ReconOS has no
+  sessions, and a stub answering 0 would make the task manager show every
+  process on the machine as somebody else's.
 
 ---

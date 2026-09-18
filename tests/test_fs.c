@@ -839,8 +839,119 @@ static void test_what_is_in_a_volume(void) {
     recon_fs_remove("/", "/Users/counted2.txt");
 }
 
+/* Where the test filesystem lives on the host, for the one check
+ * that has to reach round the back of it and change a permission. */
+static const char *g_root;
+
+/* How many lines the error log has, or 0 when there is none. */
+static int logged_faults(void)
+{
+	size_t size = 0;
+	char *text = recon_fs_read("/", RECON_ERROR_LOG, &size);
+
+	if (text == NULL) {
+		return 0;
+	}
+
+	int lines = 0;
+
+	for (size_t i = 0; i < size; i++) {
+		if (text[i] == '\n') {
+			lines++;
+		}
+	}
+	free(text);
+	return lines;
+}
+
+static void test_a_missing_file_is_not_a_fault(void)
+{
+	printf("reading a file that is not there\n");
+
+	/*
+	 * --- What this is really about ---
+	 *
+	 * Looking for a file that may not be there is how a *search* works. The
+	 * icon resolver tries `Metallic/x.ico`, `Metallic/x.png`, `x.ico` and
+	 * `x.png`, and finding the fourth means three misses -- every time, for
+	 * working correctly.
+	 *
+	 * VT-B001 used to be raised for all of them. A live desktop with four
+	 * applications opened had **103 faults** in its error log, every one an
+	 * icon that was looked for and not found. A log that fills with normal
+	 * operation is a log nobody reads.
+	 *
+	 * The comment beside the raise claimed a guard: *"the file is there --
+	 * resolve and readable both said so."* Neither said so.
+	 * `recon_fs_resolve` works on paths that do not exist yet, because a
+	 * write has to create one, and `readable` answers a question about
+	 * permission -- returning true for an administrator without looking at
+	 * the disk at all.
+	 */
+	int before = logged_faults();
+
+	check(recon_fs_read("/", "/System/no-such-file-anywhere", NULL) == NULL,
+	      "a file that is not there does not read");
+	check(logged_faults() == before,
+	      "AND NOTHING WAS LOGGED -- a missing file is the caller's business "
+	      "and a NULL is how it is told");
+
+	/* Several, because the fault this replaces was per-attempt. */
+	recon_fs_read("/", "/System/Icons/nothing.ico", NULL);
+	recon_fs_read("/", "/System/Icons/nothing.png", NULL);
+	recon_fs_read("/", "/System/Icons/Metallic/nothing.png", NULL);
+	check(logged_faults() == before,
+	      "and a search that misses four times logs nothing four times");
+}
+
+static void test_a_real_failure_is_still_a_fault(void)
+{
+	printf("a file that is there and will not read\n");
+
+	/*
+	 * Narrowing a check to fire less often is exactly the change that can
+	 * quietly turn it off altogether, so the other half is checked too.
+	 *
+	 * --- Arranging a failure that is not "missing" ---
+	 *
+	 * A directory was the first attempt and it does not reach this: `fseek`
+	 * to the end of one gives a length nothing can allocate, so it comes out
+	 * as "out of memory" down a different path.
+	 *
+	 * A file the host will not open is the real thing. `chmod 000` does it,
+	 * and only for somebody who is not root -- root opens it anyway. Which
+	 * is checked rather than assumed: a suite run as root would otherwise
+	 * report that B-001 still fires when what happened is that the file
+	 * opened.
+	 */
+	if (geteuid() == 0) {
+		printf("    (skipped: running as root, which can open anything)\n");
+		return;
+	}
+
+	int before = logged_faults();
+
+	check(recon_fs_write("/", "/System/unreadable.txt", "x", 1),
+	      "a file to make unreadable");
+
+	char host[512];
+
+	snprintf(host, sizeof(host), "%s/System/unreadable.txt", g_root);
+	check(chmod(host, 0) == 0, "and the host refuses it to us");
+
+	check(recon_fs_read("/", "/System/unreadable.txt", NULL) == NULL,
+	      "it does not read");
+	check(logged_faults() > before,
+	      "AND IT WAS LOGGED -- B-001 still says what it is for, which is a "
+	      "file that is there and will not open");
+
+	chmod(host, 0600);
+	recon_fs_remove("/", "/System/unreadable.txt");
+}
+
 int main(void) {
     char root[] = "/tmp/reconos-test-XXXXXX";
+
     if (mkdtemp(root) == NULL) {
         perror("mkdtemp");
         return 1;
@@ -849,6 +960,8 @@ int main(void) {
     printf("ReconOS filesystem tests, root %s\n\n", root);
 
     g_host_root_for_test = root;
+
+    g_root = root;
 
     if (!recon_fs_init(root)) {
         printf("could not set up the test filesystem: %s\n", recon_fs_last_error());
@@ -872,6 +985,8 @@ int main(void) {
     test_clipboard();
     test_private_files();
     test_reading_the_front_of_a_file();
+    test_a_missing_file_is_not_a_fault();
+    test_a_real_failure_is_still_a_fault();
 
     recon_fs_finish();
 

@@ -848,10 +848,39 @@ char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
     FILE *f = fopen(host, "rb");
     if (f == NULL) {
         set_error("cannot read '%s': %s", canonical, strerror(errno));
-        /* B-001's first half: the file is there -- resolve and readable both
-         * said so -- and it still would not open. */
-        recon_error_raisef(NULL, RECON_ERR_B001, "'%s': %s", canonical,
-            strerror(errno));
+
+        /*
+         * --- A file that is not there is not a fault ---
+         *
+         * This used to raise B-001 for every failure, with a comment saying
+         * *"the file is there -- resolve and readable both said so -- and it
+         * still would not open."* **Neither of them said so.**
+         * `recon_fs_resolve` works on paths that do not exist yet, because a
+         * write has to be able to create one; and `readable` answers a
+         * question about permission, returning true for an administrator
+         * without looking at the disk at all.
+         *
+         * So the guard the comment described did not exist, and B-001 fired
+         * on every missing file. What that cost is the error log: opening
+         * four applications on a fresh machine put **103 faults** in it, all
+         * of them an icon the resolver looked for and did not find. A lookup
+         * that tries `Metallic/x.ico`, `Metallic/x.png`, `x.ico`, `x.png` and
+         * finds the fourth reported three faults, every time, for working
+         * correctly.
+         *
+         * A log that fills with normal operation is a log nobody reads, which
+         * is the same sentence `recon_apps.c` reaches about repeating a line
+         * for as long as a program sits there.
+         *
+         * `ENOENT` is the caller's business and `recon_fs_read` returning
+         * NULL is how it is told. Everything else -- a permission the host
+         * refused, a device that would not read, no descriptors left -- is
+         * what B-001 is for, and is now the only thing it says.
+         */
+        if (errno != ENOENT) {
+            recon_error_raisef(NULL, RECON_ERR_B001, "'%s': %s", canonical,
+                strerror(errno));
+        }
         return NULL;
     }
 

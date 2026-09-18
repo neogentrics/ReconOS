@@ -9,6 +9,71 @@ way for the two to disagree.
 
 ---
 
+## v0.4.73 — 103 faults from opening four applications
+
+Nineteen versions today, all of them green, and none of them had looked at the
+machine. So: a live desktop, four applications opened, and then `errors log`.
+
+**103 faults.** Every one of them an icon.
+
+```
+VT-B001  A file could not be read -- '/System/Icons/Metallic/help.png': No such file or directory
+VT-B001  A file could not be read -- '/System/Icons/help.ico': No such file or directory
+```
+
+### The guard the comment described did not exist
+
+`recon_fs_read` raised **VT-B001** whenever `fopen` failed, and the comment
+beside it said what that was supposed to mean:
+
+> B-001's first half: the file is there — resolve and readable both said so —
+> and it still would not open.
+
+**Neither of them said so.** `recon_fs_resolve` works on paths that do not
+exist yet, because a write has to be able to create one. `readable` answers a
+question about *permission* and returns true for an administrator without
+looking at the disk at all.
+
+So B-001 fired on every missing file — and looking for a file that may not be
+there is how a **search** works. The icon resolver tries `Metallic/x.ico`,
+`Metallic/x.png`, `x.ico`, `x.png`; finding the fourth means three faults
+logged, every time, for working correctly.
+
+A log that fills with normal operation is a log nobody reads, which is the
+sentence `recon_apps.c` already reaches about repeating a line for as long as a
+program sits there. And the error log is the thing somebody opens when
+something has actually gone wrong.
+
+`ENOENT` is the caller's business, and a NULL return is how it is told.
+Everything else — a permission the host refused, a device that would not read,
+no descriptors left — is what B-001 is for, and is now the only thing it says.
+
+**103 to 0**, measured the same way it was found.
+
+### Both halves, because narrowing a check can turn it off
+
+A change that makes a check fire less often is exactly the change that can
+quietly stop it firing at all. So the suite checks that a missing file logs
+nothing *and* that a real failure still logs.
+
+Arranging a real failure took two attempts. A **directory** was the first, and
+it does not reach that path: `fseek` to the end of one gives a length nothing
+can allocate, so it comes out as "out of memory" somewhere else entirely. What
+works is a file the host refuses — `chmod 000`, and only for somebody who is
+not root. Which the test checks rather than assumes: run as root it would open
+the file anyway and report that B-001 still fires when nothing had failed.
+
+### This is the fourth comment this month claiming a guard and having none
+
+The clock-went-backwards clamp in `recon_loop.c` (v0.4.58), a Caps Lock branch
+in `recon_key.c` (v0.4.55), the `alpha == 0` shortcut in `recon_ui_fb.c`
+(v0.4.45), and now this. The way to find out has been the same every time:
+**take the line away and see whether anything notices.** Here nothing would
+have — the comment was describing a guard two functions away that answers a
+different question.
+
+---
+
 ## v0.4.72 — a package may need another one
 
 The board's `pkg-sign-dep` row, whose other half landed with signing in
