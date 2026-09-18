@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-15, and each entry says why. They are listed because a register that only
+16, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -177,6 +177,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
 - **KF-257** — The handshake completes on the wire and `connect` never hears about it
+- **KF-258** — A thread that sleeps once wakes; a thread that sleeps twice does not
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
 
 ---
@@ -7834,6 +7835,73 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
+
+[#534](https://github.com/neogentrics/ReconOS/issues/534)
+
+- **Found:** 17 September 2026, building the log port, and found because the
+  thing being built stopped after two turns of its loop.
+
+- **Measured, and the measurement is the entry.** A kernel thread looping on
+  `socket_accept` and `timer_sleep_ns(100 ms)`, instrumented either side of the
+  sleep:
+
+  ```
+  logport: turn 1, about to accept
+  logport: turn 1, sleeping
+  logport: turn 1, woke (slept)
+  logport: turn 2, about to accept
+  logport: turn 2, sleeping
+  ```
+
+  **Turn 2 never wakes.** The machine runs on — the boot continues, the first
+  screen paints, the heap test prints — and that thread is gone for the life of
+  the boot. A tenth of a second became forever.
+
+- **What is different between turn 1 and turn 2.** At turn 1 the machine is
+  still busy: the first program is starting and the boot is finishing. By turn 2
+  everything else has ended, and the only thing left is a processor with nothing
+  to run — so the idle path is entered for the first time. **The sleep that
+  fails is the first one taken on an idle machine.**
+
+- **Every part of the chain reads correctly in isolation, which is why this
+  needs a number rather than a patch.**
+
+  - `timer_sleep_ns` files a timer and loops on `wait_sleep` until the callback
+    sets its flag. Correct.
+  - `timer_next_deadline` walks every level of the wheel and returns the
+    smallest `expires`. It would find this timer.
+  - `power_idle_wait` asks for that deadline, converts ticks to nanoseconds,
+    takes it over the ceiling when it is sooner, and calls
+    `arch_wait_tickless`. Then turns the wheel with `timer_tick()` on waking.
+  - `idle_loop` calls `power_idle_wait` and then `sched_yield`.
+
+  Four correct-looking pieces and a thread that does not wake. The fault is in
+  how they meet, and finding it needs the idle path instrumented rather than
+  read — which is what this entry is for.
+
+- **What it costs, beyond the log port.** Anything in this kernel that sleeps
+  and expects to be woken is unreliable the moment the machine goes quiet. That
+  is every poller, every retry, every timeout that sleeps rather than spins.
+  **A busy machine hides it completely**, which is why twenty-eight matrix paths
+  and 2,119 self-tests do not show it: every one of them is doing something.
+
+- **Its likely relatives.** KF-232 -- *three timers did not fire, once, on one
+  path of twenty-eight* -- is a filed timer that did not arrive, and is still
+  open. KF-257's six-second gap is an arriving segment not acted on until the
+  peer retransmitted. Neither is proven to be this; both are the same shape, and
+  a fix here is the first thing to re-measure them against.
+
+- **Worked around, not fixed, in one place.** `logport.c` yields instead of
+  sleeping, and says so at the line, with the cost stated: a machine with that
+  port open does not idle properly. That is acceptable for a diagnostic that is
+  off unless asked for, and it is **not** acceptable as a general answer — the
+  general answer is this entry.
+
+- **Status:** open. Reproducible in one command on any machine:
+  `qemu-system-x86_64 -kernel ... -append logport` with a network, and watch the
+  accept loop stop.
 
 ### KF-257 — The handshake completes on the wire and `connect` never hears about it
 
