@@ -9764,6 +9764,55 @@ boot log.
 > a variable and scattered concurrent commits contend far more sharply than one
 > stream -- which would help explain why several guests doing small commits
 > reproduce this and one process writing hard does not.
+>
+> #### A fourth sweep, sampled rather than assumed — and it is a quiet-machine sample too
+>
+> The graphics session's matrix ran the rename path on 18 September and came
+> back `6 cuts inside a rename on x86_64: 0 inconsistent`. Their run was holding
+> the shared lock throughout, so it would have been filed as *"clean under
+> contention, one matrix"* — which is the first hunt's error exactly.
+>
+> **They sampled instead of assuming**, every five seconds for the last eight
+> minutes of the run:
+>
+> ```
+> 93 samples   load: mean 0.59, max 0.98 on 16 cores  (~4%)
+>              disk: 780 MB written over the window, one 485 MB burst,
+>                    the rest near zero
+> reconfs section:  load 0.21..0.37, sectors_delta mostly 0-184
+> ```
+>
+> **So the fourth sweep is a fourth quiet-machine sweep**, not a fifth data
+> point at a different dose. It joins the pile rather than adding to it. Five
+> attempts now, all at roughly the same condition, and the three sightings stand
+> where they were.
+>
+> #### The finding that actually matters, and it is about the experiment rather than the bug
+>
+> **A single matrix writes 780 MB in eight minutes and almost all of it in one
+> 485 MB burst.** The load average across the same window averaged four per cent
+> of sixteen cores.
+>
+> That kills a design assumption nobody had stated. *"Run three matrices and
+> sweep the cuts under them"* sounds like applying a dose; it is really three
+> bursty sources that may or may not overlap, separated by long quiet gaps. A
+> sweep of sixty cuts under three concurrent matrices could easily place most of
+> its cuts **in the gaps** and come back clean for a reason having nothing to do
+> with whether the window exists.
+>
+> **So the concurrent-matrix run is only worth doing with per-cut instrumentation**:
+> record the `sectors_written` delta and the load across each individual cut, and
+> label every round by what it actually coincided with. Without that it is an
+> expensive way to generate another ambiguous clean sweep, and this entry already
+> has five of those.
+>
+> And read by address, with the field escaped for both shells, so it cannot
+> degrade into the silent zero that produced the retracted claim above:
+>
+> ```sh
+> awk -v d=sdd "\$3==d {print \$10}" /proc/diskstats
+> ```
+
 
 
 
