@@ -1097,3 +1097,75 @@ clean.
 **Still nothing to merge.** Connecting — inquiry, paging, pairing — is not
 written and would be written from memory rather than from anything checkable;
 it is also the half that waits on the transport anyway.
+
+---
+
+### 17 September 2026 (twelfth) — bluetooth → kernel
+
+**The connection half is written after all.** It was left out as "writing from
+memory rather than from anything checkable" — and BlueZ's `hci.h` turned out to
+carry every opcode, every event code and every structure layout it needs. The
+objection was to guessing, not to the work, and it stops applying once there is
+something to check against.
+
+`kernel/core/bt_link.c`: inquiry, Create Connection, Connection Complete,
+Disconnection Complete, and the pairing requests. Checked against `hci.h` for
+the OGF groups, `OCF_INQUIRY 0x0001`, `OCF_CREATE_CONN 0x0005`, the event
+codes, `ACL_LINK 0x01`, the packet-type bits, and the field order of
+`inquiry_cp`, `inquiry_info`, `create_conn_cp`, `evt_conn_complete` and
+`evt_disconn_complete`.
+
+It also **confirmed two opcodes this branch already had**: `OCF_RESET` in
+`OGF_HOST_CTL` is 0x0C03 and `OCF_READ_BD_ADDR` in `OGF_INFO_PARAM` is 0x1009,
+both matching what was written from memory days ago. And the packet-type
+default: BlueZ's individual DM1/DH1/DM3/DH3/DM5/DH5 bits sum to exactly
+0xCC18, so that constant is checked rather than recalled.
+
+**One value is not from a header.** `BT_GIAC` (0x9E8B33) appears in none of
+them and is written from memory, said plainly in the file rather than left
+looking as checked as its neighbours.
+
+#### The same rule, a fourth time
+
+**A Command Status for Create Connection is not a connection.** It means the
+controller accepted the request; the real answer arrives later as a Connection
+Complete. Reading it as the result reports a link that does not exist, and
+everything above then talks to a handle the controller never issued.
+
+That is the same shape as L2CAP's *pending*, as the opcode match in
+`bluetooth.c`, and as KF-248's endpoint id underneath all three. Four layers,
+one rule: **an answer that arrives early, or that does not name what it is
+answering, is not the answer.** Each was written separately; the pattern only
+became obvious at the third.
+
+A failing Command Status is the opposite case and needs its own branch — no
+Connection Complete follows a refusal, so waiting for one waits for ever.
+Both are tested.
+
+#### Eight breakages, all red first time
+
+The access code sent big-endian (`9e 8b 33` for `33 8b 9e`), a Command Status
+taken as a connection, a failing one ignored, a Connection Complete's handle
+read before its status, the address not matched, the handle not masked to
+twelve bits (`f00c` for `000c`), a SCO link accepted as the ACL one, and a
+pairing request ignored.
+
+That last one is a state rather than a fix: pairing is **not implemented**, and
+a controller that asks for a link key and gets no reply waits — so does
+everything above it. `BT_LINK_NEEDS_PAIRING` makes that a diagnosis instead of
+a hang.
+
+71 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
+
+#### What is left on this branch
+
+Written and tested: link setup, L2CAP channels, HIDP framing, descriptor
+parsing, field extraction, and the join that turns a fragment into a pointer
+movement.
+
+Not written, and each for a stated reason:
+
+- **Pairing.** Link keys and PIN handling. Detected and reported, not done.
+- **The transport.** Yours, KF-248.
+- **Firmware loading.** Yours, and both adapters need it.

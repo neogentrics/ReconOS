@@ -48,6 +48,7 @@
 #include <recon/kernel/bt_hid.h>	/* and the one above that */
 #include <recon/kernel/hid_report.h>	/* which both HID drivers want */
 #include <recon/kernel/sdp.h>		/* and where a descriptor comes from */
+#include <recon/kernel/bt_link.h>	/* bringing a link up */
 #include <recon/kernel/bt_mouse.h>	/* and all of it joined together */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
@@ -380,6 +381,8 @@ void kmain(void)
 		sdp_self_test() ? "pass" : "FAIL");
 	kprintf("  a fragment becomes a movement : %s\n",
 		bt_mouse_self_test() ? "pass" : "FAIL");
+	kprintf("  finding something to talk to : %s\n",
+		bt_link_self_test() ? "pass" : "FAIL");
 	kprintf("  somebody typing      : %s\n",
 		input_self_test() ? "pass" : "FAIL");
 	kprintf("  blocks kept nearby   : %s\n",
