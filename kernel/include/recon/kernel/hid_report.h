@@ -185,6 +185,20 @@ struct hid_mouse_layout {
 bool hid_report_mouse_layout(const struct hid_report_info *info,
 			     struct hid_mouse_layout *out);
 
+/* The boot protocol's layout, without a descriptor.
+ *
+ * A device in boot mode sends a **fixed** report -- three buttons in the low
+ * bits of byte 0, X in byte 1, Y in byte 2, and a wheel in byte 3 if it has
+ * one. That is the whole point of boot mode: it is readable by something that
+ * cannot parse a descriptor, which is how a BIOS drives a mouse.
+ *
+ * So this exists for the case where no descriptor has been fetched, which
+ * over Bluetooth means before SDP has been spoken. It is not a guess at a
+ * layout: the self-test asserts that what this returns is **identical** to
+ * what parsing a real boot-mouse descriptor produces, so the constant and the
+ * parser have to agree or one of them is wrong. */
+void hid_mouse_boot_layout(struct hid_mouse_layout *out, bool with_wheel);
+
 /* --- reading a field out of a report -------------------------------------
  *
  * The map above says where a field is. This gets its value out, and it is the

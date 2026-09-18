@@ -452,6 +452,25 @@ u32 l2cap_channel_input(struct l2cap_channel *c, const u8 *sig, u32 len,
 		if (s.length < 4)
 			return 0;
 
+		/* **The channel it names, which this one forgot to check.**
+		 *
+		 * A Configure Request carries the destination CID -- this
+		 * side's -- and every other message here is matched on one.
+		 * This case read it and never compared it, so a channel that
+		 * happened to be open would answer a request addressed to a
+		 * different one, and the channel it was meant for would sit
+		 * waiting for a configuration that had already been answered
+		 * by somebody else.
+		 *
+		 * Found by opening two channels on one link: the control
+		 * channel, open first, swallowed the interrupt channel's
+		 * Configure Request. Nothing in this file's own tests could
+		 * see it, because they only ever have one channel. */
+		if (get_le16(s.data) != c->scid) {
+			c->wrong_channel++;
+			return 0;
+		}
+
 		/* Anything after the destination CID and the flags is the
 		 * option list. An absent MTU option means the default rather
 		 * than an error, so a false here is not a failure. */
@@ -1038,6 +1057,60 @@ bool l2cap_self_test(void)
 			kputs("  l2cap: the channel opened on their "
 			      "configuration alone\n");
 			ok = false;
+		}
+
+		/* --- a Configure Request for a different channel ---------
+		 *
+		 * **Every test above this one has a single channel**, and a
+		 * single channel cannot show a message being answered by the
+		 * wrong one. This case was missing for exactly that reason,
+		 * and the fault it covers was found by opening two channels
+		 * on one link in `bt_stack.c` -- the control channel, open
+		 * first, answered the interrupt channel's Configure Request
+		 * and left it waiting for a configuration already consumed.
+		 */
+		{
+			u8 body[4];
+			u64 before;
+
+			/* An open channel, so it is eligible to answer. */
+			l2cap_channel_init(&ch, L2CAP_PSM_HID_CONTROL, 0x0040);
+			l2cap_channel_start(&ch, tx, 0x01);
+			CONN_RSP(0x01, 0x0041, 0x0040, L2CAP_CONN_SUCCESS);
+			l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
+			ch.config_out_done = true;
+			ch.config_in_done = true;
+			ch.state = L2CAP_CH_OPEN;
+			before = ch.wrong_channel;
+
+			/* Addressed to 0x0041, which is not this channel. */
+			put_le16(body, 0x0041);
+			put_le16(body + 2, 0);
+			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
+					       0x40, body, sizeof(body));
+
+			if (l2cap_channel_input(&ch, rx, n, tx, sizeof(tx)) ||
+			    ch.wrong_channel != before + 1) {
+				kputs("  l2cap: a Configure Request naming "
+				      "another channel was answered -- the "
+				      "channel it was meant for then waits "
+				      "for a configuration somebody else "
+				      "consumed\n");
+				ok = false;
+			}
+
+			/* And its own is still answered. */
+			put_le16(body, 0x0040);
+			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
+					       0x41, body, sizeof(body));
+
+			if (!l2cap_channel_input(&ch, rx, n, tx,
+						 sizeof(tx))) {
+				kputs("  l2cap: the check on the destination "
+				      "channel also refused this channel's "
+				      "own Configure Request\n");
+				ok = false;
+			}
 		}
 
 		/* --- refusal --- */

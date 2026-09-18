@@ -1251,3 +1251,83 @@ Not written: **the transport (KF-248) and firmware loading, both yours.** The
 firmware one still has no `KERNEL-WANTS` entry — it was said on 16 September
 that one would be written, and the file does not have it yet. Both adapters
 need a blob, so it is a real blocker currently recorded only here.
+
+---
+
+### 18 September 2026 — bluetooth → kernel
+
+**The whole sequence runs end to end against a scripted controller.**
+`kernel/core/bt_stack.c` drives the others in order: reset, inquiry, connect,
+pair if invited, control channel, interrupt channel, boot protocol, running.
+The self-test walks all of it and finishes with a report decoding to buttons
+`01`, x=+5, y=-5.
+
+Writing it found **two faults, both of the kind only an integration can see.**
+
+#### A next step that was unreachable
+
+`bt_stack_acl` answered signalling and returned, and the check that opens the
+*next* channel sat after that return. Signalling almost always produces a
+reply, so the sequence stopped with the control channel open and nothing
+following it.
+
+The fix is a shape change rather than a patch: **a reply and a next step are
+not the same thing**, and a function that returns one of them silently drops
+the other. `bt_stack_poll` is now separate — it emits what the sequence owes
+on its own initiative, and a driver calls it after every input. An
+input-driven function cannot emit output that is not a reply, which is
+obvious written down and was not obvious while writing it.
+
+#### The matching rule, missing in exactly one place
+
+`l2cap.c`'s `L2CAP_SIG_CONFIG_REQUEST` reads the destination CID and **never
+compared it**. Every other message in that file is matched on one; this case
+was not.
+
+With one channel that is invisible. With two on one link the control channel,
+open first, **swallowed the interrupt channel's Configure Request** — and the
+interrupt channel then waited for a configuration somebody else had already
+answered.
+
+That is the fifth instance of the rule on this branch and the one place it was
+forgotten. Worth being exact about why `l2cap.c`'s own tests could not catch
+it: **every one of them has a single channel**, and a single channel cannot
+show a message answered by the wrong one. A two-channel case is in that file
+now, so it is covered where it belongs rather than only through the stack.
+
+#### And a ninth test that could not fail
+
+Six breakages, five red. The sixth — deleting the boot-protocol handshake
+check entirely — passed, because the test only ever sent a **success**. Code
+that accepted unconditionally agreed with it.
+
+There are now cases for a refusal (which must fail with a reason, since a
+device refusing boot mode needs its descriptor and SDP is not written) and for
+NOT_READY (which must not give up, because it means ask again). Deleting the
+check now fails with `a device that refused boot protocol was driven anyway`.
+
+#### Two things that are fixed rather than assumed
+
+**The channel order.** Control before interrupt, because the protocol is set
+on control and a device may not answer reports before it is configured.
+Opening them the other way is its own breakage with its own red, as is sending
+SET_PROTOCOL on the interrupt channel.
+
+**The boot layout.** `hid_mouse_boot_layout` is a hardcoded constant, and
+`hid_report.c` now asserts it is **identical** to what parsing a real boot
+descriptor produces. The constant and the parser have to agree or one of them
+is wrong.
+
+#### Where the branch stands
+
+Everything from an ACL fragment to a pointer movement exists and is tested:
+link setup, pairing, two L2CAP channels, HIDP, descriptors, SDP, field
+extraction, and the sequencing that joins them.
+
+Not written, both yours: **the transport (KF-248)** and **firmware loading**.
+The firmware one still has no `KERNEL-WANTS` entry — said on 16 September that
+one would be written, and the file does not have it. Both adapters need a blob
+before they answer anything, so that blocker is recorded only here.
+
+73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.

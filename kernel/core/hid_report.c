@@ -500,6 +500,33 @@ bool hid_report_mouse_layout(const struct hid_report_info *info,
 	return true;
 }
 
+void hid_mouse_boot_layout(struct hid_mouse_layout *out, bool with_wheel)
+{
+	kmemset(out, 0, sizeof(*out));
+
+	/* Three buttons in the low three bits of byte 0, five bits of padding
+	 * above them, then two signed bytes. Identical to what the boot
+	 * descriptor parses to, which the self-test asserts rather than
+	 * assumes. */
+	out->buttons_offset = 0;
+	out->buttons_count = 3;
+	out->x_offset = 8;
+	out->x_size = 8;
+	out->y_offset = 16;
+	out->y_size = 8;
+
+	if (with_wheel) {
+		out->have_wheel = true;
+		out->wheel_offset = 24;
+		out->wheel_size = 8;
+		out->report_bytes = 4;
+	} else {
+		out->report_bytes = 3;
+	}
+
+	out->found = true;
+}
+
 /* --- reading a field out of a report -------------------------------------- */
 
 bool hid_field_extract(const u8 *report, u32 report_len, u32 bit_offset,
@@ -1487,6 +1514,50 @@ bool hid_report_self_test(void)
 			      "field fits in three, so only the report "
 			      "length catches this\n");
 			ok = false;
+		}
+	}
+
+	/* --- the boot layout and the parser must agree -------------------
+	 *
+	 * `hid_mouse_boot_layout` is a hardcoded constant and
+	 * `hid_report_mouse_layout` derives one from bytes. They describe the
+	 * same thing, so they must come out the same -- and if they ever
+	 * disagree, one of them is wrong and this says so rather than letting
+	 * a driver pick whichever it happened to call.
+	 */
+	if (hid_report_parse(boot_mouse, sizeof(boot_mouse), &info) &&
+	    info.fields_usable) {
+		struct hid_mouse_layout parsed, fixed;
+
+		if (!hid_report_mouse_layout(&info, &parsed)) {
+			kputs("  hidrep: the boot descriptor yielded no "
+			      "layout to compare against\n");
+			ok = false;
+		} else {
+			hid_mouse_boot_layout(&fixed, parsed.have_wheel);
+
+			if (fixed.buttons_offset != parsed.buttons_offset ||
+			    fixed.buttons_count != parsed.buttons_count ||
+			    fixed.x_offset != parsed.x_offset ||
+			    fixed.x_size != parsed.x_size ||
+			    fixed.y_offset != parsed.y_offset ||
+			    fixed.y_size != parsed.y_size ||
+			    fixed.report_bytes != parsed.report_bytes) {
+				kprintf("  hidrep: the hardcoded boot layout "
+					"and the parsed one disagree -- fixed "
+					"says buttons %u@%u x %u@%u y %u@%u "
+					"in %u bytes, parsed says %u@%u "
+					"%u@%u %u@%u in %u\n",
+					fixed.buttons_count,
+					fixed.buttons_offset, fixed.x_size,
+					fixed.x_offset, fixed.y_size,
+					fixed.y_offset, fixed.report_bytes,
+					parsed.buttons_count,
+					parsed.buttons_offset, parsed.x_size,
+					parsed.x_offset, parsed.y_size,
+					parsed.y_offset, parsed.report_bytes);
+				ok = false;
+			}
 		}
 	}
 

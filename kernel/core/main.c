@@ -50,7 +50,8 @@
 #include <recon/kernel/sdp.h>		/* and where a descriptor comes from */
 #include <recon/kernel/bt_link.h>	/* bringing a link up */
 #include <recon/kernel/bt_pair.h>	/* agreeing a link key */
-#include <recon/kernel/bt_mouse.h>	/* and all of it joined together */
+#include <recon/kernel/bt_mouse.h>
+#include <recon/kernel/bt_stack.h>	/* the whole sequence */	/* and all of it joined together */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
@@ -386,6 +387,8 @@ void kmain(void)
 		bt_link_self_test() ? "pass" : "FAIL");
 	kprintf("  agreeing a key with it : %s\n",
 		bt_pairing_self_test() ? "pass" : "FAIL");
+	kprintf("  the whole sequence : %s\n",
+		bt_stack_self_test() ? "pass" : "FAIL");
 	kprintf("  somebody typing      : %s\n",
 		input_self_test() ? "pass" : "FAIL");
 	kprintf("  blocks kept nearby   : %s\n",
