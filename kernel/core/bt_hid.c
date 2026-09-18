@@ -77,8 +77,14 @@ bool bt_hid_parse(const u8 *pdu, u32 len, struct bt_hid_message *out)
 bool bt_hid_input_report(const struct bt_hid_message *m, bool uses_report_id,
 			 struct bt_hid_report *out)
 {
+	/* The report type is the bottom two bits of the parameter; the other
+	 * two are reserved and must be ignored rather than compared. Checked
+	 * against the Linux kernel's `HIDP_DATA_RTYPE_MASK`, which is how the
+	 * two-bit width came to light -- this was comparing the whole nibble,
+	 * which is right for every compliant device and drops the reports of
+	 * one that sets a reserved bit. */
 	if (m->transaction != HIDP_TRANS_DATA ||
-	    m->parameter != HIDP_REPORT_INPUT)
+	    (m->parameter & HIDP_REPORT_TYPE_MASK) != HIDP_REPORT_INPUT)
 		return false;
 
 	if (!m->length)
@@ -263,6 +269,53 @@ bool bt_hid_self_test(void)
 				      "the shift it is about\n");
 				ok = false;
 			}
+		}
+	}
+
+	/* --- a reserved bit set in the report type -----------------------
+	 *
+	 * The report type is two bits and the nibble is four, so a device
+	 * setting a reserved bit sends 0xA5 rather than 0xA1 for an input
+	 * report. Comparing the whole nibble drops it. Found by checking
+	 * these constants against the Linux kernel's, which masks with
+	 * HIDP_DATA_RTYPE_MASK and names the other two bits reserved.
+	 */
+	{
+		u8 reserved[5];
+
+		reserved[0] = (u8)(HIDP_INPUT_DATA_HEADER | 0x04);
+		reserved[1] = 0x01;
+		reserved[2] = 0x04;
+		reserved[3] = 0xFB;
+		reserved[4] = 0x00;
+
+		if (!bt_hid_parse(reserved, 5, &m)) {
+			kputs("  bthid: a report with a reserved bit set was "
+			      "refused outright\n");
+			ok = false;
+		} else if (!bt_hid_input_report(&m, false, &rep)) {
+			kprintf("  bthid: header %02x was not read as an "
+				"input report -- the report type is the "
+				"bottom two bits and the other two are "
+				"reserved\n", reserved[0]);
+			ok = false;
+		} else if (rep.length != 4 || rep.data[0] != 0x01) {
+			kputs("  bthid: a report with a reserved bit set came "
+			      "back with the wrong bytes\n");
+			ok = false;
+		}
+
+		/* And an OUTPUT report with the same reserved bit must still
+		 * be refused, or the mask is being applied so loosely that it
+		 * matches everything. */
+		reserved[0] = (u8)(bt_hid_header(HIDP_TRANS_DATA,
+						 HIDP_REPORT_OUTPUT) | 0x04);
+
+		if (bt_hid_parse(reserved, 5, &m) &&
+		    bt_hid_input_report(&m, false, &rep)) {
+			kputs("  bthid: an OUTPUT report with a reserved bit "
+			      "set was read as input\n");
+			ok = false;
 		}
 	}
 

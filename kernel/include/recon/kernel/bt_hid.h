@@ -48,24 +48,27 @@
  * a driver with one of them has either a mouse that cannot be configured or
  * one that never moves. */
 
-/* --- how much of this file has been checked, and how much has not ---------
+/* --- these were unverified, and now are not -------------------------------
  *
- * `l2cap.h`'s constants were verified against BlueZ 5.72's headers and all
- * agreed. **The HIDP constants below could not be**: BlueZ's userspace
- * `hidp.h` carries only its ioctl interface, and the protocol's transaction
- * types live in the Linux kernel's own `net/bluetooth/hidp/hidp.h`, which is
- * not shipped in any package available here.
+ * An earlier version of this comment said the constants below could not be
+ * checked: BlueZ's userspace `hidp.h` carries only its ioctl interface, and
+ * the protocol's transaction types live in the Linux kernel's own
+ * `net/bluetooth/hidp/hidp.h`, which no available package ships.
  *
- * So these are written from memory and checked only against each other and
- * against one well-known value -- an input report opens with 0xA1 -- which the
- * self-test asserts against the literal rather than against the macro that
- * builds it.
+ * **They have since been checked against that header directly**, on
+ * 17 September 2026, and every one agreed. The kernel writes its transaction
+ * types pre-shifted -- `HIDP_TRANS_DATA 0xa0` where this file has `0xA` and
+ * shifts in `bt_hid_header` -- so the comparison is of the nibbles, and all
+ * seven match. The handshake results, the control parameters and the report
+ * types match exactly. So does `HIDP_PROTO_BOOT 0x00`, which was the single
+ * value flagged here as least certain.
  *
- * That is weaker evidence than the layer below has, and it is recorded here
- * rather than left to look the same. The first real device settles it: a mouse
- * whose reports open with something other than 0xA1 means this section is
- * wrong, and the framing is small enough that being wrong here is cheap to
- * correct and expensive to not notice.
+ * **One thing was found, and it is below**: the report type in a DATA
+ * transaction is **two bits**, not four. The kernel masks it with
+ * `HIDP_DATA_RTYPE_MASK 0x03` and names the other two `RSRVD`. This file was
+ * comparing the whole low nibble, which is right for every compliant device
+ * and wrong for one that sets a reserved bit -- an input report that would
+ * then be read as an unknown type and dropped.
  */
 
 /* --- transaction types: the top nibble ------------------------------------ */
@@ -77,7 +80,16 @@
 #define HIDP_TRANS_SET_PROTOCOL		0x7
 #define HIDP_TRANS_DATA			0xA
 
-/* --- report types: the bottom nibble of a DATA or GET/SET_REPORT ---------- */
+/* --- report types: the bottom *two bits* of a DATA or GET/SET_REPORT -----
+ *
+ * Two, not four. The other two bits of the low nibble are reserved, and the
+ * Linux kernel names them so -- `HIDP_DATA_RTYPE_MASK 0x03` against
+ * `HIDP_DATA_RSRVD_MASK 0x0c`. Anything reading the report type must mask,
+ * or a device that sets a reserved bit has its input reports read as some
+ * unknown type and thrown away.
+ */
+#define HIDP_REPORT_TYPE_MASK		0x03
+
 #define HIDP_REPORT_OTHER		0x0
 #define HIDP_REPORT_INPUT		0x1
 #define HIDP_REPORT_OUTPUT		0x2

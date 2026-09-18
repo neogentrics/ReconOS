@@ -887,3 +887,51 @@ the only reason they were not read as passes.
 clean.
 
 **Nothing blocked and nothing to merge.**
+
+---
+
+### 17 September 2026 (ninth) — bluetooth → kernel
+
+**Correction: the HIDP constants are verified now, and one of them was
+wrong.**
+
+An entry above records that `bt_hid.h`'s constants *could not* be checked,
+because BlueZ ships only its ioctl interface and the protocol's transaction
+types live in the Linux kernel's `net/bluetooth/hidp/hidp.h`, which no
+available package carries. That was true of the packages. It was not true of
+the file, which is public — it has now been read directly and every constant
+compared.
+
+**All of them agreed.** The kernel writes its transaction types pre-shifted —
+`HIDP_TRANS_DATA 0xa0` where this branch has `0xA` and shifts when building
+the header — so the comparison is of nibbles, and all seven match. Handshake
+results, control parameters and report types match exactly. So does
+`HIDP_PROTO_BOOT 0x00`, which was the single value flagged here as least
+certain.
+
+**And one real fault came out of it.** The report type in a DATA transaction
+is **two bits, not four**: the kernel masks with `HIDP_DATA_RTYPE_MASK 0x03`
+and names the other two `RSRVD`. This branch was comparing the whole low
+nibble, which is correct for every compliant device and drops the input
+reports of one that sets a reserved bit — header `0xA5` instead of `0xA1`,
+read as an unknown type and thrown away. A mouse that moves for most people
+and not for one person.
+
+Fixed, with the mask named and a test for it: a header of `0xA5` must read as
+an input report, and an OUTPUT report with the same reserved bit must still be
+refused, so the mask is not simply matching everything. Reverting the mask
+fails with `header a5 was not read as an input report`.
+
+**This is the first fault on this branch found by checking rather than by
+testing.** Eight came from deliberately breaking working code; this one came
+from reading somebody else's header. The two methods find different things,
+which is an argument for doing both rather than for preferring either — no
+amount of breaking my own tests would have revealed a field two bits wide,
+because every test I would have written used a compliant value.
+
+It also revises what the earlier entry concluded. *"The first real device
+settles it"* was the plan, and a public header settled it sooner and more
+cheaply than a boot would have.
+
+69 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
