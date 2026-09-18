@@ -913,3 +913,72 @@ server/init/server_init.c:2094: `site` is declared and then assigned field by fi
   No suite can see the init program's stack, so the check has to read the
   source. It is narrow on purpose -- it is about one struct that is known to
   grow, not a general rule about uninitialised variables.
+
+### VF-030 -- a configuration file this machine can write once and never correct
+
+- **What was built** `server/config.c`: the machine's name, port, resolver,
+  clock and virtual hosts, read at boot from `/System/server.conf`. The first
+  part of this role that is configuration rather than a build, which is what
+  `server/README.md` has said a role is meant to be since its first line.
+- **What the suite is for.** 159 checks, and the majority are files that must
+  be **refused**. A correct file parsing is one check and it is the easy one;
+  what matters is that a file with a fault in it is not half-applied, because a
+  machine running half a file is in a state nobody described and the person who
+  wrote the file has no way to find out.
+- **Watched failing, three ways**, each a parser somebody would plausibly write:
+
+```
+skips keys it does not recognise      7 of 155 fail
+does not check a document root       10 of 155 fail
+allows two sites with one name        1 of 155 fail
+```
+
+  The first is the one to look at. Three of its seven are the misspelled-key
+  checks; the other four are the checks that *nothing from before the fault is
+  left behind*, which is a property a lenient parser breaks without ever
+  looking wrong.
+- **One check failed while this was being written, and it was right to.** The
+  first version reported a refusal and left everything that had already parsed
+  in the caller's struct. A caller could read it, and a caller that reads it is
+  a machine running the first half of a rejected file. `fail()` clears the
+  whole structure and keeps only the line and the offending word.
+- **Measured on the machine, across two boots on one volume:**
+
+```
+boot 1   the configuration: none found, wrote a template to /System/server.conf
+boot 2   the configuration: /System/server.conf read, and it says nothing
+```
+
+  Written, kept across a restart, read back, and parsed. Every line of the
+  template is a comment, and the suite checks that rather than trusting it --
+  a template that quietly configured something would be a machine configured by
+  a file nobody wrote.
+
+- **And with two names, on the machine:**
+
+```
+shop.example     HTTP/1.1 200 OK    564 bytes   the volume's index.html
+the-console      HTTP/1.1 200 OK   1543 bytes   the console dashboard
+10.0.2.15        HTTP/1.1 200 OK   1544 bytes   the console dashboard
+```
+
+  Two documents from one listener, chosen by `Host`. The console site has no
+  name and stays last, so it answers to everything nothing else claimed --
+  which is why the machine is still reachable at its own address after a site
+  is added.
+
+- **That last measurement was taken with the configuration embedded in the
+  build, and this is the finding.** Not a shortcut: **there is no way to put a
+  file on the volume.** Nothing in user mode can replace or remove a file --
+  `SYS_CREATE` writes whole and refuses an existing name, there is no unlink,
+  no rename, no truncate, and the only door onto an existing file is the flag
+  combination VF-027 measured as contradicting its own documentation.
+- **So the server writes a template when a volume has none**, which makes the
+  file exist, and then nothing on the machine can edit it. A configuration that
+  can be written once and never corrected is not a configuration. The feature
+  is finished and it is **half reachable**, and that is written here and in
+  `docs/KERNEL-WANTS.md` rather than being discovered by somebody who takes the
+  README at its word.
+- **What would close it**, smallest first: `SYS_CREATE` with a replace flag.
+  ReconFS already writes a whole file in one transaction, and whole-file
+  replacement is exactly what a configuration file wants.

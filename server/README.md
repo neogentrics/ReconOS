@@ -29,10 +29,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.24.1 |
+| **Version** | 0.25.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
-| **Checks** | 826 across nineteen suites, by `scripts/server-tests.sh` |
+| **Checks** | 985 across twenty suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -192,6 +192,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
 | `server_logfile` | 45 | numbering segments, and the sort order that makes a log readable |
 | `server_dial` | 38 | three answers, and the two ways of confusing them |
+| `server_config` | 159 | reading a configuration, and the files that must not be believed |
 
 It reads its target list out of `CMakeLists.txt` rather than keeping one of its
 own, for the same reason `http_reason` is generated from an X-macro: two lists
@@ -282,6 +283,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.25.0** | **The server reads a configuration file, so a virtual host is something you can have rather than something the source can.** `server/config.c` -- 159 checks, and most of them are files that must be **refused**: an unknown key, a key twice, a key in the wrong section, two sites with one name, a site with no root, a port of 0 or 65536, a resolver given as a name, a root that climbs out of itself. **A configuration parser that ignores a line it does not understand produces a machine running something nobody wrote**, and the person who wrote the file has no way to find out. So the whole file is taken or none of it is, the console names the line and the word, and the built-in console keeps serving -- the one place here that does not refuse outright, because the alternative is a machine whose only repair route is the web console it has stopped serving. Watched failing against three lenient parsers: one that skips unknown keys (7 of 155), one that does not check roots (10), one that allows two sites with one name (1). Measured on the machine across two boots and then with two names: `shop.example` gets the volume's `index.html` at 564 bytes, every other name gets the console. **And the machine cannot edit the file it just wrote** -- nothing in user mode can replace or remove a file, which is now the sharpest entry in `docs/KERNEL-WANTS.md` rather than a footnote. VF-030. |
 | **0.24.1** | **The virtual hosts shipped a version earlier dispatched on a name out of uninitialised memory.** `serve.c` was right and the init program was not: `struct http_site site;` on the stack, ten fields assigned by hand, and the two fields added that same version -- `host` and `next`, the ones the dispatch reads -- among the ones nobody assigned. Instrumented and booted, the previous shape printed `host=0 next=0`, which is why every check in 0.24.0 passed. **It behaved correctly for a reason nobody chose**, and the same shape on a host, in a frame other work has used, gives `host` pointing at a string the previous call left behind -- a server comparing `Host:` against its own leftovers and answering 421 to everything. The site is a file-scope designated initializer now, so every field added after this line is zero by the language rather than by anybody remembering. `scripts/check-site-init.py` runs with the suites and refuses the old shape. VF-029. |
 | **0.24.0** | **Name-based virtual hosts -- and the header they dispatch on had never been enforced.** A site now carries a name and a `next`; the first whose name matches answers, one with no name claims everything, and a name nobody claims gets **421** rather than 404, because the resource may well exist and this is simply not the machine that has it. Picked **per request**, not per connection: a keep-alive client may ask two sites down one socket, and the pipelined pair proving it is the check that fails against every shape that decides once. Watched failing at 9 of 59 against a dispatch that always answers with the head of the chain -- and the 200s still passed, which is why the body is the site's own context rather than the route's. Building it found the older fault: `request.c` accepted **HTTP/1.1 with no `Host` at all**, and accepted **two `Host` headers**, in the same file that has refused two `Content-Length` headers since 0.0.2 on the stated grounds that *agreement is not the property that makes a message safe, being unambiguous is.* The one header that says which machine is being addressed was the one header that rule had never been applied to. Both are 400 now, HTTP/1.0 untouched, measured on the machine before and after. VF-028. |
 | **0.23.0** | **The log can be read back, including from boots that have already ended.** Writing segments without a way to read them is half a feature: `GET /api/log/segments` lists what the volume holds and `GET /api/log/segment?n=` returns one as text. **The caller gives a number and never a name** — the path is built by the same function that wrote the file, so traversal is not refused, it is unreachable. Confirmed against `../../etc/passwd`, `%2e%2e%2f`, a bare filename, a negative, scientific notation and a value given twice: every one 400 or 404, none of them by a path check. These two are **guarded** while `GET /api/log` stays open, which is the first place on this server where the line falls between *current state* and *accumulated record* rather than between reading and writing — a snapshot says what is happening, an archive says what the people who use this machine do. |

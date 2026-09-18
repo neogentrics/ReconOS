@@ -296,6 +296,56 @@ newer than its caller.
 
 ---
 
+## A file can be created and never changed, so a machine cannot be configured
+
+### What is missing
+
+Nothing in user mode can **replace or remove a file**. `SYS_CREATE` writes one
+whole and refuses a name that exists; there is no `SYS_UNLINK`, no rename, and
+no truncate. The only door onto an existing file is
+`OPEN_WRITE | OPEN_CREATE`, which succeeds on a file that already exists --
+**the opposite of what its own documentation says**, which is why nothing here
+is built on it. VF-027 has the measurement.
+
+### What it costs, now that there is something to cost
+
+`server/config.c` reads `/System/server.conf` at boot: the machine's name, its
+port, its resolver, its clock, and its virtual hosts. It is the first piece of
+this role that is configuration rather than a build, which is what
+`docs/ROLES.md` says a role is meant to be.
+
+**And this machine cannot write that file a second time.** The server creates a
+commented template when a volume has none, so there is something to edit -- and
+then nothing on the machine can edit it. Not the console, not an endpoint, not
+a future text editor. A configuration that can be written once and never
+corrected is a configuration nobody should be encouraged to use, and the
+verification of it (VF-030) had to embed the bytes in a build to see two
+virtual hosts answer, because there is no way to put a file on the volume from
+outside either.
+
+The same gap is why the access log rotates rather than appends. That one found
+a good shape by being pushed into it; this one has no good shape to be pushed
+into, because *the current contents of a file being wrong* is the ordinary case
+for configuration.
+
+### What would fix it
+
+Any one of these, in the order they would be used here:
+
+- **`SYS_UNLINK`**, and write-then-unlink-then-rename becomes available, which
+  is how every system does an atomic replace. Rename would be needed too.
+- **`SYS_CREATE` with a replace flag**, honestly documented. ReconFS already
+  writes a whole file in one transaction, so replacing one is the same
+  operation onto an existing name -- and *whole-file replacement is exactly
+  what a configuration file wants*. This is the smallest of the three.
+- **`OPEN_REPLACE` doing what its comment says**, with `OPEN_CREATE` likewise.
+  That fixes a documented contradiction as well, but leaves a writer needing to
+  truncate, which is a third thing that does not exist.
+
+The middle one is the one this role would use tomorrow.
+
+---
+
 ## A datagram cannot carry an address, so DNS and DHCP cannot be written
 
 **Where:** opening the server role on branch `server`, 15 September 2026. Hit

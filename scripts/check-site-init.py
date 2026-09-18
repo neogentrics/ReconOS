@@ -29,10 +29,24 @@ added after the line is written.
 
 --- What it looks for ---
 
-A declaration of `struct http_site` with no `=` before its semicolon. A pointer
-(`struct http_site *s;`) is not a declaration of one and is left alone, and so
-is a member inside another struct, which is initialised by whatever initialises
-the struct that holds it.
+**A `struct http_site` on the stack**, with no initializer: an indented
+declaration that is not `static`. Those are the ones the language leaves
+holding whatever was there before.
+
+Three shapes are deliberately not flagged, because the language already
+guarantees them:
+
+  * a declaration at file scope, and a `static` one inside a function --
+    zero-initialised, so an unmentioned field is NULL rather than rubbish;
+  * a pointer (`struct http_site *s;`), which is not one of these at all;
+  * a member inside another struct, initialised by whatever initialises the
+    struct that holds it.
+
+`server_init.c` has a file-scope array of them that is filled in by copying the
+console site over each element and overriding three fields. That is the good
+shape -- a field added next year arrives in every configured site for free --
+and an earlier version of this check flagged it, which is how the rule came to
+be about **storage duration** rather than about the presence of an `=`.
 
 This is narrow on purpose. It is not a general rule about uninitialised
 variables -- the compiler has warnings for that and they do not fire on a
@@ -49,8 +63,10 @@ ROOTS = ("server",)
 
 # `struct http_site name;` -- with any leading storage class and no `=`.
 # A `*` before the name makes it a pointer, which is fine.
+# An *indented* declaration -- so, inside a function -- that is not `static`.
+# See the header: at file scope, or `static`, the language zeroes it.
 DECL = re.compile(
-    r"^\s*(?:static\s+|const\s+|register\s+)*"
+    r"^[ \t]+(?:const\s+|register\s+)*"
     r"struct\s+http_site\s+(?!\*)([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*;"
 )
 
@@ -92,16 +108,16 @@ def main():
                 path = os.path.join(where, name)
                 for number, which, text in offenders(path):
                     shown = os.path.relpath(path, here).replace(os.sep, "/")
-                    print("%s:%d: `%s` is declared and then assigned field by "
-                          "field" % (shown, number, which))
+                    print("%s:%d: `%s` is on the stack with no initializer"
+                          % (shown, number, which))
                     print("    %s" % text.strip())
                     print("    every field added to `struct http_site` after "
-                          "this line is left uninitialised -- see VF-029")
+                          "this line holds whatever the stack did -- see VF-029")
                     bad += 1
 
     if bad:
         print()
-        print("%d site(s) not built with a designated initializer." % bad)
+        print("%d site(s) left holding whatever the stack had." % bad)
         return 1
     return 0
 

@@ -333,6 +333,49 @@ simply not the machine that has it.
 
 ---
 
+## Open, and yours: a file can be created and never changed
+
+**New with server 0.25.0, and it is the sharpest one this seat has.**
+
+Nothing in user mode can replace or remove a file. `SYS_CREATE` writes one
+whole and refuses a name that exists; there is no unlink, no rename, no
+truncate. The only door onto an existing file is `OPEN_WRITE | OPEN_CREATE`,
+which succeeds on a file that already exists -- the opposite of what its own
+comment says, which is why nothing here is built on it. VF-027 has that
+measurement; this is what it now costs.
+
+**What it costs.** This role reads `/System/server.conf` at boot: the machine's
+name, its port, its resolver, its clock, and its virtual hosts. It is the first
+piece of this role that is configuration rather than a build, which is what
+`docs/ROLES.md` says a role is supposed to be.
+
+And the machine cannot edit that file. The server writes a commented template
+when a volume has none -- so the file exists -- and then nothing on this system
+can change it: not the console, not an endpoint, not a text editor that does
+not exist yet. **A configuration that can be written once and never corrected
+is not a configuration.**
+
+It also means the file cannot be placed from outside, so verifying two virtual
+hosts on the machine needed the bytes embedded in a build. That worked and it
+is not a thing anybody should have to do twice. VF-030.
+
+**What would fix it**, smallest first, and the first is the one this role would
+use tomorrow:
+
+- **`SYS_CREATE` with a replace flag.** ReconFS already writes a whole file in
+  one transaction, so replacing one is that same operation onto an existing
+  name -- and whole-file replacement is exactly what a configuration file
+  wants. No new call, one flag, honestly documented.
+- **`SYS_UNLINK` plus a rename**, which is how every other system does an
+  atomic replace.
+- **`OPEN_REPLACE` and `OPEN_CREATE` doing what their comments say.** Fixes a
+  documented contradiction as well, but leaves a writer needing a truncate that
+  does not exist.
+
+Full detail in `docs/KERNEL-WANTS.md` on this branch.
+
+---
+
 ## One for everybody: a struct that grows, filled in field by field
 
 Not a request, and nothing here is blocked on it. It cost this seat a version
@@ -360,8 +403,8 @@ refuses the old shape and runs with the suites. VF-029.
 
 ## Status of this branch
 
-**server 0.24.1**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the two socket fixes above. **826 checks across nineteen suites**, green. Both
+**server 0.25.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the two socket fixes above. **985 checks across twenty suites**, green. Both
 roles build.
 
 `origin/kernel` has moved on to e01d423 since that merge and this branch has
@@ -370,12 +413,14 @@ merge in either direction has to deal with them. They are four lines and eight
 lines and neither touches a signature.
 
 What runs on the machine: a web server holding several connections at once,
-with name-based virtual hosts and writes behind a boot token; a DNS resolver
+with name-based virtual hosts read from a configuration file and writes behind
+a boot token; a DNS resolver
 answering with real addresses; an NTP client measuring this machine's clock
 against `time.cloudflare.com`, which it resolves itself; and a supervisor
 holding two services.
 
-What this branch waits on, in the order it would use them: `connect` reporting a
-completed handshake (discovery, reverse proxy), a peer address (access control,
-log attribution), an unconnected datagram (DHCP, a DNS *server*), and a way to
-start a program (CGI, session broker).
+What this branch waits on, in the order it would use them: **a way to replace a
+file** (configuring this machine at all, and the newest of these), `connect`
+reporting a completed handshake (discovery, reverse proxy), a peer address
+(access control, log attribution), an unconnected datagram (DHCP, a DNS
+*server*), and a way to start a program (CGI, session broker).

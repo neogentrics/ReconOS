@@ -1127,6 +1127,21 @@ add_executable(recon_server_logfile_tests
 
 add_test(NAME server_logfile COMMAND recon_server_logfile_tests)
 
+# Reading a configuration, and the files that must not be believed.
+#
+# Pure: bytes in, a `struct config` or a refusal out. `server_init.c` reads
+# the file, because it is the only thing here that can, and hands over the
+# bytes -- so every case in the suite is a string literal.
+#
+# Most of them are files that must be **refused**. A configuration parser that
+# ignores a line it does not understand produces a machine running something
+# nobody wrote, and the person who wrote the file has no way to find out.
+add_executable(recon_server_config_tests
+    server/config.c
+    server/tests/test_config.c)
+
+add_test(NAME server_config COMMAND recon_server_config_tests)
+
 # Three answers, and the two ways of confusing them.
 #
 # KF-244 made `connect` say `SYS_OK`, `SYS_EAGAIN` or `SYS_EIO` -- established,

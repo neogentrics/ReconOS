@@ -58,6 +58,7 @@
 #include "../service.h"
 #include "../log.h"
 #include "../logfile.h"
+#include "../config.h"
 
 /* Return codes, in the workstation's numbering so that a reader of one file
  * recognises them in the other. The server's own start at 70. */
@@ -1363,6 +1364,324 @@ static const struct http_site SITE = {
 	.allow_ctx = &GUARD
 };
 
+
+/* --- what the configuration file adds --------------------------------------
+ *
+ * See `config.h`. A configured site serves files under a name; the console is
+ * the site with no name and stays **last**, so it answers to anything nothing
+ * else claimed -- which is what this server did before any of this existed.
+ *
+ * Three parallel arrays rather than one array of a bigger struct, because each
+ * of the three is a different library's shape: `http_files` is what `files.c`
+ * takes, `http_route` is what the dispatcher walks, and `http_site` is what the
+ * server is handed. Bundling them would mean a structure whose only reason to
+ * exist is that three things have the same count.
+ */
+static struct http_files CONFIGURED_FILES[CONFIG_SITES_MAX];
+static struct http_route CONFIGURED_ROUTES[CONFIG_SITES_MAX];
+static struct http_site  CONFIGURED_SITES[CONFIG_SITES_MAX];
+
+/* The names, kept here because `struct config` is a local in `main` and the
+ * sites outlive it -- a site pointing at a name on a dead stack is VF-029
+ * wearing a different hat. */
+static char CONFIGURED_HOSTS[CONFIG_SITES_MAX][CONFIG_VALUE_MAX];
+static char CONFIGURED_ROOTS[CONFIG_SITES_MAX][CONFIG_VALUE_MAX];
+static char CONFIGURED_INDEX[CONFIG_SITES_MAX][CONFIG_VALUE_MAX];
+
+/*
+ * The head of the chain the server is given.
+ *
+ * `&SITE` until a configuration adds sites in front of it. Everything that
+ * hands a site to `http_serve_once` takes this rather than `&SITE`, so a
+ * machine with no configuration file is byte-for-byte what it was.
+ */
+static const struct http_site *CHAIN = &SITE;
+
+static void copy_into(char *out, size_t room, const char *from)
+{
+	size_t i;
+
+	for (i = 0; i + 1 < room && from[i]; i++)
+		out[i] = from[i];
+	out[i] = '\0';
+}
+
+/*
+ * Build the chain from a parsed configuration.
+ *
+ * Walked backwards so that the order in the file is the order in the chain,
+ * and the chain is what decides which site answers first. A file that lists
+ * `shop.example` before `docs.example` means exactly that.
+ *
+ * Each site **starts as a copy of the console site** rather than being filled
+ * in from nothing. Everything the server needs and nobody thinks about -- the
+ * byte counter, the access log, `idle`, the clock, the guard -- comes along,
+ * and a field added to `struct http_site` next year arrives here for free. A
+ * site assembled field by field is the fault this file already paid for once.
+ */
+static void chain_sites(const struct config *c)
+{
+	const struct http_site *next = &SITE;
+	size_t i = c->site_count;
+
+	while (i > 0) {
+		struct http_site *site = &CONFIGURED_SITES[i - 1];
+
+		i--;
+		copy_into(CONFIGURED_HOSTS[i], CONFIG_VALUE_MAX, c->sites[i].host);
+		copy_into(CONFIGURED_ROOTS[i], CONFIG_VALUE_MAX, c->sites[i].root);
+		copy_into(CONFIGURED_INDEX[i], CONFIG_VALUE_MAX, c->sites[i].index);
+
+		CONFIGURED_FILES[i].root = CONFIGURED_ROOTS[i];
+		CONFIGURED_FILES[i].index = CONFIGURED_INDEX[i];
+
+		/*
+		 * One route, and it is a catch-all: the empty prefix, which
+		 * `serve.h` says matches every path. `"/"` would match the root
+		 * and nothing else, which is a site that serves its index and
+		 * 404s everything beside it -- the wrong one of the two is
+		 * silent, so this comment is here rather than in a commit.
+		 */
+		CONFIGURED_ROUTES[i].method = "GET";
+		CONFIGURED_ROUTES[i].prefix = "";
+		CONFIGURED_ROUTES[i].exact = 0;
+		CONFIGURED_ROUTES[i].handler = 0;
+		CONFIGURED_ROUTES[i].stream = http_files_handler;
+		CONFIGURED_ROUTES[i].ctx = &CONFIGURED_FILES[i];
+		CONFIGURED_ROUTES[i].guarded = 0;
+
+		*site = SITE;
+		site->host = CONFIGURED_HOSTS[i];
+		site->next = next;
+		site->routes = &CONFIGURED_ROUTES[i];
+		site->route_count = 1;
+		site->ctx = 0;
+
+		/*
+		 * No guard on a configured site. Nothing here is guarded --
+		 * there is one route and it reads files -- and a policy left
+		 * attached to a site that cannot use it is a policy somebody
+		 * will one day believe is doing something.
+		 */
+		site->allow = 0;
+		site->allow_ctx = 0;
+
+		next = site;
+	}
+	CHAIN = next;
+}
+
+
+/* --- the configuration file -------------------------------------------------
+ *
+ * Read once, at boot, by the only part of this system that can read anything.
+ * `config.c` decides what the bytes mean and this decides what to do about it.
+ *
+ * **It always says what it did.** Three outcomes -- no file, a refused file, a
+ * file applied -- and a console that reports only the interesting one leaves
+ * the ordinary case indistinguishable from a step that did not run. VF-008 is
+ * this project's entry about two builds that reported success and produced
+ * nothing.
+ */
+
+/*
+ * What the web server listens on. 80 unless the configuration says otherwise.
+ *
+ * A value rather than a literal in `web_start`, because the supervisor may
+ * restart that service and a port read from a file at boot must survive the
+ * restart -- re-reading the file there would mean a machine whose listening
+ * port changes without a reboot, which is a different thing from what the
+ * file says.
+ */
+static unsigned WEB_PORT = 80;
+
+/*
+ * Which time server the clock service asks.
+ *
+ * The default, and only the default: `clock` in the configuration file
+ * replaces it. A buffer rather than a macro since 0.25.0, which is why the
+ * clock service's console lines carry `%s` where they used to concatenate a
+ * literal. Why this particular name, and why a name rather than an address, is
+ * in the comment above `clock_start`.
+ */
+#define CLOCK_SERVER_DEFAULT "time.cloudflare.com"
+
+static char CLOCK_SERVER_NAME[CONFIG_VALUE_MAX] = CLOCK_SERVER_DEFAULT;
+
+/* A dotted quad this has already been told is one. Returns the address. */
+static unsigned int address_of(const char *text)
+{
+	unsigned int out = 0;
+	unsigned int part = 0;
+	size_t i;
+
+	for (i = 0; text[i]; i++) {
+		if (text[i] == '.') {
+			out = (out << 8) | (part & 0xFF);
+			part = 0;
+			continue;
+		}
+		part = part * 10 + (unsigned int)(text[i] - '0');
+	}
+	return (out << 8) | (part & 0xFF);
+}
+
+static void configure(void)
+{
+	/*
+	 * Static, not automatic. `struct config` is over four kilobytes with
+	 * eight sites in it and the text buffer is eight more; this program's
+	 * stack is not the place for either, and a stack overflow at boot
+	 * looks like a machine that does not start rather than like a
+	 * configuration that is too big.
+	 */
+	static char text[CONFIG_FILE_MAX + 2];
+	static struct config CONF;
+	char line[CONFIG_VALUE_MAX + 128];
+	long got;
+	int rc;
+	size_t i;
+
+	got = read_whole(CONFIG_PATH, text, sizeof(text));
+	if (got < 0) {
+		/*
+		 * No file. Leave one.
+		 *
+		 * **A machine that reads a configuration file and has no way to
+		 * be given one is a feature with no door into it.** Nothing in
+		 * user mode here can put a file on this volume from outside,
+		 * and nothing can replace or remove one either -- `SYS_CREATE`
+		 * writes whole and refuses to overwrite, and there is no call
+		 * that deletes. So the server writes the template itself, once,
+		 * and says where it is.
+		 *
+		 * Every line of it is a comment, which is why this is safe to
+		 * do unasked: the machine that writes it is configured exactly
+		 * as it was, and the suite checks that property rather than
+		 * trusting it.
+		 *
+		 * What this does **not** solve is editing it afterwards. That
+		 * one is in `docs/KERNEL-WANTS.md` and in `docs/SIGNALS.md`.
+		 */
+		const char *tmpl;
+		size_t tmpl_len = 0;
+		int wrote;
+
+		tmpl = config_template(&tmpl_len);
+		wrote = put_if_absent(CONFIG_PATH, sizeof(CONFIG_PATH) - 1,
+		                      tmpl, tmpl_len);
+		if (wrote == 2)
+			say("  the configuration: none found, wrote a template"
+			    " to " CONFIG_PATH "\n");
+		else if (wrote < 0)
+			say("  the configuration: none, and no volume to keep"
+			    " one on\n");
+		else
+			say("  the configuration: " CONFIG_PATH
+			    " is there but could not be read\n");
+		say("  the configuration: serving the built-in console only\n");
+		return;
+	}
+
+	/*
+	 * `read_whole` stops when the buffer is full, so a file larger than
+	 * this would arrive **truncated and parse perfectly** -- the worst
+	 * shape a bound can have. The buffer is one byte longer than the limit
+	 * so that "too long" is something this can see rather than infer.
+	 */
+	if ((size_t)got > CONFIG_FILE_MAX) {
+		snprintf(line, sizeof(line),
+		         "  the configuration: REFUSED -- %s\n",
+		         config_reason(CONFIG_EFILE_LONG));
+		say(line);
+		say("  the configuration: nothing applied,"
+		    " serving the built-in console only\n");
+		return;
+	}
+
+	rc = config_parse(text, (size_t)got, &CONF);
+	if (rc != CONFIG_OK) {
+		snprintf(line, sizeof(line),
+		         "  the configuration: REFUSED at line %u -- %s (%s)\n",
+		         CONF.line, config_reason(rc), CONF.found);
+		say(line);
+		say("  the configuration: nothing applied,"
+		    " serving the built-in console only\n");
+		return;
+	}
+
+	/*
+	 * The machine's name is checked here rather than in `config.c`,
+	 * against `server_name_split` -- **the same validator `POST /api/name`
+	 * uses**. `config.c` knows what a host name looks like and nothing
+	 * about this system's naming scheme, and a file that could set a name
+	 * the API would refuse is two rules for one field.
+	 *
+	 * And it is checked before anything is applied, so this stays a
+	 * whole-file decision.
+	 */
+	if (CONF.has_name) {
+		struct name_family family;
+		int split = server_name_split(CONF.name, &family);
+
+		if (split != SERVER_OK && split != SERVER_EUNNUMBERED) {
+			snprintf(line, sizeof(line),
+			         "  the configuration: REFUSED at line %u --"
+			         " `%s` is not a machine name\n",
+			         CONF.line, CONF.name);
+			say(line);
+			say("  the configuration: nothing applied,"
+			    " serving the built-in console only\n");
+			return;
+		}
+	}
+
+	/* --- from here everything is applied, because all of it parsed ------ */
+
+	if (CONF.has_name) {
+		snprintf(FACTS.name, sizeof(FACTS.name), "%s", CONF.name);
+		snprintf(line, sizeof(line),
+		         "  the configuration: name %s\n", FACTS.name);
+		say(line);
+	}
+	if (CONF.has_port) {
+		WEB_PORT = CONF.port;
+		snprintf(line, sizeof(line),
+		         "  the configuration: listening on :%u\n", WEB_PORT);
+		say(line);
+	}
+	if (CONF.has_resolver) {
+		RESOLVER.server = address_of(CONF.resolver);
+		snprintf(line, sizeof(line),
+		         "  the configuration: resolver %s\n", CONF.resolver);
+		say(line);
+	}
+	if (CONF.has_clock) {
+		snprintf(CLOCK_SERVER_NAME, sizeof(CLOCK_SERVER_NAME), "%s",
+		         CONF.clock);
+		snprintf(line, sizeof(line),
+		         "  the configuration: clock %s\n", CLOCK_SERVER_NAME);
+		say(line);
+	}
+
+	if (CONF.site_count) {
+		chain_sites(&CONF);
+		for (i = 0; i < CONF.site_count; i++) {
+			snprintf(line, sizeof(line),
+			         "  the configuration: site %s from %s\n",
+			         CONFIGURED_HOSTS[i], CONFIGURED_ROOTS[i]);
+			say(line);
+		}
+		say("  the configuration: the console answers to every other"
+		    " name, as it always has\n");
+	}
+
+	if (!CONF.has_name && !CONF.has_port && !CONF.has_resolver &&
+	    !CONF.has_clock && !CONF.site_count)
+		say("  the configuration: " CONFIG_PATH
+		    " read, and it says nothing\n");
+}
+
 /* --- the web server, as a service ------------------------------------------ */
 
 struct web_service {
@@ -1376,7 +1695,7 @@ static int web_start(void *ctx)
 {
 	struct web_service *w = (struct web_service *)ctx;
 
-	w->listener = http_listen(80);
+	w->listener = http_listen(WEB_PORT);
 	if (w->listener < 0)
 		return -1;
 	return SERVICE_OK;
@@ -1429,7 +1748,12 @@ static void web_stop(void *ctx)
 }
 
 static const struct service WEB_SERVICE = {
-	"web", "serves the console and the volume on port 80",
+	/* The description does not name the port. It is a constant in a
+	 * `struct service` and the port is not one any more -- and a
+	 * description that says 80 on a machine listening on 8080 is worse
+	 * than one that does not mention it. `GET /api/services` shows this
+	 * text; the port is on the line beside it. */
+	"web", "serves the console and the volume over HTTP",
 	web_start, web_poll, web_stop, &WEB
 };
 
@@ -1641,7 +1965,8 @@ static struct ntp_client CLOCK_CHECK;
  * nowhere, so the first version of this pointed at the gateway and got
  * silence, which is the correct reply to a question nobody is listening for.
  */
-#define CLOCK_SERVER_NAME "time.cloudflare.com"
+/* The name lives beside `WEB_PORT`, with the other things a file can change.
+ * See the block above `configure`. */
 
 struct clock_service {
 	unsigned long last_ms;
@@ -1699,8 +2024,8 @@ static int clock_poll(void *ctx)
 		rc = dns_resolve(&RESOLVER, CLOCK_SERVER_NAME, id, &found);
 		if (rc != DNS_OK || found.count == 0) {
 			snprintf(line, sizeof(line),
-			         "  the clock: could not find "
-			         CLOCK_SERVER_NAME " (%d)\n", rc);
+			         "  the clock: could not find %s (%d)\n",
+			         CLOCK_SERVER_NAME, rc);
 			say(line);
 			return SERVICE_OK;
 		}
@@ -1708,10 +2033,10 @@ static int clock_poll(void *ctx)
 		s->address = found.addrs[0];
 		CLOCK_CHECK.server = s->address;
 		snprintf(line, sizeof(line),
-		         "  the clock: asking %u.%u.%u.%u (" CLOCK_SERVER_NAME
-		         ")\n",
+		         "  the clock: asking %u.%u.%u.%u (%s)\n",
 		         (s->address >> 24) & 0xFF, (s->address >> 16) & 0xFF,
-		         (s->address >> 8) & 0xFF, s->address & 0xFF);
+		         (s->address >> 8) & 0xFF, s->address & 0xFF,
+		         CLOCK_SERVER_NAME);
 		say(line);
 	}
 
@@ -2071,9 +2396,14 @@ static void draw(const struct recon_canvas *canvas,
                  struct recon_first_boot *facts, char *served_line,
                  size_t room)
 {
+	/* The port comes from `WEB_PORT` rather than being written here. A
+	 * screen that says 80 on a machine listening on 8080 is the same class
+	 * of fault as a document that says 736 checks -- a second copy of a
+	 * fact, drifting quietly. */
 	snprintf(served_line, room,
-	         "The web server is listening on port 80. %lu served, %lu bytes out.",
-	         FACTS.served, FACTS.bytes_out);
+	         "The web server is listening on port %u. %lu served,"
+	         " %lu bytes out.",
+	         WEB_PORT, FACTS.served, FACTS.bytes_out);
 	recon_screen_draw(canvas, facts);
 }
 
@@ -2175,6 +2505,18 @@ int main(void)
 	RESOLVER.timeout_ms = 3000;
 
 	/*
+	 * --- what the file says ----------------------------------------------
+	 *
+	 * After the defaults above, because it replaces them, and before the
+	 * services below, because they read what it left. Everything it can
+	 * change has already been set to something this machine can run on, so
+	 * a refused file leaves a working server rather than an unconfigured
+	 * one. See `config.h` on why that is the one place here that does not
+	 * refuse outright.
+	 */
+	configure();
+
+	/*
 	 * --- the secret, made once ------------------------------------------
 	 *
 	 * Printed on the serial console, because that is the whole of what it
@@ -2212,7 +2554,7 @@ int main(void)
 	/* --- the services ------------------------------------------------------ */
 
 	WEB.listener = -1;
-	WEB.site = &SITE;
+	WEB.site = CHAIN;
 
 	/* The second service. The supervisor was built for more than one and
 	 * has never held more than one; adding this changed nothing in the
@@ -2244,13 +2586,16 @@ int main(void)
 	if (started == 0) {
 		/* Said plainly rather than drawn over. A server role whose
 		 * server did not start is the one fact worth stopping for. */
-		say("  the web server: could not listen on :80\n");
+		snprintf(line, sizeof(line),
+		         "  the web server: could not listen on :%u\n",
+		         WEB_PORT);
+		say(line);
 		snprintf(address_line, sizeof(address_line),
-		         "The web server could not open port 80.");
+		         "The web server could not open port %u.", WEB_PORT);
 	} else {
 		snprintf(address_line, sizeof(address_line),
-		         "Serving on port 80. / and /api/status, and files from "
-		         WEB_ROOT ".");
+		         "Serving on port %u. / and /api/status, and files from "
+		         WEB_ROOT ".", WEB_PORT);
 	}
 
 	/* --- the first screen -------------------------------------------------- */
@@ -2280,8 +2625,8 @@ int main(void)
 	draw(&canvas, &facts, served_line, sizeof(served_line));
 
 	snprintf(line, sizeof(line),
-	         "  the web server: listening on :80 -- %lu requests served,"
-	         " %lu bytes out\n", FACTS.served, FACTS.bytes_out);
+	         "  the web server: listening on :%u -- %lu requests served,"
+	         " %lu bytes out\n", WEB_PORT, FACTS.served, FACTS.bytes_out);
 	say(line);
 
 	if (listener < 0)
