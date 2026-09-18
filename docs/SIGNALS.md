@@ -935,3 +935,83 @@ cheaply than a boot would have.
 
 69 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean.
+
+---
+
+### 17 September 2026 (tenth) — bluetooth → kernel
+
+**The descriptor parser has now been run against a real device, and it
+agrees.** Everything before this was tested against fixtures written by the
+same hand that wrote the parser — which means a wrong idea of the format would
+have been spelled the same way in both, and every test would have agreed with
+the mistake. That was the largest untested assumption on this branch.
+
+87 bytes were read off `3554:f54f` interface 2 — the mouse this branch is being
+written on — through the same hub IOCTL that produced the Bluetooth adapter's
+configuration descriptor earlier. Its own HID descriptor declares 87 bytes and
+87 arrived, which is the first agreement before any parsing.
+
+It is a much harder case than anything invented here: **five** buttons rather
+than three, **sixteen-bit** axes where every synthetic test used eight,
+three-byte items, a Physical collection that closes and reopens twice so the
+depth goes down as well as up, and an AC Pan usage on the Consumer page that a
+mouse layout must ignore rather than take for an axis.
+
+Hand-decoded to 5 + 3 + 32 + 8 + 8 = 56 bits, ten fields, seven bytes. **The
+parser produced exactly that, first run**, along with buttons at bit 0 count 5,
+X at bit 8 size 16, Y at bit 24 size 16, wheel at bit 40, and a report
+decoding to x=300, y=-300, wheel=-1.
+
+#### And a fourth opinion, from Microsoft
+
+Windows' own HID parser was asked about the same device, as a check that does
+not share an author with either the parser or the hand decode:
+
+| | Windows | here |
+|---|---|---|
+| usage page / usage | `0x01` / `0x02` | Generic Desktop / Mouse |
+| input value caps | 4 | X, Y, wheel, pan |
+| input button caps | 1 | the 1–5 range |
+| link collection nodes | 4 | 1 Application + 3 Physical |
+| input report bytes | **8** | **7** |
+
+The first four agree exactly. **The last differs by one and should not be
+waved away**: Windows' `InputReportByteLength` includes a leading report-ID
+byte even when the device declares no report IDs, in which case it is zero.
+The arithmetic settles it rather than the convention — 56 bits of declared
+fields is seven bytes, and there is no way to find an eighth in that
+descriptor. 8 is 1 + 7.
+
+#### Why this was worth doing
+
+Eight faults on this branch came from deliberately breaking working code. One
+came from reading somebody else's header. This is the third kind: running
+against something nobody here authored. It found nothing wrong, which is a
+result — the parser's model of the format is now corroborated by the device,
+by hand arithmetic, and by Microsoft, rather than only by its own author.
+
+The real descriptor is a permanent fixture in the self-test now, so it keeps
+checking.
+
+69 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
+
+#### A postscript, about the check rather than the code
+
+One run during this work reported `FAIL : 0` and `pass : 4`.
+
+Nothing had changed since the previous run, which read 69. The boot had been
+cut short by a 25-second `timeout` while two builds were running on the same
+machine — it never reached most of the self-tests.
+
+**The number that mattered was the one that looked fine.** `FAIL : 0` is true
+of a boot that ran four tests and true of a boot that ran none, and a harness
+checking only that is green on a kernel that never started. The pass count is
+what caught it, and only because it was printed next to the failure count
+rather than instead of it.
+
+This is the display test that passed against a black screen, in the
+verification script instead of the kernel. Recorded because the fix is not
+"use a longer timeout" — it is that **a check for the absence of failures is
+not a check that the work ran.** Any harness on this branch that reports green
+should be asserting an expected count, not a zero.

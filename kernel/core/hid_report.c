@@ -616,6 +616,44 @@ static const u8 boot_mouse[] = {
 	0xC0			/* End Collection                 */
 };
 
+/* A descriptor read off an actual mouse.
+ *
+ * **Every other fixture in this file was written by the same hand that wrote
+ * the parser**, which means a wrong idea of the format would be spelled the
+ * same way in both and every test would agree with the mistake. This one was
+ * not: it is 87 bytes pulled out of a real device over
+ * `IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION` on 17 September 2026 --
+ * `3554:f54f`, interface 2, the mouse this branch was written on. Its own HID
+ * descriptor declares 87 bytes and 87 arrived, which is the first check.
+ *
+ * It is a much harder case than anything invented here, and that is the point:
+ *
+ *   - **five** buttons, not three;
+ *   - **sixteen-bit** axes, where every synthetic test used eight;
+ *   - three-byte items (`16 00 80`, `26 ff 7f`, `0a 38 02`), which is the
+ *     size-index rule the walk can get wrong;
+ *   - a Physical collection that closes and **reopens twice**, so the depth
+ *     goes up and down rather than only up;
+ *   - a usage on the Consumer page, which a mouse layout must ignore rather
+ *     than mistake for an axis.
+ *
+ * Hand-decoded to 5 + 3 + 32 + 8 + 8 = 56 bits, ten fields, seven bytes. The
+ * parser is checked against that arithmetic below.
+ */
+static const u8 real_mouse[] = {
+	0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01,
+	0xA1, 0x00, 0x05, 0x09, 0x19, 0x01, 0x29, 0x05,
+	0x15, 0x00, 0x25, 0x01, 0x95, 0x05, 0x75, 0x01,
+	0x81, 0x02, 0x95, 0x01, 0x75, 0x03, 0x81, 0x01,
+	0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x16, 0x00,
+	0x80, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x02,
+	0x81, 0x06, 0xC0, 0xA1, 0x00, 0x05, 0x01, 0x09,
+	0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95,
+	0x01, 0x81, 0x06, 0xC0, 0xA1, 0x00, 0x05, 0x0C,
+	0x0A, 0x38, 0x02, 0x95, 0x01, 0x75, 0x08, 0x15,
+	0x81, 0x25, 0x7F, 0x81, 0x06, 0xC0, 0xC0
+};
+
 bool hid_report_self_test(void)
 {
 	/* Static rather than automatic: the struct now carries a 32-field map
@@ -1425,6 +1463,154 @@ bool hid_report_self_test(void)
 			      "field fits in three, so only the report "
 			      "length catches this\n");
 			ok = false;
+		}
+	}
+
+	/* --- a descriptor nobody here wrote ------------------------------
+	 *
+	 * The one fixture in this file that can disagree with the parser's
+	 * author. See the comment above `real_mouse`.
+	 */
+	if (!hid_report_parse(real_mouse, sizeof(real_mouse), &info)) {
+		kputs("  hidrep: the real mouse's descriptor was refused\n");
+		ok = false;
+	} else if (!info.fields_usable) {
+		kprintf("  hidrep: the real mouse's field map was withheld: "
+			"%s\n", info.fields_unusable ? info.fields_unusable
+						     : "no reason given");
+		ok = false;
+	} else {
+		struct hid_mouse_layout m;
+
+		if (info.uses_report_id) {
+			kputs("  hidrep: the real mouse was read as using "
+			      "report ids and its descriptor has none\n");
+			ok = false;
+		}
+
+		/* 5 buttons + 3 padding + two 16-bit axes + wheel + pan. */
+		if (info.input_bits != 56 || info.input_bytes != 7) {
+			kprintf("  hidrep: the real mouse's report came to %u "
+				"bits (%u bytes), hand-decoded as 56 and 7\n",
+				info.input_bits, info.input_bytes);
+			ok = false;
+		}
+
+		if (info.field_count != 10) {
+			kprintf("  hidrep: %u fields, hand-decoded as 10 -- "
+				"five buttons, one padding, two axes, a wheel "
+				"and a pan\n", info.field_count);
+			ok = false;
+		}
+
+		/* Depth goes up and down and up again here, which a walker
+		 * that only counts opens gets wrong. */
+		if (info.collection_depth_max != 2) {
+			kprintf("  hidrep: collections nested %u deep, "
+				"expected 2 -- three Physical collections "
+				"open and close inside one Application\n",
+				info.collection_depth_max);
+			ok = false;
+		}
+
+		if (!hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: a real mouse's descriptor did not "
+			      "yield a mouse layout\n");
+			ok = false;
+		} else {
+			if (m.buttons_offset != 0 || m.buttons_count != 5) {
+				kprintf("  hidrep: buttons at bit %u count "
+					"%u, expected bit 0 count 5\n",
+					m.buttons_offset, m.buttons_count);
+				ok = false;
+			}
+
+			/* **Sixteen bits, not eight.** Every synthetic test
+			 * here used an eight-bit axis, so this is the first
+			 * one that would catch a size assumed rather than
+			 * read. */
+			if (m.x_offset != 8 || m.x_size != 16) {
+				kprintf("  hidrep: X at bit %u size %u, "
+					"expected bit 8 size 16 -- this mouse "
+					"reports sixteen-bit axes\n",
+					m.x_offset, m.x_size);
+				ok = false;
+			}
+
+			if (m.y_offset != 24 || m.y_size != 16) {
+				kprintf("  hidrep: Y at bit %u size %u, "
+					"expected bit 24 size 16\n",
+					m.y_offset, m.y_size);
+				ok = false;
+			}
+
+			if (!m.have_wheel || m.wheel_offset != 40 ||
+			    m.wheel_size != 8) {
+				kprintf("  hidrep: wheel present=%u at bit %u "
+					"size %u, expected present at bit 40 "
+					"size 8\n", (unsigned)m.have_wheel,
+					m.wheel_offset, m.wheel_size);
+				ok = false;
+			}
+
+			if (m.report_bytes != 7) {
+				kprintf("  hidrep: the real mouse's report is "
+					"%u bytes, expected 7\n",
+					m.report_bytes);
+				ok = false;
+			}
+
+			/* --- and decode a report through it ---
+			 *
+			 * Buttons 1 and 3 down, X = +300, Y = -300, wheel -1.
+			 * X and Y are little-endian sixteen-bit values, which
+			 * is the first time anything here decodes a field
+			 * wider than a byte from real geometry.
+			 */
+			{
+				struct hid_mouse_state s;
+				static const u8 rep[7] = {
+					0x05,		/* buttons 1 and 3 */
+					0x2C, 0x01,	/* x = +300 */
+					0xD4, 0xFE,	/* y = -300 */
+					0xFF,		/* wheel = -1 */
+					0x00		/* pan = 0 */
+				};
+
+				if (!hid_mouse_decode(&m, rep, 7, &s)) {
+					kputs("  hidrep: a seven-byte report "
+					      "was refused by a seven-byte "
+					      "layout\n");
+					ok = false;
+				} else if (s.buttons != 0x05 || s.x != 300 ||
+					   s.y != -300 || s.wheel != -1) {
+					kprintf("  hidrep: the real mouse's "
+						"report decoded as buttons "
+						"%02x x=%d y=%d wheel=%d, "
+						"expected 05, 300, -300, "
+						"-1\n", s.buttons, s.x, s.y,
+						s.wheel);
+					ok = false;
+				}
+			}
+		}
+
+		/* The Consumer-page pan must not have been taken for an
+		 * axis. It is the last field, and a layout that grabbed it
+		 * would have put something at bit 48. */
+		{
+			unsigned i, consumer = 0;
+
+			for (i = 0; i < info.field_count; i++)
+				if (info.fields[i].usage_page == 0x0C)
+					consumer++;
+
+			if (consumer != 1) {
+				kprintf("  hidrep: %u fields on the Consumer "
+					"page, expected 1 (AC Pan)\n",
+					consumer);
+				ok = false;
+			}
 		}
 	}
 
