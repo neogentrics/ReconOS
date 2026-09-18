@@ -253,7 +253,24 @@
 #
 # Neither could have been seen with one driver behind the interface, which is
 # the point the whole branch has been making.
-VERSION := 0.3.7
+#
+# **0.4.0 on 17 September 2026: the kernel session's, for the log port.**
+#
+# Their reason is *"a capability rather than a fix, by Joshua's rule"*, and it
+# holds: `logport.c` sends the kernel log to a UDP collector, which is not a
+# thing this kernel could do at 0.3.x under any name. The merged tree takes the
+# later of the two numbers, as it did at 0.2.38/0.2.39.
+#
+# **It is written here because it was written in a commit message**, which is
+# the one place the paragraph at the top of this block rules out -- *a rule kept
+# anywhere else is a rule read after the fact*, and a commit message is read
+# later than a document, not sooner. The decision is theirs and stands; only its
+# address was wrong.
+#
+# The 0.3.7 above is not superseded by it. Those seven patches are the network
+# track's and each one names an entry; this minor is the log port's. Both
+# numbers mean what their paragraphs say.
+VERSION := 0.4.0
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

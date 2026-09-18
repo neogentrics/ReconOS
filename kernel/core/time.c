@@ -173,12 +173,111 @@ bool time_capture_firmware_clock(void)
 	return true;
 }
 
+/* --- the wall clock, carried on the monotonic counter (KF-251) -------------
+ *
+ * `arch_wall_ns` on x86_64 reads the CMOS RTC, whose finest field is
+ * **seconds**. So it answers a whole number of seconds multiplied by a billion,
+ * and `SYS_WALLTIME` -- which is declared in nanoseconds -- moved once a
+ * second for as long as it existed. The server session found it building an
+ * NTP client: both of a round trip's local timestamps land in the same second,
+ * the delay computes to zero, and `round trip 0 ms` to a server across the
+ * internet is quantisation wearing the clothes of a measurement.
+ *
+ * **The fix was already in this function.** The branch below it -- for a
+ * machine with no CMOS at all -- latches what the firmware said against the
+ * monotonic counter and adds the difference, which has exactly the resolution
+ * the interface promises. The coarse clock was preferred over the fine one
+ * whenever a coarse clock was present. That is the whole fault.
+ *
+ * So the RTC stops being the clock and becomes the thing that *sets* it.
+ */
+static u64 wall_base_ns;	/* what the time was at the latch */
+static u64 wall_base_at;	/* the monotonic counter at the latch */
+static u64 wall_seen;		/* the last whole second the RTC showed */
+static u64 wall_probed_at;	/* when the RTC was last consulted */
+static u64 wall_fixups;		/* how many observations improved the phase */
+
+/* How often the RTC is worth asking.
+ *
+ * **Not on every call, and that matters for the exact use that found this.**
+ * `arch_wall_ns` spins while the RTC's update-in-progress bit is set -- up to
+ * two milliseconds by specification -- and then does seven port reads. A
+ * program timing a network round trip calls this twice in quick succession,
+ * and a clock that costs two milliseconds to read cannot measure anything
+ * shorter than that. Between probes the answer comes from the counter, which
+ * is a register read.
+ *
+ * A quarter of a second is short enough that the second below is caught
+ * turning promptly and long enough that the port I/O is not on any hot path. */
+#define WALL_PROBE_NS 250000000ull
+
 u64 time_wall_ns(void)
 {
-	u64 now = arch_wall_ns();
+	u64 mono = arch_monotonic_ns();
+	u64 coarse;
 
-	if (now)
-		return now;
+	/* Established, and not yet due another look: answer from the counter. */
+	if (wall_base_ns && (mono - wall_probed_at) < WALL_PROBE_NS)
+		return wall_base_ns + (mono - wall_base_at);
+
+	coarse = arch_wall_ns();
+
+	if (coarse) {
+		wall_probed_at = mono;
+
+		if (!wall_base_ns) {
+			/* The first reading. The fraction is unknown -- the RTC
+			 * says which second it is and nothing about where in it
+			 * -- so this starts up to a second *behind* and never
+			 * ahead, which is the safe direction and is corrected
+			 * below. */
+			wall_base_ns = coarse;
+			wall_base_at = mono;
+			wall_seen    = coarse;
+		} else if (coarse != wall_seen) {
+			/* **The second turned, and that instant is the one
+			 * moment the fraction is known to be zero.**
+			 *
+			 * Chasing this edge at boot would cost up to a second of
+			 * every boot. Watching for it instead costs nothing.
+			 *
+			 * **This clock is always late, never early**, and that
+			 * is what makes the rule below safe. The reading says
+			 * which second it is and nothing about where in it, so
+			 * the first latch starts behind true time by the
+			 * fraction it could not see, and adding a monotonic
+			 * delta preserves exactly that lateness. Every later
+			 * observation offers a *different* lateness -- however
+			 * long after the turn it was noticed.
+			 *
+			 * So this keeps the best estimate seen: take the new one
+			 * only when it is ahead of what is already being
+			 * reported, which is precisely when it is less late.
+			 * It converges toward the probe interval and stops. */
+			u64 running = wall_base_ns + (mono - wall_base_at);
+
+			wall_seen = coarse;
+
+			/* **Forward only**, and the comparison above is what
+			 * enforces it. A wall clock that steps backwards is a
+			 * worse fault than the one being fixed here: a duration
+			 * measured across the step comes out negative, and every
+			 * caller computing `after - before` on unsigned
+			 * nanoseconds gets a number near 2^64.
+			 *
+			 * Refusing the step rather than clamping the output
+			 * keeps this function's answer a pure function of the
+			 * counter, so it is monotonic by construction rather
+			 * than by a comparison somebody could later remove. */
+			if (coarse >= running) {
+				wall_base_ns = coarse;
+				wall_base_at = mono;
+				wall_fixups++;
+			}
+		}
+
+		return wall_base_ns + (mono - wall_base_at);
+	}
 
 	/* No clock this architecture knows how to read. The firmware told us
 	 * once, before its mappings went away, and the monotonic counter has
@@ -189,6 +288,24 @@ u64 time_wall_ns(void)
 		       (arch_monotonic_ns() - firmware_wall_at);
 
 	return 0;
+}
+
+/* How many observations of the turning second improved the phase.
+ *
+ * **Zero is a normal and correct answer, and reading it as "the branch never
+ * ran" is the mistake this comment exists to prevent** -- it was very nearly
+ * made here. The clock keeps the least-late estimate it has seen, so zero means
+ * no later observation beat the first latch, which is what happens when the
+ * first latch was already close to the turn.
+ *
+ * Measured on a boot: `arch_wall_ns` read 1,548,460 times over 1600 ms, its
+ * value changed twice, and one of the two changes improved the phase. The other
+ * was offered and correctly refused for being further from the turn than the
+ * estimate already in hand.
+ */
+u64 time_wall_fixups(void)
+{
+	return wall_fixups;
 }
 
 void time_init(void)
@@ -241,6 +358,28 @@ void time_print_summary(void)
 		kprintf("  wall clock   : %lu seconds since 1970 (day %lu)\n",
 			(u64)(wall / 1000000000ULL),
 			(u64)(wall / (86400ULL * 1000000000ULL)));
+
+		/* **What the clock's resolution actually is, measured.**
+		 *
+		 * The line above says the date and says nothing about how finely
+		 * it can be read, and that gap is the whole of KF-251: the call
+		 * behind it was declared in nanoseconds, delivered whole
+		 * seconds, and every boot printed a date that looked perfectly
+		 * correct. A resolution nobody measures is a resolution nobody
+		 * can be wrong about.
+		 *
+		 * Two reads back to back. The number is small and noisy and is
+		 * not meant to be precise -- it is meant to be *non-zero*, on
+		 * every boot, where a clock counting whole seconds would show a
+		 * flat zero almost every time. */
+		{
+			u64 a = time_wall_ns();
+			u64 b = time_wall_ns();
+
+			kprintf("  resolution   : two reads apart by %lu ns, "
+				"phase corrected %lu time(s)\n",
+				(u64)(b - a), time_wall_fixups());
+		}
 	} else {
 		kputs("  wall clock   : no source of the date on this machine\n");
 	}
@@ -266,6 +405,56 @@ bool time_self_test(void)
 		kprintf("  time: the monotonic clock did not advance (%lu then %lu)\n",
 			first, second);
 		ok = false;
+	}
+
+	/* --- and the wall clock has to have a fraction (KF-251) -------------
+	 *
+	 * This is the check that was missing, and its absence is why
+	 * `SYS_WALLTIME` shipped declaring nanoseconds and delivering seconds.
+	 * Nothing here ever looked below the decimal point, so a clock whose
+	 * low nine digits were always zero passed every test the kernel had.
+	 *
+	 * **Asserted on the fraction, not on the difference.** Two reads far
+	 * enough apart differ even with a one-second clock, eventually -- so a
+	 * test comparing two readings passes on the broken clock about as often
+	 * as the machine is slow, which is a test that measures the host. The
+	 * fraction being non-zero is a property of one reading and cannot be
+	 * satisfied by a clock that only counts seconds.
+	 *
+	 * Several reads, because a correct clock genuinely lands on a whole
+	 * second sometimes -- about one read in a billion, and rather more than
+	 * that on an emulator whose counter is coarse. One zero proves nothing;
+	 * all of them zero is the fault.
+	 */
+	{
+		u64 wall = time_wall_ns();
+
+		if (!wall) {
+			/* No clock at all is a normal answer on a machine with
+			 * neither an RTC nor UEFI, and saying so is what keeps
+			 * this from quietly measuring nothing. */
+			kputs("  time: this machine has no wall clock, so its "
+			      "resolution was not tested\n");
+		} else {
+			unsigned tries;
+			bool fraction = false;
+
+			for (tries = 0; tries < 8 && !fraction; tries++) {
+				if (time_wall_ns() % 1000000000ull)
+					fraction = true;
+
+				for (volatile unsigned i = 0; i < 50000; i++)
+					;
+			}
+
+			if (!fraction) {
+				kputs("  time: the wall clock is declared in "
+				      "nanoseconds and its low nine digits were "
+				      "zero on eight reads -- it is counting "
+				      "whole seconds\n");
+				ok = false;
+			}
+		}
 	}
 
 	/* And the tick has to fire. Waiting on the *clock* rather than on a

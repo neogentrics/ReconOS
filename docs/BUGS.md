@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-15, and each entry says why. They are listed because a register that only
+18, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -213,8 +213,11 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
+- **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
+- **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
+- **KF-257** — The handshake completes on the wire and `connect` never hears about it
+- **KF-258** — A thread that sleeps once wakes; a thread that sleeps twice does not
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
-- **KF-251** — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
 
 ---
 
@@ -7907,6 +7910,36 @@ lands on any screen. Verified by photograph at 800x600, 1280x800 and 1920x1200.
 
 ### KF-216 — The loader drew on a fifth of the screen the machine had
 
+> **The panel is not 1920x1080, measured 17 September 2026.** Kali on the
+> Gateway reports the connector directly:
+>
+> ```
+> [CONNECTOR:161:eDP-1]: status: connected
+>         physical dimensions: 260x140mm
+>         fixed modes:
+>                 "1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798
+>                 "1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798
+> fb0  virtual_size 1366,768   stride 5504   bits_per_pixel 32
+> ```
+>
+> Two fixed modes, both 1366x768, on a panel 260 mm wide -- about 11.6
+> inches, which is the size this machine is. `B125HAN02.201` is a 12.5-inch
+> 1920x1080 part, so **the firmware's VBT names a panel this machine does not
+> have.** A VBT carries entries for every panel a board was ever built with;
+> reading one and believing it is how a driver ends up setting a mode the
+> glass cannot show.
+>
+> This does not change the entry's fault or its fix -- 800x600 was wrong
+> either way, and the loader now reports 1366x768 on that machine. It changes
+> where a driver may take the mode **from**: the connector, never the VBT.
+>
+> Two things this also confirms, and both are the kind that only real hardware
+> can give: Linux reports `stride 5504` for a 1366-pixel line, which is
+> **exactly** what ReconOS reports on the same panel -- so the pitch handling
+> is right against an independent implementation rather than against itself --
+> and `8086:3185` is the correct table entry for this machine.
+
+
 [#450](https://github.com/neogentrics/ReconOS/issues/450)
 
 - **Found:** 14 September 2026, from the firmware's own setup screen. Its VBT
@@ -8247,6 +8280,322 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
+
+[#534](https://github.com/neogentrics/ReconOS/issues/534)
+
+- **Found:** 17 September 2026, building the log port, and found because the
+  thing being built stopped after two turns of its loop.
+
+- **Measured, and the measurement is the entry.** A kernel thread looping on
+  `socket_accept` and `timer_sleep_ns(100 ms)`, instrumented either side of the
+  sleep:
+
+  ```
+  logport: turn 1, about to accept
+  logport: turn 1, sleeping
+  logport: turn 1, woke (slept)
+  logport: turn 2, about to accept
+  logport: turn 2, sleeping
+  ```
+
+  **Turn 2 never wakes.** The machine runs on — the boot continues, the first
+  screen paints, the heap test prints — and that thread is gone for the life of
+  the boot. A tenth of a second became forever.
+
+- **What is different between turn 1 and turn 2.** At turn 1 the machine is
+  still busy: the first program is starting and the boot is finishing. By turn 2
+  everything else has ended, and the only thing left is a processor with nothing
+  to run — so the idle path is entered for the first time. **The sleep that
+  fails is the first one taken on an idle machine.**
+
+- **Every part of the chain reads correctly in isolation, which is why this
+  needs a number rather than a patch.**
+
+  - `timer_sleep_ns` files a timer and loops on `wait_sleep` until the callback
+    sets its flag. Correct.
+  - `timer_next_deadline` walks every level of the wheel and returns the
+    smallest `expires`. It would find this timer.
+  - `power_idle_wait` asks for that deadline, converts ticks to nanoseconds,
+    takes it over the ceiling when it is sooner, and calls
+    `arch_wait_tickless`. Then turns the wheel with `timer_tick()` on waking.
+  - `idle_loop` calls `power_idle_wait` and then `sched_yield`.
+
+  Four correct-looking pieces and a thread that does not wake. The fault is in
+  how they meet, and finding it needs the idle path instrumented rather than
+  read — which is what this entry is for.
+
+- **What it costs, beyond the log port.** Anything in this kernel that sleeps
+  and expects to be woken is unreliable the moment the machine goes quiet. That
+  is every poller, every retry, every timeout that sleeps rather than spins.
+  **A busy machine hides it completely**, which is why twenty-eight matrix paths
+  and 2,119 self-tests do not show it: every one of them is doing something.
+
+- **Its likely relatives.** KF-232 -- *three timers did not fire, once, on one
+  path of twenty-eight* -- is a filed timer that did not arrive, and is still
+  open. KF-257's six-second gap is an arriving segment not acted on until the
+  peer retransmitted. Neither is proven to be this; both are the same shape, and
+  a fix here is the first thing to re-measure them against.
+
+- **Worked around, not fixed, in one place.** `logport.c` yields instead of
+  sleeping, and says so at the line, with the cost stated: a machine with that
+  port open does not idle properly. That is acceptable for a diagnostic that is
+  off unless asked for, and it is **not** acceptable as a general answer — the
+  general answer is this entry.
+
+- **Status:** open. Reproducible in one command on any machine:
+  `qemu-system-x86_64 -kernel ... -append logport` with a network, and watch the
+  accept loop stop.
+
+### KF-257 — The handshake completes on the wire and `connect` never hears about it
+
+[#529](https://github.com/neogentrics/ReconOS/issues/529)
+
+- **Found:** 17 September 2026, by the **server session**, with a packet capture
+  on the virtual NIC. Handed here because it is kernel code and they cannot push
+  to this branch.
+
+- **What they measured**, relative to boot:
+
+  ```
+  + 2.047s  SYN -> :9        RST+ACK back 1 ms later
+  + 6.023s  SYN -> :8099     SYN+ACK back 1 ms later     <- not acted on
+  +12.008s                   SYN+ACK retransmitted by the peer
+  +12.041s  ACK ->           this machine finally answers
+  ```
+
+  Replies arrive in about a millisecond and nothing happens for six seconds,
+  until the far end gives up waiting and retransmits. The program polls
+  throughout -- **7,848,406 attempts** against a thirty-second deadline -- and
+  every one answers `SYS_EAGAIN`. A connection the host had already accepted was
+  never reported to the program that opened it.
+
+- **So `c->state = TCP_ESTABLISHED` in the `TCP_SYN_SENT` case does run** -- the
+  ACK at +12.041s is sent from that branch and proves it -- and
+  `tcp_state_of(s->conn)` does not return it to the caller.
+
+- **What they ruled out, and each with a control:** not a timeout (thirty
+  seconds and 7.8 million polls give the same answer as two); not the poll loop
+  starving the stack (`SYS_YIELD` between attempts, and the DNS resolver polls in
+  exactly the same shape and gets its reply in about 2,600 tries); not inbound
+  (`GET /api/status` answers 200 throughout).
+
+- **What reading the code here ruled out**, so the next person does not repeat
+  it: `tcp_open` returns `(int)(c - conns)` and `tcp_state_of` indexes `conns`
+  with it, so the index convention agrees. `find_conn` matches all four of the
+  tuple before it considers a listener. `sys_connect` asks
+  `socket_connect_progress` and maps its three answers correctly.
+  **Every layer reads correctly in isolation, which is why this needs a live
+  reproduction rather than more reading.**
+
+- **The six-second gap is the sharper clue and is worth chasing first.** The
+  first SYN+ACK arrived and was not acted on at all; only the peer's retransmit
+  was. Something is delivering inbound segments late or not at all, and the
+  state machine is downstream of that.
+
+- **Status:** open, and it blocks the server branch's entire client half.
+  `server/dial.c` is written and waiting with 38 checks.
+
+### KF-256 — One failed transfer wedges the endpoint for the rest of the boot
+
+[#530](https://github.com/neogentrics/ReconOS/issues/530)
+
+- **Found:** 17 September 2026, **reproduced on this desktop** rather than on the
+  Gateway, by handing QEMU the physical stick with `usb-host` passthrough so the
+  real device's firmware answers this kernel's driver.
+
+  ```
+  usb-storage : reading 8 block(s) at 2048 failed -- the device sent no data (0 of 4096 bytes moved)
+  usb-storage : reading 8 block(s) at 2176 failed -- the device sent no data (0 of 4096 bytes moved)
+  usb-storage : reading 8 block(s) at 4096 failed -- the command wrapper was not accepted (0 of 4096 bytes moved)
+  usb-storage : reading 2 block(s) at 2    failed -- the command wrapper was not accepted (0 of 1024 bytes moved)
+  usb-storage : reading 32 block(s) at 30277600 failed -- the command wrapper was not accepted (0 of 16384 bytes moved)
+  ```
+
+- **Two faults, and this entry is the second one.** The first read fails in the
+  **data** phase -- the device accepts the command and sends nothing. Every read
+  after it fails in the **command** phase, which means the bulk OUT endpoint is
+  halted and stays halted. One transient failure turns into a dead device for the
+  rest of the boot.
+
+- **Nothing in this driver clears a halt.** Bulk-Only Transport says what to do
+  and it is not optional: a Clear-Feature(ENDPOINT_HALT) on the stalled endpoint,
+  and a Bulk-Only Mass Storage Reset when both are stuck. This kernel does
+  neither, so `command()` retries into an endpoint that can only refuse.
+
+- **This is what the Gateway's screen was showing.** `storage: no volume this
+  kernel can read` and the missing `RECONOS-BOOT.TXT` are not separate faults --
+  they are this one, cascading. Once the endpoint wedged, the partition scan's
+  later reads, the filesystem probe and the log write could not succeed.
+
+- **The partition scan works because it reads one or two blocks at a time and
+  gets in before the first failure**, which is why `usb0p1` and `usb0p2` appear
+  on the screen while nothing can be read from them.
+
+- **Status:** open, reproducible on this desk in one command, no laptop needed.
+
+### KF-255 — Every outbound SYN carried a wrong TCP checksum, and always had
+
+[#531](https://github.com/neogentrics/ReconOS/issues/531)
+
+- **Found:** 17 September 2026, by the **server session**, from a packet capture
+  rather than from reading the code. Fix written by them; taken here because it
+  is kernel code.
+
+- **What it was.** `socket_connect` calls `socket_bind(s, IPV4_ANY, 0)`, so
+  `s->local_ip` was `0.0.0.0` when handed to `tcp_open`. TCP's checksum covers a
+  pseudo-header containing the source address; it was summed over that zero while
+  the IP layer wrote the device's real address into the header on the way out.
+  The two disagreed on every segment this machine ever originated.
+
+- **The evidence is what makes it certain.** The IP checksum was correct and the
+  TCP one wrong **by the same `0x0C0F` on every packet** -- which is
+  `0x0A00 + 0x020F`, the two halves of `10.0.2.15`, the machine's own address,
+  missing from the sum.
+
+  ```
+  before   SYN, then silence, for every target -- no SYN+ACK, and no RST
+           even from a port with nothing listening
+  after    SYN -> RST+ACK from the closed port
+           SYN -> SYN+ACK -> ACK, handshake complete
+  ```
+
+- **Why a working TCP stack and a full self-test suite never saw it.** An
+  accepted connection takes its local address from the packet that arrived, so
+  **inbound has always been correct and outbound never has.** Every test in this
+  kernel that exercises TCP does it by listening.
+
+- **Status:** fixed, kernel 0.3.2. The route is looked up before `tcp_open`
+  and the device's address filled in when the socket bound to `IPV4_ANY`.
+
+### KF-254 — `connect` on a datagram socket answers `SYS_EIO` every time
+
+[#532](https://github.com/neogentrics/ReconOS/issues/532)
+
+- **Found:** 17 September 2026, by the **server session**, on their DNS resolver:
+  `resolved:false` on the first boot after merging kernel 0.2.48, where it had
+  worked before.
+
+- **What it was, and it is mine.** KF-244 gave `socket_connect_progress` this
+  opening line:
+
+  ```c
+  if (!s || s->type != SOCK_STREAM || s->conn < 0)
+          return SOCKET_PROGRESS_FAILED;
+  ```
+
+  One condition said two different things. *This socket cannot be asked* and
+  *this socket was asked and failed* are not the same fact, and folding them
+  together made every datagram socket report as having lost -- taking
+  `SYS_CONNECT` away from the only shape of UDP a program can use, which
+  `socket_file.c` says itself.
+
+- **A fix that broke the neighbouring case.** KF-244 was about `connect`
+  reporting success before a handshake finished; it was right about streams and
+  silently wrong about datagrams, because a datagram has no handshake to wait
+  for and `connected` was already the whole answer.
+
+- **Three controls separated it from a network fault**, which is why the report
+  could be acted on without re-deriving it: inbound TCP still answered 200, the
+  kernel's own DHCP still completed, and the address came up identically on both
+  boots.
+
+- **Status:** fixed, kernel 0.3.2. A datagram reports DONE when connected and
+  FAILED when not, before the stream logic is reached.
+
+### KF-253 — The byte count in a failure report was left over from the transfer before
+
+[#533](https://github.com/neogentrics/ReconOS/issues/533)
+
+- **Found:** 17 September 2026, on the **first real outing of KF-246's
+  diagnostic** -- which reported:
+
+  ```
+  usb-storage : reading 8 block(s) at 2048 failed -- the device sent no data (31 of 4096 bytes moved)
+  ```
+
+  Thirty-one bytes of four thousand is a strange number, and it is `CBW_LENGTH`:
+  the command wrapper that had just succeeded. **Nothing had moved at all.**
+
+- **What it was.** `xhci_bulk_transfer` wrote `*transferred` only where a
+  completion arrived. Every other exit -- not configured, no endpoint, an
+  unmappable buffer, and above all the timeout -- returned false leaving the
+  caller's variable holding whatever the previous call had put there. `command()`
+  reuses one `moved` across all three phases of a request, so a data phase that
+  moved nothing reported the command phase's 31.
+
+- **The diagnostic reproduced, inside itself, the exact fault it was built to
+  end.** KF-246 exists because six different failures wore one sentence; its
+  first real answer carried a number that was not a measurement. A stale number
+  is worse than an absent one for the same reason a wrong answer is: it is
+  actionable and it is false.
+
+- **Status:** fixed, kernel 0.3.2. Answered before anything can fail:
+  `*transferred` is set to zero at entry, so no exit can leave a previous
+  call's value standing.
+
+- **Verified by re-running the same reproduction**, which now reads
+  `0 of 4096 bytes moved`.
+
+### KF-252 — The command ring takes whatever completion arrives, and nothing serialises it
+
+[#528](https://github.com/neogentrics/ReconOS/issues/528)
+
+- **Found:** 17 September 2026, by applying a rule the **Bluetooth session**
+  stated. They had written three matching checks at three layers and only
+  noticed the third time that they were the same check:
+
+  > An answer that does not name what it is answering must not be taken as the
+  > answer to whatever happens to be outstanding.
+
+  That is KF-248 stated better than KF-248 states it. Going looking for a fourth
+  instance found one in ten minutes — **and it was found by disproving a claim I
+  had already written down.** The signal to them said `command()` was the *right*
+  shape, a place the kernel already followed the rule. It is the opposite.
+
+- **What it is**, and it is three gaps in one function.
+
+  ```c
+  if (TRB_TYPE_OF(e.control) == TRB_COMMAND_COMPLETE) {
+          if (result)
+                  *result = e;
+          return ((e.status >> 24) & 0xFF) == COMP_SUCCESS;
+  }
+  ```
+
+  1. **The completion is not matched.** A Command Completion Event carries the
+     physical address of the command TRB it answers, in its parameter field.
+     That field is copied into `result` and never compared with what was posted.
+     The first completion of the right *type* is taken as the answer.
+  2. **Nothing serialises the ring.** `transfer_lock` guards transfers.
+     `command()` holds nothing, and `x->cmd_index` is advanced unprotected — so
+     two callers can be handed the same ring slot.
+  3. **So the two faults compound.** Two commands in flight means two writers to
+     one slot and two waiters racing for one completion, and the completion says
+     which command it belongs to.
+
+- **What it would look like.** `enable slot`, `address device` and `configure
+  endpoint` all go through here, and each reports success on `COMP_SUCCESS`. A
+  caller taking another command's completion is told its own command succeeded —
+  so a device is "addressed" when what actually succeeded was a different
+  device's slot allocation. The failure arrives later, somewhere else, as a
+  device that does not answer.
+
+- **Reachability is not proven and the entry says so.** Enumeration runs from
+  the boot thread; hot-plug (KF-199) and the HID poller run from others. Whether
+  two of them can be inside `command()` at once has **not** been demonstrated
+  here, and the honest statement is that the code does nothing to prevent it
+  rather than that it has been seen to happen. The same was true of KF-248 until
+  a Bluetooth adapter turned out to be the device that breaks it.
+
+- **The fix is one lock and one comparison**, and it belongs with KF-248: both
+  are "the event names its owner and the code ignores it", one on the command
+  ring and one on the transfer rings. Building them separately means writing the
+  same argument twice.
+
+- **Status:** open. Found by rule rather than by failure, which is the cheapest
+  way this project has found anything.
+
 ### KF-251 — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
 
 [#518](https://github.com/neogentrics/ReconOS/issues/518)
@@ -8305,9 +8654,58 @@ boot log.
   service reports honestly, and the console line states the uncertainty rather
   than implying accuracy it does not have.
 
-- **Status:** open. Measured by another session, cause confirmed here in
-  `arch/x86_64/time.c`, fix designed and deliberately not rushed in beside a
-  merge and a matrix run.
+- **Fixed**, kernel 0.3.1. The RTC stops being the clock and becomes the thing
+  that *sets* it: one reading latched against the monotonic counter, and the
+  answer served as `latched + (counter now − counter then)`.
+
+- **Not read on every call, and that matters for the use that found it.**
+  `arch_wall_ns` spins while the RTC's update-in-progress bit is set — up to two
+  milliseconds by specification — then does seven port reads. A program timing a
+  round trip calls this twice in quick succession, and *a clock that costs two
+  milliseconds to read cannot measure anything shorter than that.* The RTC is
+  consulted at most every 250 ms; between probes the answer is a counter read.
+
+- **How the phase is found, without paying for it at boot.** Waiting for the
+  seconds field to change would cost up to a second of every boot. Instead each
+  probe notices whether it changed since the last one, and **this clock is
+  always late, never early** — a reading says which second it is and nothing
+  about where in it, so the first latch starts behind by the fraction it could
+  not see and the monotonic delta preserves exactly that lateness. Every later
+  observation offers a different lateness. Keeping the one that is furthest
+  forward keeps the least-late estimate, and refusing the others is what makes
+  the clock monotonic by construction rather than by a clamp somebody could
+  remove.
+
+- **A counter reading zero, which was very nearly misread.** `time_wall_fixups`
+  reported **0** on a boot, and a counter that is always zero looks exactly like
+  a branch that never runs. Instrumented rather than assumed: over 1600 ms
+  `arch_wall_ns` was read 1,548,460 times, its value changed **twice**, and
+  **one** of those two changes improved the phase. The other was offered and
+  correctly refused for being further from the turn than the estimate already in
+  hand. So zero means *no observation beat the first latch*, which is a normal
+  and correct outcome — and the accessor now says so in as many words, because
+  the next person to read a zero there will make the same inference.
+
+- **Tested by putting the old clock back.** The new self-test asserts that the
+  low nine digits are not zero across eight reads — a property of one reading,
+  not a difference between two, because a test comparing two readings passes on
+  the broken clock whenever the machine is slow enough, which is a test that
+  measures the host. With the coarse RTC restored it reports *"its low nine
+  digits were zero on eight reads — it is counting whole seconds"*; with the fix
+  it is silent. Red on the old, green on the new.
+
+- **And the resolution is now measured on every boot rather than declared**:
+  `resolution : two reads apart by 21048 ns, phase corrected 0 time(s)`. The
+  line above it printed a perfectly plausible date for as long as this fault
+  existed. A resolution nobody measures is a resolution nobody can be wrong
+  about.
+
+- **What it does not give.** The absolute offset keeps up to the probe interval
+  of error and the clock is still always late, so this is not a reason to trust
+  the date to better than a fraction of a second. NTP is the right thing to hold
+  the remainder, and that is what the server session is building.
+
+- **Status:** fixed, kernel 0.3.1.
 
 ### KF-250 — The network stack failed once, on the installed-disk boot, and has not failed since
 
@@ -8909,6 +9307,30 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
+
+> **Seen a second time, 17 September 2026, matrix 70** -- and the heading's
+> *once* is now wrong, which is left standing rather than edited so the change
+> in what is known is visible:
+>
+> ```
+> round 4 (cut at 904ms):
+>       unreadable no valid superblock
+> 6 cuts inside a rename on x86_64: 1 inconsistent.
+> ```
+>
+> Same signature, same shape, a different cut time (904 ms against matrix 57's
+> 1115 ms). **Two occurrences, each one round of six, is a rate rather than an
+> anomaly** -- roughly one run in six will turn red on this, which is enough to
+> hunt with and was not before.
+>
+> It also means any matrix run can go red on a fault nobody introduced. That is
+> recorded here rather than absorbed, because a re-run that goes green is
+> evidence about the second run and not about the first.
+>
+> **The line was only visible because of KF-250's fix.** The failure reporter
+> truncated at twenty lines until this morning, and the round and cut time are
+> below that. The previous version of this run would have said
+> `rename under a power cut FAILED` and stopped.
 
 [#496](https://github.com/neogentrics/ReconOS/issues/496)
 

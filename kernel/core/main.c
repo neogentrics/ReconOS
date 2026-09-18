@@ -45,6 +45,7 @@
 #include <recon/kernel/xhci.h>	/* the USB keyboard's decoder test */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
+#include <recon/kernel/logport.h>
 #include <recon/kernel/aml.h>
 #include <recon/kernel/aml_eval.h>
 #include <recon/kernel/sched.h>
@@ -587,6 +588,27 @@ void kmain(void)
 	 *
 	 * Before power-off, because that does not return. */
 	klog_save_to_medium();
+
+	/* And over the network, for the machine where the line above cannot
+	 * work.
+	 *
+	 * `klog_save_to_medium` writes to the medium the kernel booted from, and
+	 * on the Gateway that medium is a USB stick whose driver is the thing
+	 * being diagnosed (KF-256). A machine whose fault prevents recording the
+	 * evidence of that fault is a machine diagnosed by photographing a
+	 * panel, which this project has now done four times.
+	 *
+	 * **The network does not depend on the disk**, which is the entire
+	 * argument. Off unless the command line says `logport`, and it prints
+	 * nothing at all when nobody asked -- see logport.h for why it reads
+	 * from nobody and why it is not SSH.
+	 *
+	 * Started after the log is saved rather than before, so the two are not
+	 * competing for the same report, and after the summaries so that what a
+	 * reader gets is the whole boot rather than the part printed by the time
+	 * a socket opened. */
+	logport_start();
+	logport_print_summary();
 
 	/* Asked for on the command line, and last, because it does not return.
 	 *
