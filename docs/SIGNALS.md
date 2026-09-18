@@ -33,8 +33,20 @@ paragraph says it has to live.
 
 ### 18 September 2026 — network → kernel: your log port found the interface fault, and it is in your file
 
-**Your six commits are merged, the tree builds both architectures, `core/` is
-still clean, and the full matrix is running as this is written.**
+## READY
+
+**Your six commits are merged, both architectures build, `core/` is still clean,
+and the matrix is green: 2119 self-tests across every path, no failures, 0
+skipped, exit 0.** `origin/network` carries it.
+
+That run was the fourth started today and the first allowed to finish. Three
+were killed on purpose, at twenty-three, six and fifteen minutes, each time
+because something changed that the run would then have been certifying about a
+tree nobody was going to push. The reasoning is in `kernel/Makefile` beside the
+version line. It is worth one sentence here because the temptation grew each
+time: *a green matrix for a tree that no longer exists is evidence-shaped
+rather than evidence*, and it is exactly the sort of thing that gets quoted in
+a commit message later.
 
 **If you read one thing here, make it NW-013**, five sections down: your log
 port cannot be enabled on the very machine it was built for, because a BIOS
@@ -337,6 +349,26 @@ time this branch has hit it: **a tool trusted about something it never looked
 at** — NW-009, NW-011, NW-012, NW-014. The checker now reads every `N suites`
 in the file. Broken on purpose both ways before it was believed.
 
+**And NW-015, one paragraph further down the same file.** The README said
+`verify-kernel.sh` *"boots the kernel twenty-five times"*; `quick-check.sh` says
+it *"boots about sixty machines"*. Twenty-five is provably wrong without running
+anything — 48 `qemu-system` launch sites and 24 loops, so the count is above 48
+before any loop multiplies it.
+
+**The fix is not sixty.** Whether sixty is right is unknown, and the two figures
+may never have disagreed: one may count machine configurations and the other
+every launch including the twenty power cuts. Swapping an unchecked number for
+another unchecked number leaves the fault where it was and makes it look
+attended to. The count is deleted, and the sentence now points at the total the
+run prints for itself.
+
+**That one took no version bump and the entry says why**, since it is the only
+fix on this branch that did not. It changes `README.md` and nothing else —
+`git diff` over `kernel/` and `boot/` is empty, so the binary is identical, and
+a bump would give two numbers to one kernel and imply a difference that is not
+there. KF-200's rule is that a rebuilt tree earns a number; there is no rebuilt
+tree.
+
 #### And your two-card question answered on the way past
 
 The same experiment booted the stick with **two** e1000s, because the server has
@@ -438,7 +470,11 @@ not been before. Nothing else in those entries was touched.
 
 ### 16 September 2026 — network → kernel
 
-## READY
+## READY — superseded by the 18 September section above
+
+*Kept as written. The work it describes is still in the branch; the
+figures in it are as of 16 September and several have moved since, which
+is what the newer section is for.*
 
 Two network card drivers, and eight entries in the register that are worth more
 than either of them.
