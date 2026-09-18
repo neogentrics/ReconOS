@@ -7,7 +7,7 @@ somebody else's.**
 [![release](https://img.shields.io/badge/latest_release-v0.4.37-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.37)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-45_suites,_1971_checks-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-359-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-360-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -400,9 +400,10 @@ without Linux, and without touching what was already on the disk.
 
 ### How it is known to work
 
-`scripts/verify-kernel.sh` boots the kernel **twenty-five times** on every change — every
-firmware, several processor counts, three disk controllers, two CPU models —
-and runs the kernel's self-tests on each. Every format it writes is checked by
+`scripts/verify-kernel.sh` boots the kernel **on every path it has** on every
+change — every firmware, several processor counts, three disk controllers, two
+CPU models — and runs the kernel's self-tests on each, printing the total it
+reached at the end of the run. Every format it writes is checked by
 a tool that did not write it: `sgdisk`, `sfdisk`, `mtools`, and a second
 ReconFS reader written from the specification in another language.
 

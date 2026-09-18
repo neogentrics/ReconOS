@@ -537,6 +537,50 @@ turned out to be true.
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
 
+### NW-015 — "Twenty-five times" was wrong and unfalsifiable in the same sentence
+
+[#543](https://github.com/neogentrics/ReconOS/issues/543)
+
+- **Found in** `README.md`, on 18 September 2026, by the network session, while
+  reading it to see which figure the matrix run would need to refresh — the
+  same way NW-014 was found, one paragraph further down.
+- **Was** the README said `verify-kernel.sh` *"boots the kernel **twenty-five
+  times** on every change"*. `scripts/quick-check.sh` says the same script
+  *"boots about sixty machines"*. Two documents, one script, two numbers.
+- **Twenty-five is wrong, and that much is provable without running anything.**
+  `verify-kernel.sh` contains **48 distinct `qemu-system` launch sites**, and
+  **24 loops**, so the number of boots is above 48 before any loop multiplies
+  it. A lower bound of 48 refutes 25 on its own.
+- **What is *not* established, and this entry will not pretend otherwise.**
+  Whether the true figure is "about sixty" is unknown. Counting it properly
+  means instrumenting a run, and the two figures may never have disagreed at
+  all — one may be counting distinct machine configurations and the other every
+  QEMU launch including the twenty power cuts. **So the fix is not to replace
+  25 with 60.** Swapping one unchecked number for another unchecked number
+  would leave the fault exactly where it was and make it look attended to.
+- **Fixed by** deleting the count. The sentence now says the script boots the
+  kernel *"on every path it has"* and *"printing the total it reached at the end
+  of the run"* — which is what it does, is true whatever the number, and points
+  the reader at the figure the run itself prints rather than at one somebody
+  typed once. The rest of the sentence was already the useful part: every
+  firmware, several processor counts, three disk controllers, two CPU models.
+
+  Same move as the one made in NW-011's comment, where "all 356 entries at
+  once" became "every entry". **A number nothing checks does not belong in
+  prose**, and the honest repair is usually to remove it rather than to correct
+  it.
+- **No version bump, and that is a decision rather than an oversight.** Every
+  other fix on this branch took a patch, on the rule settled at KF-200: a
+  change in `scripts/` still earns one because *"the change does not feel large
+  enough"* is precisely the reasoning that rule exists to refuse.
+
+  This one changes `README.md` and nothing else. **The kernel binary is byte
+  for byte identical**, so a bump would give two version numbers to one kernel
+  and imply a difference that is not there — which is the opposite of what the
+  number is for. KF-200's argument was that a rebuilt tree deserves a new
+  number; here there is no rebuilt tree. The green matrix over `0.4.4`
+  therefore still certifies what is being pushed.
+
 ### NW-014 — The suite count was checked in the badge and not in the sentence below it
 
 [#542](https://github.com/neogentrics/ReconOS/issues/542)
