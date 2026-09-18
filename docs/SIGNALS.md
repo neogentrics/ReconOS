@@ -1028,3 +1028,72 @@ That is the same fault my throwaway script walked into, already found, already
 fixed, and documented in the file I should have read before writing a lesson
 about it. The finding stands as a note about my own harness and nothing more;
 the project's own matrix does not have this hole.
+
+---
+
+### 17 September 2026 (eleventh) — bluetooth → kernel
+
+**The layers are joined, and joining them found a fault none of their own
+tests could.**
+
+`kernel/core/bt_mouse.c` runs the whole chain: an ACL fragment in, through
+L2CAP reassembly, a channel check, the HIDP transaction byte, the report-id
+question, field extraction through the descriptor's layout, and out as input
+events. Every layer under it was already tested alone. What this adds is the
+joins.
+
+#### The fault, which is exactly where I said it would be
+
+`hid_report_mouse_layout` computed the report's length from `info.input_bits`
+— and `hid_report_parse` **deliberately zeroes that** for a device with report
+IDs, because the length is per-ID there and one number would be a wrong answer.
+
+So a report-ID device got a layout claiming a report of **zero bytes**. That
+is not merely a wrong number: `hid_mouse_decode` guards with
+`len < m->report_bytes`, and `len < 0` is never true, so the short-report check
+**silently turned itself off**. A truncated report would have been decoded with
+its axes read from bytes the device never sent.
+
+Both halves of that were correct on their own. `hid_report_parse` is right to
+refuse a single length; `hid_mouse_decode` is right to compare against one.
+The fault is entirely in the assumption each made about the other, which is
+why writing the join is what surfaced it.
+
+Fixed by taking the length from the fields themselves — the highest
+`bit_offset + bit_size`, padding included — which is correct whether or not
+report IDs are in play and does not depend on a value that is deliberately
+zero. A second guard went in with it: **more than one report ID is now
+refused**, because `bit_offset` accumulates across every Input item, so with
+two reports the second one's fields are placed after the first's rather than
+at zero. One ID is fine; two is a model this pass does not have, and a layout
+built anyway would put X somewhere the device never writes.
+
+#### Five joins, five breakages, all red first time
+
+The L2CAP length replaced by the whole PDU length (the off-by-four that still
+decodes), the channel id unchecked, the ACL handle unchecked, the report-id
+answer not travelling from the descriptor to the HIDP layer, and the report
+length taken from `input_bits` again — which is now a permanent regression
+guard for the fault above.
+
+#### Where the report-id question finally lands
+
+`bt_hid_input_report` takes "does this device use report IDs" as an argument
+because that layer cannot know. `hid_report_parse` answers it from the
+descriptor. `bt_mouse_configure` is the line that carries the answer between
+them, and it is the reason both were written to hand the question along rather
+than guess in the middle. That line is now under test in both directions.
+
+#### The harness applies its own lesson now
+
+The verification script asserts an expected count and requires `Idling.`,
+rather than checking that no failures were printed. Not a novel idea —
+`verify-kernel.sh` had it first and says so — but it is applied here now
+instead of being written about.
+
+70 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
+
+**Still nothing to merge.** Connecting — inquiry, paging, pairing — is not
+written and would be written from memory rather than from anything checkable;
+it is also the half that waits on the transport anyway.

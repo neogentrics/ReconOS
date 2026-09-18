@@ -408,6 +408,7 @@ bool hid_report_mouse_layout(const struct hid_report_info *info,
 	unsigned i;
 	bool have_x = false, have_y = false;
 	u32 last_button_bit = 0;
+	u32 end_bits = 0;
 
 	kmemset(out, 0, sizeof(*out));
 
@@ -417,8 +418,31 @@ bool hid_report_mouse_layout(const struct hid_report_info *info,
 	if (!info->fields_usable || !info->field_count)
 		return false;
 
+	/* **More than one report id and the field offsets mean nothing.**
+	 *
+	 * `bit_offset` accumulates across every Input item in the descriptor,
+	 * so with two reports the second one's fields are placed after the
+	 * first one's rather than at zero. One report id is fine -- there is
+	 * still only one report, and its fields begin where the walk began.
+	 * Two is a different model than this pass has, and a layout built
+	 * anyway would put X somewhere the device never writes. */
+	if (info->report_id_count > 1 || info->report_ids_truncated)
+		return false;
+
 	for (i = 0; i < info->field_count; i++) {
 		const struct hid_field *f = &info->fields[i];
+
+		/* The report's length, from the fields themselves.
+		 *
+		 * **Not from `input_bits`**, which `hid_report_parse`
+		 * deliberately zeroes for a device with report ids because
+		 * the length is per-id there. Taking it from that gave a
+		 * report of zero bytes, which silently turned off
+		 * `hid_mouse_decode`'s short-report check -- `len < 0` is
+		 * never true. Padding counts, so this runs before the
+		 * constant test below. */
+		if (f->bit_offset + f->bit_size > end_bits)
+			end_bits = f->bit_offset + f->bit_size;
 
 		if (f->constant)
 			continue;
@@ -470,7 +494,7 @@ bool hid_report_mouse_layout(const struct hid_report_info *info,
 	if (!have_x || !have_y)
 		return false;
 
-	out->report_bytes = (info->input_bits + 7u) / 8u;
+	out->report_bytes = (end_bits + 7u) / 8u;
 	out->found = true;
 
 	return true;
