@@ -195,7 +195,18 @@
 # kernel branch; the other saw it there, stepped over it, and took 0.2.39 for
 # SYS_MAP's anonymous mapping. Both numbers stand and mean what their entries
 # say. The merged tree is the later of the two.
-VERSION := 0.2.49
+# 0.3.0: the first minor bump since 0.2.0, and the rule it follows is Joshua's
+# -- *a patch makes the kernel work on hardware it was already built toward; an
+# update adds something it did not have.* Merging `graphics` brings three
+# display backends (virtio-gpu, Intel Gen9, AMD RDNA2), a flush operation, and
+# a machine that can drive more than one screen. None of that existed here at
+# 0.2.49 under any name, so it is not a patch however many patches it took.
+#
+# **0.2.0 had a gate and this does not.** That one was a fact anybody could
+# check -- rows 1.1 to 1.9 of the blueprint audit all built. No such gate was
+# ever written for 0.3.0, so this bump rests on the rule above rather than on a
+# checklist, and saying so is the honest version of stamping it.
+VERSION := 0.3.1
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

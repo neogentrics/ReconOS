@@ -83,6 +83,53 @@ sub_out() {
 	cat "$WORK/sub/$tag.out"
 	return "$(cat "$WORK/sub/$tag.rc")"
 }
+
+# --- showing why a path failed, without showing all of it ---------------------
+#
+# Every failure report here used to be `head -N`: the first dozen or twenty
+# lines of a sub-script's output, indented. That is the right idea and it drops
+# the answer whenever the failure is further down than N.
+#
+# **KF-250 is what that costs.** An installed-disk boot reported
+# `the network stack : FAIL` and nothing else. `net_self_test` runs eight
+# sub-tests and each prints its own diagnostic; every one of them was below the
+# cut. So the register carries an entry saying the network stack failed, with no
+# way to know which part, and fifteen further boots have not reproduced it. The
+# one occurrence that could have answered it was truncated.
+#
+# So: the first N lines for context, **and then every line below that names a
+# failure**, which is the half that was being thrown away. Still bounded -- a
+# broken guest that prints failures for ever is capped -- but bounded on the
+# lines that matter rather than on position.
+#
+#   show_failure "<output>" <context lines>
+#
+show_failure() {
+	local out=$1 n=${2:-16}
+
+	echo "$out" | head -"$n" | sed 's/^/      /'
+
+	# Below the cut, the verdicts **and the lines above each one**.
+	#
+	# The first version of this took only lines matching FAIL and friends,
+	# and on a worked example it surfaced `the network stack : FAIL` while
+	# still dropping `net: udp checksum mismatch, wanted ... saw ...` on the
+	# line under it -- so it recovered the summary that was already known
+	# and lost the diagnostic that was the entire point.
+	#
+	# The kernel prints a sub-test's reason *before* the line that reports
+	# the verdict, so context-before is the half that carries the answer.
+	# `tail -n +N` starts after what was already shown, so nothing repeats.
+	local rest
+	rest=$(echo "$out" | tail -n +"$((n + 1))" |
+	       grep -a -B 6 -E 'FAIL|FAILED|panic|refused|could not|did not' |
+	       head -40)
+
+	if [ -n "$rest" ]; then
+		echo "      ... and below the first $n lines:"
+		echo "$rest" | sed 's/^/      /'
+	fi
+}
 # --- what a failing run leaves behind -----------------------------------------
 #
 # The work directory used to be deleted unconditionally, and with it every
@@ -1525,7 +1572,10 @@ for a in x86_64 aarch64; do
 	else
 		echo "FAILED"
 		echo "$fs_out" | grep -aE 'files carry a mode|rootfs:' | sed 's/^/      /'
-		echo "$fs_out" | sed -n '/reconfs:/,$p' | head -20 | sed 's/^/      /'
+		# Already a targeted slice rather than a blind cut, but it can
+		# still end above the verdict -- so it goes through the same
+		# helper as everything else.
+		show_failure "$(echo "$fs_out" | sed -n '/reconfs:/,$p')" 20
 		failures=$((failures + 1))
 		FAILED_PATHS+=("reconfs ($a)")
 	fi
@@ -1545,7 +1595,7 @@ if rn_out=$(sub_out rename); then
 	passes=$((passes + 1))
 else
 	echo "FAILED"
-	echo "$rn_out" | sed 's/^/      /' | head -20
+	show_failure "$rn_out" 20
 	failures=$((failures + 1))
 	FAILED_PATHS+=("reconfs: rename under a power cut")
 fi
@@ -1570,7 +1620,7 @@ elif [ "$beside_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$beside_out" | sed 's/^/      /' | head -14
+	show_failure "$beside_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("reconfs beside another partition")
 fi
@@ -1598,7 +1648,7 @@ for a in x86_64 aarch64; do
 		passes=$((passes + 1))
 	else
 		echo "FAILED"
-		echo "$fat_out" | sed 's/^/      /' | head -16
+		show_failure "$fat_out" 16
 		failures=$((failures + 1))
 		FAILED_PATHS+=("fat32 reads ($a)")
 	fi
@@ -1622,7 +1672,7 @@ for a in x86_64 aarch64; do
 		skipped=$((skipped + 1))
 	else
 		echo "FAILED"
-		echo "$fw_out" | sed 's/^/      /' | head -16
+		show_failure "$fw_out" 16
 		failures=$((failures + 1))
 		FAILED_PATHS+=("fat32 writes ($a)")
 	fi
@@ -1652,7 +1702,7 @@ elif [ "$plan_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$plan_out" | sed 's/^/      /' | head -18
+	show_failure "$plan_out" 18
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install planner")
 fi
@@ -1674,7 +1724,7 @@ elif [ "$onto_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$onto_out" | sed 's/^/      /' | head -20
+	show_failure "$onto_out" 20
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install onto")
 fi
@@ -1697,7 +1747,7 @@ elif [ "$e2e_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$e2e_out" | sed 's/^/      /' | head -20
+	show_failure "$e2e_out" 20
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install then boot")
 fi
@@ -1720,7 +1770,7 @@ elif [ "$menu_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$menu_out" | sed 's/^/      /' | head -14
+	show_failure "$menu_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("boot menu")
 fi
@@ -1748,7 +1798,7 @@ elif [ "$sig_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$sig_out" | sed 's/^/      /' | head -14
+	show_failure "$sig_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("signed kernel")
 fi
@@ -1771,7 +1821,7 @@ elif [ "$rec_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$rec_out" | sed 's/^/      /' | head -16
+	show_failure "$rec_out" 16
 	failures=$((failures + 1))
 	FAILED_PATHS+=("recovery")
 fi
@@ -1796,7 +1846,7 @@ elif [ "$med_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$med_out" | sed 's/^/      /' | head -12
+	show_failure "$med_out" 12
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install medium")
 fi
@@ -1821,7 +1871,7 @@ elif [ "$disc_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$disc_out" | sed 's/^/      /' | head -14
+	show_failure "$disc_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install disc")
 fi
@@ -1848,7 +1898,7 @@ elif [ "$usb_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$usb_out" | sed 's/^/      /' | head -12
+	show_failure "$usb_out" 12
 	failures=$((failures + 1))
 	FAILED_PATHS+=("usb storage")
 fi
@@ -1917,7 +1967,7 @@ elif [ "$bios_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$bios_out" | sed 's/^/      /' | head -16
+	show_failure "$bios_out" 16
 	failures=$((failures + 1))
 	FAILED_PATHS+=("bios loader")
 fi
@@ -1938,7 +1988,7 @@ elif [ "$bsig_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$bsig_out" | sed 's/^/      /' | head -14
+	show_failure "$bsig_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("bios signature")
 fi

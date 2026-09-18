@@ -49,13 +49,36 @@ def read(path):
 
 
 def bug_counts():
-    """How many entries the register actually holds, by prefix."""
-    # **Every prefix, not a list of the ones that existed when this was
-    # written.** `GX-` was added on 15 September 2026 and this function would
-    # have gone on reporting a total that silently excluded it -- which is the
-    # exact failure the file's own opening paragraph is about.
-    heads = re.findall(r"^### (BG|KF|GX)-\d+", read("docs/BUGS.md"), re.M)
-    return {p: heads.count(p) for p in ("BG", "KF", "GX")}
+    """How many entries the register actually holds, by prefix.
+
+    **Every prefix, discovered from the file — not a list.**
+
+    That sentence was already the comment here on 17 September 2026, and the
+    line under it read::
+
+        heads = re.findall(r"^### (BG|KF|GX)-\\d+", ...)
+
+    which is precisely a list of the prefixes that existed when it was
+    written. The comment described the property the code was supposed to have
+    and the code did not have it, so the file asserted its own correctness and
+    nothing checked the claim.
+
+    It was about to cost something real twice over: the `network` branch
+    carries eight `NW-` entries and `bluetooth` carries `BT-`, and on merge
+    both would have been counted as **zero** — a badge that goes green while
+    undercounting the register, which is the exact failure this script exists
+    to prevent. The network session spotted it from their side and said so in
+    their signals; it is fixed here rather than by adding two more names.
+
+    Two letters and a dash, taken from the register itself. A new track adds
+    entries and this counts them, with nothing to remember.
+    """
+    heads = re.findall(r"^### ([A-Z]{2})-\d+", read("docs/BUGS.md"), re.M)
+
+    out = {}
+    for p in heads:
+        out[p] = out.get(p, 0) + 1
+    return out
 
 
 def suite_count():

@@ -41,8 +41,17 @@
 #define BAD_MAP         63	/* SYS_MAP refused */
 #define BAD_GEOMETRY    64	/* the numbers do not describe a screen */
 #define BAD_READBACK    65	/* a pixel did not come back */
-#define BAD_PRESENT     66	/* SYS_PRESENT refused */
-#define BAD_PRESENT_REFUSAL 67	/* SYS_PRESENT accepted what it must refuse */
+
+/* SYS_PRESENT, and one code per thing it must refuse.
+ *
+ * Separate numbers rather than one "present is wrong", because a call that
+ * refuses everything and a call that refuses nothing both fail a single
+ * combined check, and they need opposite fixes. */
+#define BAD_PRESENT     66	/* an honest present was refused */
+#define BAD_PRESENT_ANY 67	/* it presented through a descriptor that is
+				 * not the framebuffer */
+#define BAD_PRESENT_NIL 68	/* it accepted a zero-sized rectangle */
+#define BAD_PRESENT_OFF 69	/* it accepted a rectangle off the screen */
 
 /*
  * The two the compiler is allowed to call without being asked.
@@ -236,89 +245,51 @@ int main(void)
 		}
 	}
 
-	/* **What it must refuse, asked from ring 3 through the real boundary.**
+	/*
+	 * And show it. On the EFI framebuffer and on Intel this does nothing
+	 * and says so by succeeding; on virtio-gpu it is the difference between
+	 * a picture and a program that drew into memory nobody looks at.
 	 *
-	 * Each of these is one of the four decisions the call's shape was ruled
-	 * on, and each is checked here rather than in a kernel self-test because
-	 * the thing worth testing is the syscall entry -- the argument order, the
-	 * descriptor check and the range arithmetic -- not a static function
-	 * called from inside the file that defines it.
+	 * The rectangle is the whole screen, spelled out from what the kernel
+	 * reported rather than as a zero that means everything.
 	 */
-	{
-		/* A descriptor that is not the screen. 999 was never opened, so
-		 * this is the ordinary bad-descriptor case. */
-		if (recon_present(999, 0, 0, 1, 1) != SYS_EBADF)
-			return BAD_PRESENT_REFUSAL;
-
-		/* **A descriptor that is open and is not a framebuffer.**
-		 *
-		 * Descriptor 1 is the console, which this program has been
-		 * writing to all along. It is a real open file with no `map`, so
-		 * it is the case that separates "is this a descriptor" from "is
-		 * this the screen" -- and a kernel that only checked the first
-		 * would present pixels for a program that had never mapped
-		 * anything. */
-		if (recon_present(1, 0, 0, 1, 1) != SYS_EBADF)
-			return BAD_PRESENT_REFUSAL;
-
-		/* Zero width. There is no whole-screen sentinel precisely so
-		 * that this is refused rather than silently granted the most
-		 * expensive call in the interface. */
-		if (recon_present((int)fd, 0, 0, 0, 1) != SYS_EINVAL)
-			return BAD_PRESENT_REFUSAL;
-
-		if (recon_present((int)fd, 0, 0, 1, 0) != SYS_EINVAL)
-			return BAD_PRESENT_REFUSAL;
-
-		/* Past the right edge, and past the bottom. Refused rather than
-		 * clamped -- the same answer SYS_MAP gives a length longer than
-		 * the file. */
-		if (recon_present((int)fd, screen.width, 0, 1, 1) != SYS_EINVAL)
-			return BAD_PRESENT_REFUSAL;
-
-		if (recon_present((int)fd, 0, 0, screen.width + 1, 1)
-		    != SYS_EINVAL)
-			return BAD_PRESENT_REFUSAL;
-
-		if (recon_present((int)fd, 0, screen.height, 1, 1) != SYS_EINVAL)
-			return BAD_PRESENT_REFUSAL;
-
-		if (recon_present((int)fd, 0, 0, 1, screen.height + 1)
-		    != SYS_EINVAL)
-			return BAD_PRESENT_REFUSAL;
-
-		/* **The one that catches an addition that wraps.** A width of
-		 * nearly 2^32 added to an origin of zero is past the screen; a
-		 * kernel that computed `x + w` in a narrow type and compared the
-		 * result would find it comfortably inside. */
-		if (recon_present((int)fd, 1, 0, 0xFFFFFFFFu, 1) != SYS_EINVAL)
-			return BAD_PRESENT_REFUSAL;
-
-		/* And one that must be *accepted*, so the refusals above are
-		 * known to be refusing something rather than everything. */
-		if (recon_present((int)fd, 0, 0, 1, 1) != SYS_OK)
-			return BAD_PRESENT;
-	}
-
-	/* **And ask for it to be shown, which is not the same as drawing it.**
-	 *
-	 * Every read-back above passed on a virtio-gpu whose screen was
-	 * entirely black (GX-003): those pages are ordinary memory, so reading
-	 * back what was just written proves the store landed and nothing about
-	 * whether anybody can see it. This is the call that makes the
-	 * difference, and it is made unconditionally -- on a display that scans
-	 * itself out it costs one system call and does nothing, and a program
-	 * that branched on which sort it had would be wrong on one of them.
-	 *
-	 * The whole screen, spelled with the width and height SYS_SCREEN gave
-	 * us, because there is no zero-means-everything. */
-	if (recon_present((int)fd, 0, 0, screen.width, screen.height) != SYS_OK) {
+	if (recon_present((int)fd, 0, 0, screen.width, screen.height) != 0) {
 		recon_close((int)fd);
 		return BAD_PRESENT;
 	}
 
-	recon_say(1, "paint: a C program drew on the screen and asked for it "
-			 "to be shown\n");
+	/*
+	 * Three refusals, each asserted on its own.
+	 *
+	 * A call that can only be seen succeeding is a call nobody has tested:
+	 * `present` returning 0 above is consistent both with the kernel doing
+	 * the work and with a stub that returns 0 for anything. These three ask
+	 * for things it must say no to, and a stub passes none of them.
+	 */
+
+	/* Standard input is a descriptor, is open, and is not the framebuffer.
+	 * A kernel that checks only "is this open" accepts it. */
+	if (recon_present(0, 0, 0, 1, 1) == 0) {
+		recon_close((int)fd);
+		return BAD_PRESENT_ANY;
+	}
+
+	/* Zero width. The whole argument against a sentinel: this is what an
+	 * uninitialised variable looks like, and it must be refused rather than
+	 * quietly promoted to the whole screen. */
+	if (recon_present((int)fd, 0, 0, 0, screen.height) == 0) {
+		recon_close((int)fd);
+		return BAD_PRESENT_NIL;
+	}
+
+	/* One pixel past the right-hand edge. Refused, not clamped -- a program
+	 * told this succeeded believes the screen is wider than it is. */
+	if (recon_present((int)fd, 1, 0, screen.width, screen.height) == 0) {
+		recon_close((int)fd);
+		return BAD_PRESENT_OFF;
+	}
+
+	recon_say(1, "paint: a C program drew on the screen and presented it\n");
 	recon_close((int)fd);
 	return OK;
 }

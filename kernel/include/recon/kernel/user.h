@@ -234,43 +234,52 @@ enum {
 	SYS_ACCEPT,	/* (fd) -> fd, or EAGAIN when nobody is waiting */
 	SYS_CONNECT,	/* (fd, addr, port) */
 
-	/* Show what has been drawn into the memory SYS_MAP handed over.
+	/* (fd, x, y, w, h) -> SYS_OK, or why not.
 	 *
-	 * **The door onto `display_flush`, which already existed.** The kernel
-	 * has been able to present a damage rectangle since the virtio-gpu
-	 * backend landed; what was missing was any way for a program to ask.
-	 * A mapping is the kernel getting out of the way, and on a display
-	 * whose pixels are guest memory the host never sees, getting out of the
-	 * way means the pixels are never shown.
+	 * Shows what the program has drawn into the memory SYS_MAP gave it.
 	 *
-	 * Four things about its shape, each of them a decision rather than an
-	 * accident (ruled by the kernel session, 16 September 2026):
+	 * **Why this exists at all.** `/dev/fb0` hands a program the pages and
+	 * the kernel is then not involved -- which is the whole point of a
+	 * mapping, and is true of a framebuffer the display engine scans out
+	 * continuously. It is **not** true of virtio-gpu, which does not read
+	 * guest memory: nothing appears until the guest issues a transfer and a
+	 * flush. So on that adapter a program drawing into its mapping draws
+	 * into memory nobody presents, which is exactly what the graphics
+	 * session's screendump showed.
 	 *
-	 * **It takes the descriptor.** Not because there are two screens --
-	 * there is one -- but because a program that never mapped /dev/fb0 is
-	 * asking to show pixels it does not own, and the descriptor is the only
-	 * evidence the kernel has that it does. `EBADF` otherwise.
+	 * The alternatives were to infer the moment instead of being told it --
+	 * scan the page dirty bits on a timer, or present unconditionally sixty
+	 * times a second. Both guess. **A page write is not a frame:** a program
+	 * that fills the top half and then the bottom is indistinguishable from
+	 * one that finished, so the kernel would be choosing when a frame is done
+	 * and a wrong choice is a torn frame with nothing to attribute it to.
+	 * The program is holding the answer; this is it saying so.
 	 *
-	 * **The rectangle is required and there is no whole-screen spelling.**
-	 * Zero is the obvious sentinel and that is the objection: an
-	 * uninitialised width is zero, and a program that forgot to set one
-	 * would be silently granted the most expensive call in the interface
-	 * instead of being refused. Whole screen is spelled with the width and
-	 * height `SYS_SCREEN` gave you, which you called anyway for the pitch.
+	 * **It takes the descriptor.** Not because there are two screens -- there
+	 * is one -- but because a program that never mapped the framebuffer
+	 * asking to show pixels is asking about memory it does not own, and the
+	 * descriptor is the only evidence the kernel has that it does. EBADF for
+	 * anything that is not the framebuffer.
 	 *
-	 * **A rectangle past the edge is refused, not clamped.** `SYS_MAP`
-	 * refuses a length longer than the file rather than handing back half a
-	 * mapping and calling it success; same reason, same answer.
+	 * **The rectangle is required and there is no "whole screen" spelling.**
+	 * Zero would be the obvious sentinel and that is the objection: an
+	 * uninitialised width is zero, so a program that forgot to set one would
+	 * be quietly granted the most expensive call in the interface instead of
+	 * being refused. A caller that wants everything passes the width and
+	 * height SYS_SCREEN gave it, which it must call anyway for the pitch.
 	 *
-	 * **A display with nothing to flush answers SYS_OK.** Not `ENOSYS` and
-	 * not a third value -- the pixels are on the screen, which is what was
-	 * asked. A program made to tell those apart would grow a branch that is
-	 * wrong on one of the four backends.
+	 * **A rectangle past the edge is refused, not clamped** -- SYS_MAP's rule
+	 * for the same reason, and the same answer.
 	 *
-	 * No double buffer, no vsync, no wait-for-flip. Those are a different
-	 * argument -- about who owns the frame -- and settling it is not a
-	 * prerequisite for putting a picture on a screen. */
-	SYS_PRESENT,	/* (fd, x, y, w, h) */
+	 * **A backend with no flush returns SYS_OK.** Not ENOSYS and not a
+	 * distinct "nothing to do": the pixels are on the screen, which is what
+	 * was asked for. A program forced to tell those apart grows a branch that
+	 * is wrong on one of the three backends this kernel now has.
+	 *
+	 * Deliberately absent: double buffering, vsync, and waiting for a flip.
+	 * Those are a real argument about who owns the frame, and settling it was
+	 * not a precondition for getting a picture onto a screen. */
+	SYS_PRESENT,
 
 	SYS_MAX
 };

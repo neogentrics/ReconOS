@@ -131,7 +131,7 @@ AREA = {
     # label already means on the desktop side.
     'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
     'GX-004': 'display', 'GX-005': 'display', 'GX-006': 'display',
-    'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display', 'GX-010': 'display', 'GX-011': 'display', 'GX-012': 'storage',
+    'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display', 'GX-010': 'display',
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',
@@ -211,6 +211,10 @@ AREA = {
     'KF-246': 'storage',
     'KF-247': 'docs',
     'KF-248': 'kernel',
+    'KF-249': 'kernel',
+    'KF-250': 'network',
+    'KF-251': 'kernel',
+    'KF-252': 'kernel',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
@@ -324,12 +328,39 @@ def existing_titles():
 # allowing a bare `-` with optional spaces on either side will happily match
 # the hyphen in `KF-246` itself, given the chance -- and the chance is a regex
 # that does not say where to start.
-ENTRY_HEAD = r'### ((?:BG|KF|GX)-\d+) *(?:—|–|--|-) *'
+# What an entry's identifier looks like -- **two capitals and a number, not a
+# list of the tracks that exist today.**
+#
+# It was a list twice. `GX-` arrived with the graphics branch and had to be
+# added to five separate literals spread through this file; collapsing those
+# into one constant was right and did not go far enough, because the constant
+# was still `(?:BG|KF|GX)` and `NW-` and `BT-` are already written on two other
+# branches waiting to merge.
+#
+# The blind spot that leaves is the interesting part. The check at the bottom
+# of `parse` compares what the parser found against a second, looser count --
+# and if **both** are built from a list of prefixes, an unknown track is
+# invisible to the parser *and* to the thing watching the parser, and the run
+# reports a register it cannot see all of. A second opinion drawn from the same
+# assumption is not a second opinion.
+#
+# `check-readme-badges.py` had the same fault with a comment above it claiming
+# the opposite -- "every prefix, not a list of the ones that existed when this
+# was written", directly above that list. Both are derived now.
+ENTRY_ID = r'[A-Z]{2}-\d+'
+
+ENTRY_HEAD = r'### (' + ENTRY_ID + r') *(?:—|–|--|-) *'
+
+# The same heading with no separator required and no anchor, so a caller that
+# needs to match mid-string gets it from here rather than slicing a `^` off
+# ENTRY_ANY -- a slice that keeps working right up until the pattern's shape
+# changes, and then stops silently.
 
 # What an entry heading is when you are only counting them. Deliberately
 # looser than ENTRY_HEAD; the gap between the two is what the check below
 # measures.
-ENTRY_ANY = r'^### ((?:BG|KF|GX)-\d+)'
+ENTRY_NUM = r'### (' + ENTRY_ID + r')'
+ENTRY_ANY = r'^' + ENTRY_NUM
 
 
 def parse(path):
@@ -447,7 +478,7 @@ def check_links():
     titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
     linked = wrong = missing = 0
 
-    for m in re.finditer(r'^### ((?:BG|KF|GX)-\d+) .*$', text, re.M):
+    for m in re.finditer(ENTRY_ANY + r' .*$', text, re.M):
         bg = m.group(1)
         after = text[m.end():m.end() + 200].lstrip('\n')
         cite = re.match(r'\[#(\d+)\]', after)
@@ -486,12 +517,12 @@ def check_open(text):
         return 0
 
     open_now = []
-    for block in re.split(r'(?=^### (?:BG|KF|GX)-)', text, flags=re.M):
-        m = re.match(r'### ((?:BG|KF|GX)-\d+)', block)
+    for block in re.split(r'(?=' + ENTRY_ANY + r')', text, flags=re.M):
+        m = re.match(ENTRY_NUM, block)
         if m and not is_fixed(block.split('\n## ')[0]):
             open_now.append(m.group(1))
 
-    named = set(re.findall(r'(?:BG|KF|GX)-\d+', head.group(1)))
+    named = set(re.findall(ENTRY_ID, head.group(1)))
     missing = [b for b in open_now if b not in named]
     extra = [b for b in named if b not in open_now]
 

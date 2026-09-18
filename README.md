@@ -7,7 +7,7 @@ somebody else's.**
 [![release](https://img.shields.io/badge/latest_release-v0.4.37-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.37)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-45_suites,_1971_checks-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-337-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-339-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -447,22 +447,26 @@ is the gate on networking as well as storage.
 
 This is the honest list, and it is the reason the desktop is not on it.
 
-- **A surface for a compositor.** ~~Display. A framebuffer console on whatever
-  the firmware left. No mode setting, no surface for a compositor.~~ **Corrected
-  15 September 2026, and it had been wrong for days.** The kernel sets its own
-  modes — `core/display.c` drives the Bochs/VBE adapter through its DISPI
-  registers and `core/virtio_gpu.c` drives virtio-gpu, behind one `display_ops`;
-  `/dev/fb0` is a file a program maps and draws into; and `a mode of our own`
-  and `a screen to draw on` pass on every boot in the matrix. Two paragraphs
-  further down this same section describe two earlier occasions when this list
-  understated what was built, which is exactly what it had done again.
+- ~~**Display.** A framebuffer console on whatever the firmware left. No mode
+  setting, no surface for a compositor.~~ **Corrected 15 September 2026, and
+  corrected a second time on the 17th after a merge put it back.** The kernel
+  sets its own modes, behind one interface with four backends; `/dev/fb0` is a
+  file a program maps and draws into; `SYS_PRESENT` is how it asks for that
+  drawing to be shown; and the console stops drawing on the panel while a
+  program holds it.
 
-  What is genuinely missing is the half a compositor needs and a console does
-  not: **a program cannot ask the kernel to present what it drew.** On an
-  adapter whose framebuffer is a scanned-out aperture that does not matter, and
-  on virtio-gpu — and on every real GPU — it is the difference between a
-  working screen and a black one. The kernel presents for itself; a program
-  with a mapping has no call to make. See `docs/SIGNALS.md`.
+  **Twice is the point.** This entry was already the example two paragraphs
+  below of a list that understated what was built — and the correction was then
+  lost when two branches resolved this file by each keeping its own side. A
+  stale claim that is re-introduced by a merge is harder to notice than one
+  that was never fixed, because somebody remembers fixing it.
+
+  What is genuinely missing is **modesetting on real silicon**: Intel Gen9 and
+  AMD RDNA2 are identified and keep the mode firmware set. The Gen9 register
+  map and its arithmetic are checked against known answers on every boot; the
+  power wells, PLL, DDI, link training and watermarks are named step by step in
+  `core/intel_modeset.c` rather than attempted, because none of it can be
+  exercised under QEMU and the one machine with the silicon has no serial port.
 - **A way for a program to reach the network.** The network itself is built,
   and so is a socket layer over it — `core/socket.c` has create, bind, listen,
   accept, connect, send and receive. What it has no caller for outside the
