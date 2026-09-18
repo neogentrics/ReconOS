@@ -1746,7 +1746,7 @@ static bool network_service_start(void *user) {
      * itself. So this starts it and says so, rather than inventing a result
      * to return.
      */
-    recon_net_init(wl_display_get_event_loop(server->wl_display));
+    recon_net_init(recon_server_loop(server));
     return true;
 }
 
@@ -2750,7 +2750,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
          * the shell needs it and before any module can ask -- and after the
          * registry, since it wants the machine name from there.
          */
-        recon_net_init(wl_display_get_event_loop(server->wl_display));
+        recon_net_init(recon_server_loop(server));
 
         /* The screens, so the Control Panel can ask about them without
          * knowing what is answering. */

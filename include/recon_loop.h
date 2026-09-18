@@ -56,6 +56,7 @@
 #ifndef RECON_LOOP_H
 #define RECON_LOOP_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 struct recon_loop;
@@ -71,13 +72,36 @@ struct recon_watch;
 typedef void (*recon_timer_fn)(void *user);
 
 /*
- * Called when there is something to read on `fd`.
+ * --- What a watch waits for, and what it is told about ---
+ *
+ * The first two are asked for. The second two are **reported and never asked
+ * for**: a caller cannot want a hangup, and a loop that only told you about
+ * the things you asked for would leave a socket that died mid-request looking
+ * like one that had gone quiet.
+ *
+ * A mask rather than four callbacks, because the callers already treat it as
+ * one: `src/recon_net.c` opens a socket watching for *writable* to learn that
+ * a connect finished, then switches to readable, then back to both while it
+ * has something to send. One watch changing its mind, not four watches.
+ */
+enum {
+    RECON_WATCH_READABLE = 1u << 0,
+    RECON_WATCH_WRITABLE = 1u << 1,
+    RECON_WATCH_HANGUP   = 1u << 2,
+    RECON_WATCH_ERROR    = 1u << 3,
+};
+
+/*
+ * Called when one of those has happened on `fd`.
  *
  * The fd is passed even though the callback usually captured it, because the
  * one thing worse than an unused parameter is a callback that reads a
  * descriptor a caller has since closed and replaced.
+ *
+ * `events` is what happened, which is not the same as what was asked for --
+ * see above.
  */
-typedef void (*recon_readable_fn)(int fd, void *user);
+typedef void (*recon_watch_fn)(int fd, unsigned events, void *user);
 
 /*
  * A timer, created **disarmed**.
@@ -104,13 +128,28 @@ int recon_timer_is_armed(const struct recon_timer *timer);
 void recon_timer_destroy(struct recon_timer *timer);
 
 /*
- * Tell me when there is something to read on `fd`.
+ * Tell me when one of `events` happens on `fd`.
  *
  * The loop does not own the descriptor and never closes it. NULL if it cannot
  * be watched.
+ *
+ * Asking for a hangup or an error is neither refused nor honoured: they arrive
+ * regardless, and a caller that named them has said something that was already
+ * true.
  */
-struct recon_watch *recon_watch_readable(struct recon_loop *loop, int fd,
-    recon_readable_fn fn, void *user);
+struct recon_watch *recon_watch_create(struct recon_loop *loop, int fd,
+    unsigned events, recon_watch_fn fn, void *user);
+
+/*
+ * Change what it is waiting for, without taking it down and putting it back.
+ *
+ * The difference matters on a connecting socket. Destroying the watch and
+ * making another one has a window in it where the descriptor is watched by
+ * nothing -- and what arrives in that window is the reply to the request that
+ * was just sent. False when it could not be changed, which leaves it watching
+ * what it was.
+ */
+bool recon_watch_wants(struct recon_watch *watch, unsigned events);
 
 void recon_watch_destroy(struct recon_watch *watch);
 
@@ -142,11 +181,11 @@ void recon_loop_destroy(struct recon_loop *loop);
 int recon_loop_tick(struct recon_loop *loop, uint64_t now_ms);
 
 /*
- * There is something to read on `fd`. Tell whoever asked.
+ * One of `events` has happened on `fd`. Tell whoever asked.
  *
  * Called by whatever found out, which this file deliberately is not.
  */
-void recon_loop_readable(struct recon_loop *loop, int fd);
+void recon_loop_ready(struct recon_loop *loop, int fd, unsigned events);
 
 /*
  * How long until the next timer comes due, in milliseconds, or **-1 when

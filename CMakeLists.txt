@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.67
+    VERSION 0.4.68
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -1436,6 +1436,11 @@ target_link_libraries(recon_keyring_tests PRIVATE
 add_executable(recon_net_tests
     tests/test_net.c
     src/recon_net.c
+    # The plain half of the event-loop seam. recon_net.c goes through it now
+    # rather than holding a compositor's loop -- which is what makes
+    # `stream_event`, 106 lines of state machine, reachable from a suite at
+    # all. The clock suite has linked this for the same reason since v0.4.58.
+    src/recon_loop.c
     src/recon_registry.c
     # Opening a connection asks the firewall, and a refusal is an error with
     # a code. Neither needs a compositor, which is the property these test

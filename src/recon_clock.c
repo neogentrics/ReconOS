@@ -469,8 +469,12 @@ static void sync_finish(void) {
  * ReconOS has no oscillator to discipline -- it is asking what the time is,
  * once, because somebody pressed a button.
  */
-static void sync_readable(int fd, void *data) {
+static void sync_readable(int fd, unsigned events, void *data) {
     (void)data;
+    /* Only readable was asked for, and a hangup on a datagram socket reaches
+     * the same conclusion by the same path: the read below returns nothing
+     * usable and the reply is treated as not having come. */
+    (void)events;
 
     /*
      * --- No mask, and the answer is better for it ---
@@ -622,7 +626,8 @@ bool recon_clock_check(char *why_out, size_t why_size) {
 
     sync_finish();
     g_sync.fd = fd;
-    g_sync.source = recon_watch_readable(loop, fd, sync_readable, NULL);
+    g_sync.source = recon_watch_create(loop, fd, RECON_WATCH_READABLE,
+        sync_readable, NULL);
     g_sync.state = RECON_CLOCK_ASKING;
     snprintf(g_sync.detail, sizeof(g_sync.detail), "Asking %s...", server);
     return true;

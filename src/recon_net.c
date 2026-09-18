@@ -26,11 +26,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <wayland-server-core.h>
 
 #include "recon_error.h"
 #include "recon_firewall.h"
-#include "recon_loop_wl.h"
+#include "recon_loop.h"
 #include "recon_net.h"
 #include "recon_tls.h"
 #include "recon_registry.h"
@@ -52,7 +51,7 @@
 #define MACHINE_NAME_KEY "system/machine-name"
 #define MACHINE_NAME_DEFAULT "recon-tower"
 
-static struct wl_event_loop *g_loop;
+static struct recon_loop *g_loop;
 
 static struct recon_net_interface g_interfaces[INTERFACES_MAX];
 static int g_interface_count;
@@ -348,13 +347,13 @@ const char *recon_net_machine_name(void) {
 
 struct recon_loop *recon_net_loop(void) {
     /*
-     * Through `recon_loop_from_wl` rather than returned as-is. The two are
-     * the same pointer, so this compiles to nothing -- but written as a bare
-     * return it was a `struct wl_event_loop *` handed out through a
-     * declaration that says `struct recon_loop *`, and the compiler said so.
-     * The cast belongs in the one file that owns it.
+     * Handed back as it is. v0.4.62 had this going through
+     * `recon_loop_from_wl`, because what this file held was a compositor's
+     * loop and the declaration said otherwise -- a cast that compiled to
+     * nothing and had to live somewhere. It holds one of ours now, so there
+     * is nothing to convert and nowhere for the cast to have been wrong.
      */
-    return recon_loop_from_wl(g_loop);
+    return g_loop;
 }
 
 enum recon_net_result recon_net_resolve(const char *host, char *out,
@@ -411,8 +410,8 @@ struct probe {
     bool used;
     int fd;
     char host[128];
-    struct wl_event_source *ready;
-    struct wl_event_source *deadline;
+    struct recon_watch *ready;
+    struct recon_timer *deadline;
     recon_net_probe_fn done;
     void *user;
     struct timespec started;
@@ -474,10 +473,10 @@ static void probe_finish(struct probe *probe, enum recon_net_result result) {
     g_last_elapsed = elapsed;
 
     if (probe->ready != NULL) {
-        wl_event_source_remove(probe->ready);
+        recon_watch_destroy(probe->ready);
     }
     if (probe->deadline != NULL) {
-        wl_event_source_remove(probe->deadline);
+        recon_timer_destroy(probe->deadline);
     }
     if (probe->fd >= 0) {
         close(probe->fd);
@@ -592,7 +591,7 @@ bool recon_net_probe(const char *host, int port, int timeout_ms,
     snprintf(probe->host, sizeof(probe->host), "%s:%d", host, port);
     clock_gettime(CLOCK_MONOTONIC, &probe->started);
 
-    struct wl_event_loop *loop = g_loop;
+    struct recon_loop *loop = g_loop;
 
     /*
      * Watched for writability even when the connect already succeeded. A
@@ -601,9 +600,9 @@ bool recon_net_probe(const char *host, int port, int timeout_ms,
      * instead of two, and means the callback never runs before the caller
      * has finished setting itself up.
      */
-    probe->ready = wl_event_loop_add_fd(loop, fd, WL_EVENT_WRITABLE,
+    probe->ready = recon_watch_create(loop, fd, RECON_WATCH_WRITABLE,
         probe_ready, probe);
-    probe->deadline = wl_event_loop_add_timer(loop, probe_expired, probe);
+    probe->deadline = recon_timer_create(loop, probe_expired, probe);
 
     if (probe->ready == NULL || probe->deadline == NULL) {
         set_error("cannot watch the connection");
@@ -611,14 +610,14 @@ bool recon_net_probe(const char *host, int port, int timeout_ms,
         return false;
     }
 
-    wl_event_source_timer_update(probe->deadline,
+    recon_timer_after(probe->deadline,
         timeout_ms > 0 ? timeout_ms : 3000);
     return true;
 }
 
 /* --- Lifecycle --- */
 
-void recon_net_init(struct wl_event_loop *loop) {
+void recon_net_init(struct recon_loop *loop) {
     g_loop = loop;
     memset(g_probes, 0, sizeof(g_probes));
     recon_net_refresh();
@@ -767,8 +766,8 @@ struct recon_net_stream {
     char application[64];
     char peer[192];
 
-    struct wl_event_source *source;
-    struct wl_event_source *deadline;
+    struct recon_watch *source;
+    struct recon_timer *deadline;
 
     struct recon_net_stream_handlers handlers;
     void *user;
@@ -818,10 +817,10 @@ static void stream_end(struct recon_net_stream *stream,
     void *user = stream->user;
 
     if (stream->source != NULL) {
-        wl_event_source_remove(stream->source);
+        recon_watch_destroy(stream->source);
     }
     if (stream->deadline != NULL) {
-        wl_event_source_remove(stream->deadline);
+        recon_timer_destroy(stream->deadline);
     }
 
     /*
@@ -925,11 +924,11 @@ bool recon_net_stream_start_tls(struct recon_net_stream *stream,
      * thing that can hang.
      */
     if (stream->deadline == NULL) {
-        stream->deadline = wl_event_loop_add_timer(g_loop, stream_expired,
+        stream->deadline = recon_timer_create(g_loop, stream_expired,
             stream);
     }
     if (stream->deadline != NULL) {
-        wl_event_source_timer_update(stream->deadline, STREAM_CONNECT_MS);
+        recon_timer_after(stream->deadline, STREAM_CONNECT_MS);
     }
 
     /*
@@ -939,8 +938,8 @@ bool recon_net_stream_start_tls(struct recon_net_stream *stream,
      * does not know which.
      */
     if (stream->source != NULL) {
-        wl_event_source_fd_update(stream->source,
-            WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+        recon_watch_wants(stream->source,
+            RECON_WATCH_READABLE | RECON_WATCH_WRITABLE);
     }
     return true;
 }
@@ -964,8 +963,8 @@ bool recon_net_stream_send(struct recon_net_stream *stream, const char *bytes,
 
     /* Wanting to write means wanting to hear about writability again. */
     if (stream->source != NULL) {
-        wl_event_source_fd_update(stream->source,
-            WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+        recon_watch_wants(stream->source,
+            RECON_WATCH_READABLE | RECON_WATCH_WRITABLE);
     }
     return true;
 }
@@ -1017,7 +1016,7 @@ static bool stream_flush(struct recon_net_stream *stream) {
      * a socket that is writable and has nothing to write would wake the loop
      * on every turn forever. */
     if (stream->source != NULL) {
-        wl_event_source_fd_update(stream->source, WL_EVENT_READABLE);
+        recon_watch_wants(stream->source, RECON_WATCH_READABLE);
     }
     return true;
 }
@@ -1026,13 +1025,13 @@ static int stream_event(int fd, uint32_t mask, void *data) {
     struct recon_net_stream *stream = data;
     (void)fd;
 
-    if ((mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) != 0) {
+    if ((mask & (RECON_WATCH_HANGUP | RECON_WATCH_ERROR)) != 0) {
         stream_end(stream, RECON_NET_UNREACHABLE, true);
         return 0;
     }
 
     /* The first writability is the connect finishing, not room to send. */
-    if (!stream->connected && (mask & WL_EVENT_WRITABLE) != 0) {
+    if (!stream->connected && (mask & RECON_WATCH_WRITABLE) != 0) {
         int error = 0;
         socklen_t length = sizeof(error);
         if (getsockopt(stream->fd, SOL_SOCKET, SO_ERROR, &error, &length) != 0) {
@@ -1062,7 +1061,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
          * now. For an encrypted one it has to survive the handshake.
          */
         if (stream->deadline != NULL && stream->hostname[0] == '\0') {
-            wl_event_source_remove(stream->deadline);
+            recon_timer_destroy(stream->deadline);
             stream->deadline = NULL;
         }
 
@@ -1101,11 +1100,11 @@ static int stream_event(int fd, uint32_t mask, void *data) {
     if (stream->tls != NULL && !stream->secure) {
         switch (recon_tls_handshake_step(stream->tls)) {
         case RECON_TLS_STEP_WANT_READ:
-            wl_event_source_fd_update(stream->source, WL_EVENT_READABLE);
+            recon_watch_wants(stream->source, RECON_WATCH_READABLE);
             return 0;
         case RECON_TLS_STEP_WANT_WRITE:
-            wl_event_source_fd_update(stream->source,
-                WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+            recon_watch_wants(stream->source,
+                RECON_WATCH_READABLE | RECON_WATCH_WRITABLE);
             return 0;
         case RECON_TLS_STEP_FAILED:
             set_error("%s", recon_tls_last_error());
@@ -1119,11 +1118,11 @@ static int stream_event(int fd, uint32_t mask, void *data) {
 
         /* Handshake done, so the deadline has nothing left to guard. */
         if (stream->deadline != NULL) {
-            wl_event_source_remove(stream->deadline);
+            recon_timer_destroy(stream->deadline);
             stream->deadline = NULL;
         }
 
-        wl_event_source_fd_update(stream->source, WL_EVENT_READABLE);
+        recon_watch_wants(stream->source, RECON_WATCH_READABLE);
 
         if (stream->upgrading) {
             stream->upgrading = false;
@@ -1154,18 +1153,18 @@ static int stream_event(int fd, uint32_t mask, void *data) {
         /* Whatever the owner queued from `opened` wants writing, and this
          * turn's writability has already been consumed by the handshake. */
         if (stream->outgoing_used > 0) {
-            wl_event_source_fd_update(stream->source,
-                WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+            recon_watch_wants(stream->source,
+                RECON_WATCH_READABLE | RECON_WATCH_WRITABLE);
         }
         return 0;
     }
 
-    if ((mask & WL_EVENT_WRITABLE) != 0 && !stream_flush(stream)) {
+    if ((mask & RECON_WATCH_WRITABLE) != 0 && !stream_flush(stream)) {
         stream_end(stream, RECON_NET_UNREACHABLE, true);
         return 0;
     }
 
-    if ((mask & WL_EVENT_READABLE) != 0) {
+    if ((mask & RECON_WATCH_READABLE) != 0) {
         char buffer[4096];
         for (;;) {
             ssize_t got;
@@ -1363,9 +1362,9 @@ static struct recon_net_stream *stream_open(const char *application,
 
     clock_gettime(CLOCK_MONOTONIC, &stream->started);
 
-    stream->source = wl_event_loop_add_fd(g_loop, fd,
-        WL_EVENT_READABLE | WL_EVENT_WRITABLE, stream_event, stream);
-    stream->deadline = wl_event_loop_add_timer(g_loop, stream_expired, stream);
+    stream->source = recon_watch_create(g_loop, fd,
+        RECON_WATCH_READABLE | RECON_WATCH_WRITABLE, stream_event, stream);
+    stream->deadline = recon_timer_create(g_loop, stream_expired, stream);
 
     if (stream->source == NULL || stream->deadline == NULL) {
         set_error("cannot watch the connection");
@@ -1375,7 +1374,7 @@ static struct recon_net_stream *stream_open(const char *application,
 
     /* Guards the connect only; removed once there is something on the other
      * end. A stream that is open and idle is not a stream that has failed. */
-    wl_event_source_timer_update(stream->deadline, STREAM_CONNECT_MS);
+    recon_timer_after(stream->deadline, STREAM_CONNECT_MS);
     return stream;
 }
 

@@ -37,7 +37,8 @@ struct recon_timer {
 
 struct recon_watch {
     struct recon_loop *loop;
-    recon_readable_fn fn;
+    recon_watch_fn fn;
+    unsigned events;
     void *user;
 
     bool live;
@@ -127,8 +128,8 @@ void recon_timer_destroy(struct recon_timer *timer) {
     timer->user = NULL;
 }
 
-struct recon_watch *recon_watch_readable(struct recon_loop *loop, int fd,
-        recon_readable_fn fn, void *user) {
+struct recon_watch *recon_watch_create(struct recon_loop *loop, int fd,
+        unsigned events, recon_watch_fn fn, void *user) {
     if (loop == NULL || fn == NULL || fd < 0) {
         return NULL;
     }
@@ -143,10 +144,19 @@ struct recon_watch *recon_watch_readable(struct recon_loop *loop, int fd,
         w->fn = fn;
         w->user = user;
         w->fd = fd;
+        w->events = events;
         w->live = true;
         return w;
     }
     return NULL;
+}
+
+bool recon_watch_wants(struct recon_watch *watch, unsigned events) {
+    if (watch == NULL || !watch->live) {
+        return false;
+    }
+    watch->events = events;
+    return true;
 }
 
 void recon_watch_destroy(struct recon_watch *watch) {
@@ -231,22 +241,31 @@ int recon_loop_tick(struct recon_loop *loop, uint64_t now_ms) {
     return count;
 }
 
-void recon_loop_readable(struct recon_loop *loop, int fd) {
-    if (loop == NULL || fd < 0) {
+void recon_loop_ready(struct recon_loop *loop, int fd, unsigned events) {
+    if (loop == NULL || fd < 0 || events == 0) {
         return;
     }
 
     for (int i = 0; i < WATCHES_MAX; i++) {
         struct recon_watch *w = &loop->watches[i];
 
-        if (w->live && w->fd == fd) {
+        /*
+         * A hangup or an error reaches a watch whatever it asked for -- see
+         * the enum in the header. Anything else only reaches one that wanted
+         * it, so a socket that is readable does not wake a watch sitting on
+         * it for writability alone.
+         */
+        unsigned told = events &
+            (w->events | RECON_WATCH_HANGUP | RECON_WATCH_ERROR);
+
+        if (w->live && w->fd == fd && told != 0) {
             /*
              * Not disarmed. A watch stays until it is destroyed, because a
              * descriptor with more to read is the ordinary case and a caller
              * that had to re-register after every read would drop whatever
              * arrived in between.
              */
-            w->fn(w->fd, w->user);
+            w->fn(w->fd, told, w->user);
         }
     }
 }

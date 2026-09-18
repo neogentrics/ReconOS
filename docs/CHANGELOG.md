@@ -9,6 +9,72 @@ way for the two to disagree.
 
 ---
 
+## v0.4.68 — the network stack stops holding a compositor
+
+v0.4.62 left this written down and undone:
+
+> `src/recon_net.c` still holds a compositor's loop, and converting it needs the
+> seam to grow writability and a way to change what a watch is waiting for.
+> That is a decision, and it is not this one.
+
+What forced the decision was coverage. `scripts/coverage.sh` puts
+`recon_net.c` at **30.73% of 628 lines**, and asking *which* lines rather than
+how many gave a sharper answer than the percentage: **eighteen functions that
+nothing has ever run, 268 lines between them**, the largest being
+`stream_event` at 106 — the whole state machine for a socket becoming readable
+or writable.
+
+It was unreachable on purpose. The two suites that compile `recon_net.c` link
+the **plain** half of the loop seam, deliberately, so that checking how an SNTP
+reply is read does not need a compositor. `recon_net.c` used wayland's loop
+directly. Nothing could drive it.
+
+### The seam grew to what the caller already did
+
+The rule `include/recon_loop.h` was written under, applied again: it grew to
+fit `recon_net.c` rather than the other way about.
+
+- **A mask, not four callbacks.** `RECON_WATCH_READABLE`, `WRITABLE`,
+  `HANGUP`, `ERROR`. The first two are asked for; the second two are
+  *reported and never asked for*, because a caller cannot want a hangup and a
+  loop that only mentioned what you asked for would leave a socket that died
+  mid-request looking like one that had gone quiet.
+- **`recon_watch_wants`**, to change what a watch waits for without taking it
+  down. The difference matters on a connecting socket: destroy-and-remake has
+  a window in it where the descriptor is watched by nothing, and what arrives
+  in that window is the reply to the request just sent.
+
+The wayland half translates both directions through a written-out table rather
+than assuming the two libraries' bits line up. They do line up today. A seam
+whose whole point is that the other side can be replaced should not rest on
+that.
+
+And the old comment had to go with it. `recon_loop_wl.c` collapsed every event
+to "readable", arguing that a caller reads and finds out anyway. **That was
+true of the one caller it had** and is not true of a socket that has neither
+connected nor died, where reading is exactly what tells you nothing.
+
+### What changed in the network stack
+
+Twenty-eight sites. `recon_net.c` has **no wayland in it at all** now, and the
+blocker report moved it from `wayland-server-core.h` with two markers to
+`ifaddrs.h` with one — which is a real question about how a machine lists its
+interfaces, not an accident of which header got included.
+
+`recon_net_loop()` also stopped needing a cast. v0.4.62 routed it through
+`recon_loop_from_wl` because the file held a compositor's loop and the
+declaration said otherwise; it holds one of ours now, so there is nothing to
+convert and nowhere for the cast to have been wrong.
+
+### And the conversion script asserted the wrong thing first
+
+It checked a count per pattern -- five patterns, and three of the counts were
+wrong, so each run died on my arithmetic rather than on anything about the
+conversion. Replaced with one assertion at the end: **no `wl_`, no `WL_`, no
+`wayland` left in the file.** One check, and not one a wrong guess can satisfy.
+
+---
+
 ## v0.4.67 — eleven help pages nothing could find
 
 ### An error code offers what the help has about it

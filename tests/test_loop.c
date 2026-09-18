@@ -367,7 +367,8 @@ struct reader {
 	int last_fd;
 };
 
-static void on_readable(int fd, void *user) {
+static void on_readable(int fd, unsigned events, void *user) {
+	(void)events;
 	struct reader *r = user;
 
 	r->calls++;
@@ -380,16 +381,16 @@ static void test_a_watch_hears_its_own_descriptor(void) {
 	struct recon_loop *loop = recon_loop_create();
 	struct reader one = { 0, -1 };
 	struct reader two = { 0, -1 };
-	struct recon_watch *a = recon_watch_readable(loop, 7, on_readable, &one);
-	struct recon_watch *b = recon_watch_readable(loop, 9, on_readable, &two);
+	struct recon_watch *a = recon_watch_create(loop, 7, RECON_WATCH_READABLE, on_readable, &one);
+	struct recon_watch *b = recon_watch_create(loop, 9, RECON_WATCH_READABLE, on_readable, &two);
 
 	check(a != NULL && b != NULL, "both are watched");
 
-	recon_loop_readable(loop, 7);
+	recon_loop_ready(loop, 7, RECON_WATCH_READABLE);
 	check(one.calls == 1 && one.last_fd == 7, "the first heard its own");
 	check(two.calls == 0, "and the second heard nothing");
 
-	recon_loop_readable(loop, 11);
+	recon_loop_ready(loop, 11, RECON_WATCH_READABLE);
 	check(one.calls == 1 && two.calls == 0, "a descriptor nobody watches is ignored");
 
 	/*
@@ -397,11 +398,11 @@ static void test_a_watch_hears_its_own_descriptor(void) {
 	 * the ordinary case, and a caller that had to re-register after every
 	 * read would drop whatever arrived in between.
 	 */
-	recon_loop_readable(loop, 7);
+	recon_loop_ready(loop, 7, RECON_WATCH_READABLE);
 	check(one.calls == 2, "and it keeps hearing until it is destroyed");
 
 	recon_watch_destroy(a);
-	recon_loop_readable(loop, 7);
+	recon_loop_ready(loop, 7, RECON_WATCH_READABLE);
 	check(one.calls == 2, "destroyed, it hears no more");
 
 	recon_watch_destroy(b);
@@ -430,7 +431,7 @@ static void test_running_out(void) {
 
 	check(recon_timer_create(loop, NULL, &c) == NULL, "a callback is required");
 	check(recon_timer_create(NULL, count, &c) == NULL, "and so is a loop");
-	check(recon_watch_readable(loop, -1, on_readable, &c) == NULL,
+	check(recon_watch_create(loop, -1, RECON_WATCH_READABLE, on_readable, &c) == NULL,
 	      "and a descriptor that is not one is refused");
 
 	recon_loop_destroy(loop);
@@ -446,7 +447,7 @@ static void test_nothing_at_all(void) {
 	recon_timer_destroy(NULL);
 	recon_watch_destroy(NULL);
 	recon_loop_destroy(NULL);
-	recon_loop_readable(NULL, 3);
+	recon_loop_ready(NULL, 3, RECON_WATCH_READABLE);
 
 	check(!recon_timer_is_armed(NULL), "no timer is not armed");
 	check(recon_loop_tick(NULL, 5) == 0, "no loop fires nothing");

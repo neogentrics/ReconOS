@@ -48,7 +48,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-struct wl_event_loop;
+struct recon_loop;
 
 /* Long enough for an IPv6 address in text, with room to spare. */
 #define RECON_NET_ADDR_MAX 64
@@ -83,7 +83,7 @@ struct recon_net_interface {
  * Nothing here has an opinion about compositors, which is also what lets it be
  * tested without one.
  */
-void recon_net_init(struct wl_event_loop *loop);
+void recon_net_init(struct recon_loop *loop);
 void recon_net_finish(void);
 
 /* --- Looking --- */

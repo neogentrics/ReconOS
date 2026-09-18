@@ -48,10 +48,51 @@ struct wl_timer {
 
 struct wl_watch {
     struct wl_event_source *source;
-    recon_readable_fn fn;
+    recon_watch_fn fn;
     void *user;
     int fd;
 };
+
+/*
+ * The two directions of the same table.
+ *
+ * Written out rather than assumed equal. They happen to line up bit for bit
+ * today and that is a coincidence of two libraries choosing the same order --
+ * a seam whose whole point is that the other side can be replaced should not
+ * rest on it.
+ */
+static uint32_t to_wl(unsigned events) {
+    uint32_t mask = 0;
+
+    if ((events & RECON_WATCH_READABLE) != 0) {
+        mask |= WL_EVENT_READABLE;
+    }
+    if ((events & RECON_WATCH_WRITABLE) != 0) {
+        mask |= WL_EVENT_WRITABLE;
+    }
+    /* Hangup and error are not asked for. wayland reports them regardless and
+     * refuses a request for them, so naming them here would turn a caller
+     * saying something already true into a watch that could not be made. */
+    return mask;
+}
+
+static unsigned from_wl(uint32_t mask) {
+    unsigned events = 0;
+
+    if ((mask & WL_EVENT_READABLE) != 0) {
+        events |= RECON_WATCH_READABLE;
+    }
+    if ((mask & WL_EVENT_WRITABLE) != 0) {
+        events |= RECON_WATCH_WRITABLE;
+    }
+    if ((mask & WL_EVENT_HANGUP) != 0) {
+        events |= RECON_WATCH_HANGUP;
+    }
+    if ((mask & WL_EVENT_ERROR) != 0) {
+        events |= RECON_WATCH_ERROR;
+    }
+    return events;
+}
 
 static int timer_fired(void *data) {
     struct wl_timer *t = data;
@@ -128,19 +169,20 @@ static int watch_ready(int fd, uint32_t mask, void *data) {
     struct wl_watch *w = data;
 
     /*
-     * Readable only. An error or a hang-up on the descriptor arrives here too
-     * and is reported as readable, deliberately: a caller reads, gets zero or
-     * an error, and finds out the same way it would have anyway. Reporting it
-     * as a separate condition would mean every caller handling two paths to
-     * the same conclusion.
+     * Wayland's four, translated to ours one for one.
+     *
+     * This used to collapse all of them to "readable", with an argument that
+     * a caller reads and finds out anyway. That was true of the one caller it
+     * had. It is not true of `src/recon_net.c`, which has to tell a connect
+     * that failed from one that is still in flight -- and on a socket that has
+     * neither connected nor died, reading is exactly what tells you nothing.
      */
-    (void)mask;
-    w->fn(fd, w->user);
+    w->fn(fd, from_wl(mask), w->user);
     return 0;
 }
 
-struct recon_watch *recon_watch_readable(struct recon_loop *loop, int fd,
-        recon_readable_fn fn, void *user) {
+struct recon_watch *recon_watch_create(struct recon_loop *loop, int fd,
+        unsigned events, recon_watch_fn fn, void *user) {
     if (loop == NULL || fn == NULL || fd < 0) {
         return NULL;
     }
@@ -154,13 +196,22 @@ struct recon_watch *recon_watch_readable(struct recon_loop *loop, int fd,
     w->user = user;
     w->fd = fd;
     w->source = wl_event_loop_add_fd((struct wl_event_loop *)loop, fd,
-        WL_EVENT_READABLE, watch_ready, w);
+        to_wl(events), watch_ready, w);
 
     if (w->source == NULL) {
         free(w);
         return NULL;
     }
     return (struct recon_watch *)w;
+}
+
+bool recon_watch_wants(struct recon_watch *watch, unsigned events) {
+    struct wl_watch *w = (struct wl_watch *)watch;
+
+    if (w == NULL || w->source == NULL) {
+        return false;
+    }
+    return wl_event_source_fd_update(w->source, to_wl(events)) == 0;
 }
 
 void recon_watch_destroy(struct recon_watch *watch) {
@@ -201,9 +252,10 @@ int recon_loop_tick(struct recon_loop *loop, uint64_t now_ms) {
     return 0;
 }
 
-void recon_loop_readable(struct recon_loop *loop, int fd) {
+void recon_loop_ready(struct recon_loop *loop, int fd, unsigned events) {
     (void)loop;
     (void)fd;
+    (void)events;
 }
 
 int recon_loop_next_deadline(const struct recon_loop *loop, uint64_t now_ms) {

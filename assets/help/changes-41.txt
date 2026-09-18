@@ -1,104 +1,107 @@
-Said plainly, because it is the thing this version is about:
+The last large piece of the C library, and the one every other piece was
+waiting behind. Measured rather than guessed: 5 symbols, 430 call sites --
+more than two thirds of everything the desktop still could not link.
 
-> *"The system and the kernel are two separate systems when they should be one
-> and the same relying on each other."*
+userland/include/stdlib.h used to open by saying there was no malloc in it,
+so that a caller failed to *link* rather than getting a stub that returned
+nothing and crashed an hour later somewhere else. That paragraph is gone.
 
-They were separate in a way that can be stated as a build dependency.
-recon_init — the program a person sees when a ReconOS machine starts — was
-121 KiB of .rodata inside the kernel image, pulled in by .incbin. The
-installer wrote an EFI partition with a loader and a kernel, formatted a System
-volume, and put nothing in it. The ten directories v0.4.26 added were
-empty.
+### The memory comes from two function pointers
 
-So changing a string on the first-boot screen meant rebuilding and reflashing a
-kernel. Not a figure of speech: on real hardware, a stick, a reboot and a
-firmware menu, to change a sentence in a program.
+malloc.c names no system call. It asks a struct recon_memory_source -- take
+a range, give one back -- and everything else is written against those.
 
-### What was missing was the join, not the parts
+This is the same split userland/init/layout.c uses for making directories,
+and it is here for the same reason: the part that can be wrong is the
+allocator, not the call underneath it. With the source behind a pointer the
+whole file runs on the host against the library it replaces, and against three
+sources no kernel can be made to be:
 
-Almost everything this needed already existed and had never been connected:
+- one that can hand memory back,
+- one that cannot -- which is the configuration ReconOS is actually in, so
+  every scenario runs twice,
+- and one that refuses after a while, which is how the out-of-memory path gets
+  exercised at all.
 
-| | |
-|---|---|
-| a kernel that runs a program from a path on the volume | user_exec_path, built, and passing a self-test on every boot |
-| a standalone recon_init.elf | built, 126,880 bytes |
-| a filesystem that can be written by the installer | reconfs_mount, reconfs_create, reconfs_write_named — all take a volume |
-| a medium that carries a system | no |
-| an installer that writes one | no |
-| a kernel that looks for one | no |
+Boundary tags, coalescing on both sides, free lists segregated by size, and a
+region handed back when nothing in it is in use. An allocation larger than a
+quarter of a megabyte gets a region of its own and returns the whole thing --
+because KERNEL-WANTS measured a browser tab at 6.8 MiB, and a window where
+twelve tabs have been opened and closed has lost eighty-one megabytes if
+nothing is released.
 
-Three of those are now yes.
+### 11,506 checks, and the suite earned its keep on the first run
 
-The medium carries /reconos/init.elf — the first file on a ReconOS
-install medium that is neither a loader nor a kernel.
+The heap is audited after every operation, not at the end: every block of
+every region, footers against headers, each block's flag about its predecessor
+against whether that block is really in use, no two free blocks side by side,
+and the running counters against a fresh count. A shadow copy of what every
+live block should contain is checked alongside it, because alignment and audit
+would both pass an allocator that hands the same address out twice.
 
-The installer writes it onto the System volume as /System/init.elf. This
-is the first thing the installer has ever written into a ReconFS volume;
-every copy before it was FAT32 to FAT32, because everything before it was what
-firmware reads.
+It found BG-194 before the allocator had run anywhere else: in the smallest
+block -- 32 bytes, a 16-byte header and a 16-byte payload -- the payload is
+*exactly* the two free-list pointers, and the footer was being written into its
+last eight bytes. Every smallest-size block on a free list had its prev link
+overwritten by its own size. The fix is the layout every allocator of this
+shape uses: the footer lives in the next block's header, and the flags move
+into the low bits of the size.
 
-And the kernel asks the volume first, falling back to the copy inside
-itself and saying which it used. That line matters more than it looks: the
-whole point is that the screen can now come from somewhere other than the
-kernel, and a boot that does not say where it got its program cannot be used to
-tell whether any of this works.
+That fault would have been invisible until it was a crash somewhere else
+entirely, minutes later, with no allocator in sight.
 
-### Creating on a volume that is not the one you booted from
+### And two instruments that could not see the allocator
 
-rootfs_create_file and rootfs_create_directory did exactly the right three
-moves — walk to the parent, act, rewrite the chain to the root — against
-rootfs(), which is the one volume an installer must never touch.
+BG-195. scripts/measure-libc.py went on reporting 430 call sites
+unanswered while the functions sat in the build, tested, next to it -- because
+it read the objects of *one test target*, and the allocator has a suite of its
+own. That is the third of a family: BG-182 counted from a list of expected
+names, BG-185 corrected the list, and this one defined "the library" as
+whatever one target had compiled. Each time the measurement took its idea of
+the thing from the same place the thing came from.
 
-So the three moves moved down a layer into reconfs_place_file and
-reconfs_place_directory, which take the volume as an argument, and the two
-rootfs_* entry points became those calls with rootfs() filled in. An
-extraction rather than a rewrite: the bodies are the bodies that were there, so
-the suites that covered them cover them still — 67 self-tests, unchanged, on
-the first boot after the move.
+Fixed by removing the name rather than correcting it: every object compiled
+from userland/libc/ anywhere counts, and the script now refuses to report a
+number when a library source has no object, naming it. It caught one on its
+first run.
 
-### The proof, and why it had to be built this way round
+BG-196. check.sh builds every suite twice, once sanitized and once the
+way a release is -- and built the second list from the *desktop's* tests only.
+The four suites under userland/tests/ had never been built optimised: the C
+library, the file layer, the maths, and the allocator. -O2 is where strict
+aliasing and pointer provenance start to matter, and an allocator is nothing
+but pointer arithmetic across type boundaries.
 
-A claim that two things are separate can only be shown by changing one and not
-the other. So:
+It surfaced as a fix that would have been dead code, which is the part worth
+keeping: the sanitized pass aborted on the calloc overflow check, because
+under AddressSanitizer the host's calloc is ASan's and ASan kills the process
+rather than returning NULL. Skipping the comparison under a sanitizer would
+have meant skipping it everywhere. 34 suites became 40.
 
-1. Keep the kernel binary exactly as built.
-2. Change a string in the program and rebuild it.
-3. Build a medium carrying the old kernel and the new program.
-4. Install from it and boot.
+### Where it leaves the library
 
+| | before | now |
+|---|---|---|
+| symbols answered | 72 of 132 | 77 of 132 |
+| call sites answered | 2,478 of 3,113 | 2,908 of 3,113 |
 
-kernel kept:   402df0f6403460f0
-program built: 666db5e4b023ed04
+205 call sites left. The largest group is files and directories at 96, then
+errno at 43 and sockets at 44.
 
-the system: /System/init.elf, from the volume
-first screen [BUILT-WITHOUT-THE-KERNEL]: 1920 x 1200, 7680 bytes a row
+### What it needs from the kernel, which is one call
 
-is the kernel on that disk the one we kept?
-  yes -- byte for byte the kernel built before the program changed
+mem_recon.c asks SYS_MAP for a range with no file behind it -- fd -1,
+the spelling docs/KERNEL-WANTS.md proposes. Today the kernel finds no such
+descriptor and refuses with EBADF, so malloc answers NULL and
+recon_malloc_stats().refusals counts it. The day the kernel accepts it,
+this works with nothing rebuilt.
 
+No new system call number is taken here, deliberately: two sessions build this
+kernel, and a number claimed in advance by the half that does not own core/
+is a number claimed twice. That has happened, and it is in docs/BUGS.md.
 
-Yesterday that was impossible by construction.
-
-### And the test asserts it, because the fallback is designed to hide it
-
-scripts/install-then-boot-test.sh gained an eighth check: the system it
-runs came off the volume. Without it the run passes either way — the kernel
-falls back to its built-in copy deliberately and quietly, so an installer that
-stopped writing /System/init.elf would still produce a machine that boots,
-draws a screen and reports 67 self-tests passing, and the file would still have
-printed 7 of 7 forever.
-
-That is the shape KF-229 was: a check sitting on top of the fault it was
-written to catch, unable to fail. Taking the program off the medium turns the
-run red and names the reason — the system: no /System/init.elf (-7), using the
-copy inside the kernel — while every other check still passes, which is also
-the graceful fallback being shown to work.
-
-### What is still in the kernel image
-
-The copy. It is the fallback for a machine that has not been installed onto —
-every blank disk in the verification rig, and any medium built before this
-existed. Taking it out is a separate decision and wants a machine that can be
-recovered without it.
+The program on the disk links the allocator already, so the wiring is in place
+and compiled -- and the freestanding build has to keep working for it, which is
+what stops it drifting while it is only ever exercised on the host.
 
 ---
