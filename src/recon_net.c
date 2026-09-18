@@ -488,7 +488,7 @@ static void probe_finish(struct probe *probe, enum recon_net_result result) {
     }
 }
 
-static int probe_ready(int fd, uint32_t mask, void *data) {
+static void probe_ready(int fd, unsigned mask, void *data) {
     struct probe *probe = data;
     (void)mask;
 
@@ -509,12 +509,12 @@ static int probe_ready(int fd, uint32_t mask, void *data) {
         recon_error_raisef(NULL, RECON_ERR_F002, "%s", strerror(error));
         probe_finish(probe, RECON_NET_UNREACHABLE);
     }
-    return 0;
+
 }
 
-static int probe_expired(void *data) {
+static void probe_expired(void *data) {
     probe_finish(data, RECON_NET_TIMED_OUT);
-    return 0;
+
 }
 
 int recon_net_probe_count(void) {
@@ -874,7 +874,7 @@ bool recon_net_stream_stats(struct recon_net_stream *stream, size_t *sent,
 
 /* Defined below, beside the other timeouts; needed here for the deadline
  * an upgrade starts. */
-static int stream_expired(void *data);
+static void stream_expired(void *data);
 
 bool recon_net_stream_start_tls(struct recon_net_stream *stream,
         const char *hostname) {
@@ -1021,13 +1021,13 @@ static bool stream_flush(struct recon_net_stream *stream) {
     return true;
 }
 
-static int stream_event(int fd, uint32_t mask, void *data) {
+static void stream_event(int fd, unsigned mask, void *data) {
     struct recon_net_stream *stream = data;
     (void)fd;
 
     if ((mask & (RECON_WATCH_HANGUP | RECON_WATCH_ERROR)) != 0) {
         stream_end(stream, RECON_NET_UNREACHABLE, true);
-        return 0;
+        return;
     }
 
     /* The first writability is the connect finishing, not room to send. */
@@ -1040,7 +1040,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
         if (error != 0) {
             set_error("%s", strerror(error));
             stream_end(stream, RECON_NET_UNREACHABLE, true);
-            return 0;
+            return;
         }
 
         stream->connected = true;
@@ -1075,7 +1075,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
             if (stream->tls == NULL) {
                 set_error("%s", recon_tls_last_error());
                 stream_end(stream, RECON_NET_UNREACHABLE, true);
-                return 0;
+                return;
             }
         } else if (stream->handlers.opened != NULL) {
             stream->in_handler = true;
@@ -1084,7 +1084,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
             if (stream->close_wanted) {
                 stream->close_wanted = false;
                 stream_end(stream, RECON_NET_OK, false);
-                return 0;
+                return;
             }
         }
     }
@@ -1101,15 +1101,15 @@ static int stream_event(int fd, uint32_t mask, void *data) {
         switch (recon_tls_handshake_step(stream->tls)) {
         case RECON_TLS_STEP_WANT_READ:
             recon_watch_wants(stream->source, RECON_WATCH_READABLE);
-            return 0;
+            return;
         case RECON_TLS_STEP_WANT_WRITE:
             recon_watch_wants(stream->source,
                 RECON_WATCH_READABLE | RECON_WATCH_WRITABLE);
-            return 0;
+            return;
         case RECON_TLS_STEP_FAILED:
             set_error("%s", recon_tls_last_error());
             stream_end(stream, RECON_NET_UNTRUSTED, true);
-            return 0;
+            return;
         case RECON_TLS_STEP_DONE:
             break;
         }
@@ -1133,10 +1133,10 @@ static int stream_event(int fd, uint32_t mask, void *data) {
                 if (stream->close_wanted) {
                     stream->close_wanted = false;
                     stream_end(stream, RECON_NET_OK, false);
-                    return 0;
+                    return;
                 }
             }
-            return 0;
+            return;
         }
 
         if (stream->handlers.opened != NULL) {
@@ -1146,7 +1146,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
             if (stream->close_wanted) {
                 stream->close_wanted = false;
                 stream_end(stream, RECON_NET_OK, false);
-                return 0;
+                return;
             }
         }
 
@@ -1156,12 +1156,12 @@ static int stream_event(int fd, uint32_t mask, void *data) {
             recon_watch_wants(stream->source,
                 RECON_WATCH_READABLE | RECON_WATCH_WRITABLE);
         }
-        return 0;
+        return;
     }
 
     if ((mask & RECON_WATCH_WRITABLE) != 0 && !stream_flush(stream)) {
         stream_end(stream, RECON_NET_UNREACHABLE, true);
-        return 0;
+        return;
     }
 
     if ((mask & RECON_WATCH_READABLE) != 0) {
@@ -1177,7 +1177,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
                 if (rc < 0) {
                     set_error("%s", recon_tls_last_error());
                     stream_end(stream, RECON_NET_UNREACHABLE, true);
-                    return 0;
+                    return;
                 }
                 got = rc;
             } else {
@@ -1188,7 +1188,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
                 /* The other end finished. Not a failure: a server that has
                  * said everything it has to say closes. */
                 stream_end(stream, RECON_NET_OK, true);
-                return 0;
+                return;
             }
             if (got < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -1196,7 +1196,7 @@ static int stream_event(int fd, uint32_t mask, void *data) {
                 }
                 set_error("%s", strerror(errno));
                 stream_end(stream, RECON_NET_UNREACHABLE, true);
-                return 0;
+                return;
             }
 
             stream->received += (size_t)got;
@@ -1208,18 +1208,18 @@ static int stream_event(int fd, uint32_t mask, void *data) {
                 if (stream->close_wanted) {
                     stream->close_wanted = false;
                     stream_end(stream, RECON_NET_OK, false);
-                    return 0;
+                    return;
                 }
             }
         }
     }
 
-    return 0;
+
 }
 
-static int stream_expired(void *data) {
+static void stream_expired(void *data) {
     stream_end(data, RECON_NET_TIMED_OUT, true);
-    return 0;
+
 }
 
 /*
