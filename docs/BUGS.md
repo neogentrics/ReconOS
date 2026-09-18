@@ -8282,6 +8282,62 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-260 — A fallback that rebuilt the exact wrong number it was written to replace
+
+[#544](https://github.com/neogentrics/ReconOS/issues/544)
+
+- **Found:** 18 September 2026, auditing this tree for one shape after producing
+  it myself: **an empty capture becoming a plausible number.**
+
+- **What it was.** `install-then-boot-test.sh` looks up where the EFI partition
+  landed, because a literal 1 MiB went stale when a BIOS boot partition was put
+  in front of the ESP. The comment explaining that is still there and is good.
+  The line under it was:
+
+  ```sh
+  esp_lba=$(sgdisk -p "$W/target.img" | awk '$6 == "EF00" { print $2; exit }')
+  esp_at=$(( ${esp_lba:-2048} * 512 ))
+  ```
+
+  **2048 blocks is the stale 1 MiB.** So whenever the lookup found nothing --
+  no EF00 partition, a damaged table, `sgdisk` absent -- the fallback silently
+  reinstated the exact offset the lookup exists to replace, and the test then
+  read a BIOS boot partition as a filesystem and reported *"non DOS media"*.
+  Which the comment four lines above calls *a confusing way to be told that a
+  constant went stale.*
+
+- **Measured rather than assumed**, because the three cases behave differently
+  and only one of them is safe:
+
+  | written as | when empty |
+  |---|---|
+  | `$(( var * 512 ))` | **0**, silently |
+  | `$(( ${var:-2048} * 512 ))` | **1048576**, silently |
+  | `$(( $(cmd) * 512 ))` | **syntax error**, loudly |
+
+  `install-onto-test.sh` uses the third form and is safe by accident. This one
+  used the second.
+
+- **Why it was looked for at all.** The same shape had just produced a false
+  fact in this register: a probe reported `0 sectors written` for a deliberate
+  200 MB write, and that zero was `$((b - a))` over two empty strings after an
+  awk syntax error the author's own `2>/dev/null` had hidden. It was published
+  as *"`/proc/diskstats` is broken on this machine"* and retracted an hour
+  later. Grepping the tree for arithmetic over captured values found this in
+  two minutes.
+
+- **Fixed** by refusing instead of defaulting: an empty `esp_lba` now fails with
+  the reason, and says why it is not falling back. The dead `${esp_lba:-2048}`
+  left in the success message went too -- a default in a message implies a
+  fallback that no longer exists.
+
+- **Latent, not live.** Every image the matrix builds has an EF00 partition, so
+  this has never fired. It is recorded because the conditions that make it fire
+  -- `sgdisk` missing, a table damaged by the thing under test -- are exactly
+  the conditions under which somebody would be reading the output most closely.
+
+- **Status:** fixed, kernel 0.5.0.
+
 ### KF-259 — Six paths failed about processors that had been preempted perfectly well
 
 [#540](https://github.com/neogentrics/ReconOS/issues/540)
