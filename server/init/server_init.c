@@ -773,8 +773,35 @@ static int name_wanted(const struct http_request *r, const char *body,
 	}
 
 	rc = http_form_parse(body, body_len, &form);
-	if (rc != HTTP_OK)
+	if (rc != HTTP_OK) {
+		/*
+		 * Translated here, because only this end knows where the
+		 * bytes came from.
+		 *
+		 * `http_form_parse` answers `HTTP_EFIELD_LONG` and
+		 * `HTTP_ETOOMANY`, which are the same verdicts the *header*
+		 * parser uses -- and `http_status_for` maps both to **431,
+		 * Request Header Fields Too Large**. That is the right status
+		 * for a header and the wrong one for a form: a client with one
+		 * long text field was being told to look at the one part of
+		 * its request that was fine.
+		 *
+		 * Found on the machine, by a check that sent six kilobytes to
+		 * this endpoint and got a status about headers. VF-036.
+		 *
+		 * The verdicts themselves are not changed: they are correct in
+		 * the parser's own terms, and a parser that returned a status
+		 * would be a parser that knew about HTTP responses.
+		 */
+		if (rc == HTTP_EFIELD_LONG || rc == HTTP_ETOOMANY) {
+			http_response_simple(out, 413, "text/plain",
+			                     "413 Content Too Large: a field is"
+			                     " longer than this accepts\n", 58);
+			*answered = 1;
+			return HTTP_OK;
+		}
 		return rc;
+	}
 
 	*wanted = http_form_get(&form, "name");
 	if (!*wanted) {
@@ -1153,8 +1180,24 @@ static int handle_upload(const struct http_request *r, const char *body,
 		                     "409 Conflict: that name is taken\n", 33);
 		return HTTP_OK;
 	}
-	if (wrote < 0)
-		return HTTP_EINTERNAL;
+	if (wrote < 0) {
+		/*
+		 * **503, not 500.** The request was fine and the file could
+		 * not be put anywhere: a diskless boot has no `/System` to
+		 * write to, and this endpoint is then unavailable rather than
+		 * broken.
+		 *
+		 * `HTTP_EINTERNAL` says *the server's own answer failed*,
+		 * which is a different claim and sends whoever reads the log
+		 * looking for a fault in the server. Found by the machine
+		 * checks, which run this endpoint with and without a volume.
+		 * Same class as the 431 above. VF-036.
+		 */
+		http_response_simple(out, 503, "text/plain",
+		                     "503 Service Unavailable: no volume to"
+		                     " keep it on\n", 51);
+		return HTTP_OK;
+	}
 
 	escaped = as_json(file->filename, name_room, sizeof(name_room));
 	if (!escaped)

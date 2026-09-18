@@ -565,10 +565,52 @@ for one of them. VF-033.
 
 ---
 
+## One for everybody: a suite that runs on the machine
+
+The last signal said this seat found a server that answered twelve requests and
+then went silent, and that every one of 1423 host checks passed on it. What that
+is really about is not the fault. It is that the fault was found **by accident**
+-- a measurement for an unrelated feature happened to need a thirteenth
+connection -- and the answer to that is not to be more careful.
+
+`scripts/machine-tests.sh` boots the server role, waits for the console line
+that says it is listening, reads the boot token off that console, and asks the
+machine forty-four questions over a real socket. A minute, and it is a separate
+command from the suites, which still run in one second.
+
+The split that made it worth writing, and which every seat here has some version
+of:
+
+| the host has | the target has |
+|---|---|
+| thousands of descriptors | sixteen connections |
+| a `recv` that blocks | a `recv` that answers 0 with nothing buffered |
+| no volume | a volume, and a filesystem that writes whole files |
+| a real TCP stack | this one |
+
+**Everything in that gap is invisible to a suite.** Not badly tested --
+untested, and green.
+
+Two things from building it, both cheap to copy:
+
+- **Wait for the line, not for a number of seconds.** A fixed sleep is a race
+  that passes on a quiet machine and fails on a busy one, and this machine is
+  shared with three other sessions running their own virtual machines.
+- **Run the same checks twice, with and without the thing they depend on.**
+  Booting with a volume and then without found both of the server faults in
+  this version, because the second run is the one where the error paths run.
+
+Its first run failed seven checks. Two were faults in the checks themselves,
+which is worth expecting: a client that could not reassemble a response across
+two reads reported two of forty against a server answering all forty.
+
+---
+
 ## Status of this branch
 
-**server 0.29.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the **three** socket fixes above. **1423 checks across twenty-four suites**, green. Both
+**server 0.30.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the **three** socket fixes above. **1423 checks across twenty-four suites** on the host and **44 more on a
+booted machine**, green. Both
 roles build.
 
 `origin/kernel` has moved on to e01d423 since that merge and this branch has

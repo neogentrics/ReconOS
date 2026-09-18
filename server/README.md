@@ -29,10 +29,11 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.29.0 |
+| **Version** | 0.30.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
-| **Checks** | 1423 across twenty-four suites, by `scripts/server-tests.sh` |
+| **Checks** | 1423 across twenty-four suites, by `scripts/server-tests.sh`,
+and 44 more on a booted machine by `scripts/machine-tests.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -167,6 +168,34 @@ They run on the host and need no machine:
 ./scripts/server-tests.sh
 ```
 
+### And the ones that need a machine
+
+```bash
+./scripts/machine-tests.sh
+```
+
+Boots the server role under QEMU, waits for the line that says it is listening,
+reads the boot token off the console, and asks the machine forty-four questions
+over a real socket. About a minute.
+
+**It exists because every suite above was green on a server that answered twelve
+requests and then went silent for the rest of the boot.** That is VF-034, and
+the way it was found is the point: a measurement for an unrelated feature
+happened to need a thirteenth connection. Nothing in this repository would
+otherwise have asked for one.
+
+A host has thousands of descriptors, a real TCP stack and a `recv` that blocks.
+The target has sixteen connections, a `recv` that answers 0 with nothing
+buffered, and a volume. **Everything in the gap between those two lists was
+unchecked**, and that is what this covers: two hundred connections in a row,
+forty requests down one, a six-kilobyte body, the guard, the volume, gzip
+decompressed by a library this project did not write, and every status carrying
+its phrase on the wire rather than in a table.
+
+Its first run found two statuses that were wrong in the same way — a form field
+past its bound answered **431**, which names headers, and an upload on a
+diskless boot answered **500**, which says the server broke. VF-036.
+
 This used to be three hand-typed `gcc` commands, which is the practice
 **VF-012** is about: two of them said `-std=c11`, which is not what this
 project builds with, and following them left two suites unbuildable.
@@ -287,6 +316,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.30.0** | **A suite that runs on the machine, because every other one runs on a host.** VF-034 was found by accident — 1423 checks green on a server that answered twelve requests and then went silent — and the answer to a fault found by accident is not to be more careful. `scripts/machine-tests.sh` boots the server role, waits for the line that says it is listening, reads the boot token off the console, and asks forty-four questions over a real socket: two hundred connections in a row, forty down one, a six-kilobyte body, the guard, the volume, gzip decompressed by a library this project did not write, and every status carrying its phrase **on the wire** rather than in a table. A minute, and a separate command from the suites for that reason. **Its first run failed seven checks, and two of them were faults in the checks rather than in the server** — a client that cannot reassemble a response across two reads reported two of forty against a server answering all forty, and a check that posted six kilobytes into a 512-byte form field measured the bound rather than the property. The two real ones are the same fault twice: **a status that names the wrong end of the request.** A form field past its bound answered `431 Request Header Fields Too Large`, sending a client to look at the one part of its request that was fine; an upload on a diskless boot answered `500`, which claims the server broke when the truth is that there is nowhere to put the file. 413 and 503 now. VF-036. |
 | **0.29.0** | **Responses are compressed — and the machine turned out to answer twelve requests and then stop for ever.** The compression is arithmetic against a measured constraint rather than a feature: bytes on this wire cost about a millisecond each (VF-013), and everything this server builds in memory is text. `server/http/deflate.c` — gzip, with fixed Huffman codes and a stored-block fallback whenever compressing would grow the body. On the machine: the console page 1547 → 980 bytes, the JSON log **3818 → 815**. A compressor cannot be checked by reading it, so it is checked three ways: the suite carries **its own inflater, written from RFC 1951 in the opposite shape** — reading the fixed tables by their bit patterns where the encoder writes them by their ranges — `scripts/gzip-probe.py` puts the same bytes through Python's `zlib`, and the CRC is checked against the published value for `123456789`. Five compressor faults were put back on purpose; four failed the suite loudly and **the fifth only cost bytes**, which is the kind nothing reports, so a corpus shaped like prose was added with a bound between the two numbers it produces. Then the real finding: measuring bytes out needed more than a dozen requests, and **the server answered twelve and went silent for the rest of the boot** — in 0.28.0 too, and for who knows how long, because no probe had ever opened a thirteenth connection. A packet capture showed every one of those twelve closing cleanly, four-way; the kernel's own allocator said `tcp: no free connection`. `tcp_tick` is the only thing that frees a connection out of `TIME_WAIT` and it was called from `socket_recvfrom` alone — so a server with no live connection, sitting in `accept`, never expired anything, and **the only thing that could free a slot was a connection the table was too full to accept.** One line in `socket_accept`, and the same machine now answers 200 of 200. VF-034, VF-035. |
 | **0.28.0** | **One endpoint, two representations — and two statuses that would have gone out as `Unknown`.** `docs/WEB.md` has said since 0.12.0 that the access log as JSON was *unblocked and not built* because it needed a decision about content negotiation first: two renderings of one thing drift exactly like two lists do. The decision is `server/http/accept.c` — 74 checks — and the answer is one handler, one walk over the entries, and a branch on which bytes to emit. `Accept` is the header most often handled by looking for a substring, which fails in **both** directions: `application/json` is a substring of `application/jsonrequest`, and a client sending only a wildcard matches nothing. Both silently. So: `q` orders the ranges and the header is not in preference order; `q=0` means *not acceptable*, which is the only way a client can say "anything but this"; and the **most specific** matching range decides an offer, so `text/*;q=1, text/plain;q=0` excludes plain rather than preferring it. Parameters other than `q` are checked for shape and ignored, because Chrome sends `v=b3` on every request and refusing it would answer 400 to every browser. Watched failing against four plausible implementations — and one of them survived, which is how the missing case was found: every substring check used a hostile *range* and none a hostile *offer*, so `text` matched `textual/plain` with all sixty-nine checks green. **Then the machine printed `HTTP/1.1 406 Unknown`**: the X-macro that stopped `http_reason` and its suite drifting could never catch a status missing from the table entirely, because both read the same table. `scripts/check-statuses.py` reads the other direction and found a second one the same minute — a 502 the resolver has been able to send since 0.18.0. VF-033. |
 | **0.27.0** | **The API can be driven by a program, not only by a person.** Everything this server accepted was what an HTML form sends; `POST /api/name` now also takes `application/json`, chosen by `Content-Type` and **never by sniffing the body** — a body valid in both shapes would otherwise mean whichever reader was tried first. A media type this cannot read is **415**, not 400: the request is well formed and this cannot read it, and those are different facts. `server/http/jsonread.c` is the reader, 128 checks, and most of them are documents that must be refused: a trailing comma, single quotes, an unquoted key, `NaN`, `Infinity`, `01`, `+1`, `.5`, `1e`, a lone surrogate, a raw control byte, a second document after the first. **And the same key twice**, which RFC 8259 leaves undefined and real parsers split on — so `{"role":"reader","role":"admin"}` is two documents depending on who reads it, and the reader that checked a permission may not be the one that acted. Two narrowings come from the machine rather than from taste: **no floating point**, because the init program is built with `-mno-80387 -mno-sse`, so a number is kept as text and `json_int` refuses anything that is not an exact integer rather than rounding; and **ASCII only**, to stay symmetric with the writer, which cannot emit a byte above 0x7F. Watched failing against four lenient parsers (5, 4, 2 and 2 of 128). On the machine: a document, a document with a charset parameter, a form and no content type at all all set the name; five malformed documents and one unreadable media type were refused, each naming the byte. VF-032. |

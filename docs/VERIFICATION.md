@@ -1374,3 +1374,63 @@ the JSON log       3818 -> 815 bytes
   streaming path, and `deflate.c` compresses a buffer in one call with no
   incremental form. Files are the largest bodies this server sends, so the
   gap is worth naming rather than leaving for somebody to discover.
+
+### VF-036 -- a suite that runs on the machine, and the two statuses it found
+
+- **Why it was built** VF-034 was found by accident: 1423 checks across
+  twenty-four suites, all green, on a server that answered twelve requests and
+  then went silent for the rest of the boot. **The answer to a fault found by
+  accident is not to be more careful.** Every suite in `CMakeLists.txt` runs on
+  a host with thousands of descriptors, a real TCP stack and a `recv` that
+  blocks; the target has sixteen connections, a `recv` that answers 0 with
+  nothing buffered, and a volume. Everything in the gap was unchecked.
+- **What it is** `scripts/machine-tests.sh` boots the server role under QEMU,
+  waits for the console line that says it is listening -- rather than for a
+  number of seconds, which is a race that passes on a quiet machine -- reads
+  the boot token off that console, and runs `scripts/machine-checks.py` against
+  it over a real socket. Forty-four checks, about a minute.
+- **What is deliberately not in it.** Parsing. `test_http.c` hands the parser
+  three hundred hostile strings in a millisecond; a check here costs a socket
+  and a second. A check that a host suite could make is a check in the wrong
+  place.
+- **Its first run failed seven, and the ratio is the part worth recording: two
+  of the seven were faults in the checks themselves.**
+  - A keep-alive client that assumed one `recv` per response reported **two of
+    forty** against a server that was answering all forty. A client that cannot
+    reassemble a response across two reads is not measuring the server.
+  - A check that posted six kilobytes into a form field got 431 -- correctly,
+    because `HTTP_FORM_VALUE_MAX` is 512. It was measuring the bound instead of
+    the property it was named for, and now uses the upload endpoint, which
+    wants a body that size.
+  - Two more were a check comparing two fetches of a page that **reports how
+    many requests it has served**, so the two differed by one digit; and a
+    request built through a helper that supplies its own `Host`, so it sent two
+    and got the 400 the check beside it exists to produce.
+- **And two were the same fault in the server, twice: a status that names the
+  wrong end of the request.**
+
+```
+a form field past its bound   ->  431 Request Header Fields Too Large
+an upload with no volume      ->  500 Internal Server Error
+```
+
+  The first sends a client with one long text field to look at the one part of
+  its request that was fine. `http_form_parse` answers `HTTP_EFIELD_LONG` and
+  `HTTP_ETOOMANY`, which are the *header* parser's verdicts, and
+  `http_status_for` maps both to 431 -- right for a header, wrong for a body.
+  Translated in the caller, because only the caller knows which end the bytes
+  came from; the verdicts themselves are correct in the parser's own terms and
+  are not changed. **413** now.
+
+  The second claims the server broke when the truth is that a diskless boot has
+  nowhere to put the file. The request was fine and the endpoint is
+  unavailable, which is **503**, and the body says so.
+- **Both were found by running the same checks twice**, once with a volume and
+  once without. The `--diskless` mode exists for that: 41 checks without, 44
+  with, and the difference is the file checks, which say they are being skipped
+  rather than quietly passing.
+- **What it does not cover, said plainly:** one machine, one architecture,
+  QEMU's virtio-net, and a single boot. It would not have caught VF-023 -- four
+  boots spent on a kernel built for the wrong role -- and it says nothing about
+  real hardware. The bare-metal procedure on the `network` branch is the answer
+  to that one, and it needs a window from Joshua rather than a script.
