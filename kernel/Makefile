@@ -360,7 +360,7 @@ ifeq ($(ROLE),server)
 # next one. What differs is the program in front of them, not the look of it.
 INIT_SRCS := ../server/init/server_init.c \
 	     ../server/http/request.c ../server/http/serve.c ../server/http/chunked.c \
-	     ../server/http/files.c ../server/http/form.c ../server/http/cache.c ../server/http/range.c ../server/http/escape.c ../server/http/json.c ../server/http/jsonread.c ../server/http/accept.c ../server/http/multipart.c ../server/auth.c ../server/dns.c ../server/ntp.c ../server/identity.c ../server/service.c ../server/log.c ../server/logfile.c ../server/dial.c ../server/config.c \
+	     ../server/http/files.c ../server/http/form.c ../server/http/cache.c ../server/http/range.c ../server/http/escape.c ../server/http/json.c ../server/http/jsonread.c ../server/http/accept.c ../server/http/deflate.c ../server/http/multipart.c ../server/auth.c ../server/dns.c ../server/ntp.c ../server/identity.c ../server/service.c ../server/log.c ../server/logfile.c ../server/dial.c ../server/config.c \
 	     ../userland/init/screen.c ../userland/init/layout.c \
 	     $(INIT_LIBC)
 

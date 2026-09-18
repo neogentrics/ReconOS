@@ -905,6 +905,8 @@ add_executable(recon_server_serve_tests
     server/http/request.c
     server/http/serve.c
     server/http/chunked.c
+    server/http/accept.c
+    server/http/deflate.c
     server/tests/test_http_serve.c)
 
 add_test(NAME server_http_serve COMMAND recon_server_serve_tests)
@@ -921,6 +923,8 @@ add_executable(recon_server_files_tests
     server/http/request.c
     server/http/serve.c
     server/http/chunked.c
+    server/http/accept.c
+    server/http/deflate.c
     server/http/files.c
     server/http/cache.c
     server/http/range.c
@@ -944,6 +948,8 @@ add_executable(recon_server_stream_tests
     server/http/request.c
     server/http/serve.c
     server/http/chunked.c
+    server/http/accept.c
+    server/http/deflate.c
     server/tests/test_http_stream.c)
 
 add_test(NAME server_http_stream COMMAND recon_server_stream_tests)
@@ -1057,6 +1063,8 @@ add_executable(recon_server_concurrent_tests
     server/http/request.c
     server/http/serve.c
     server/http/chunked.c
+    server/http/accept.c
+    server/http/deflate.c
     server/tests/test_http_concurrent.c)
 
 add_test(NAME server_http_concurrent COMMAND recon_server_concurrent_tests)
@@ -1184,6 +1192,20 @@ add_executable(recon_server_accept_tests
     server/tests/test_accept.c)
 
 add_test(NAME server_accept COMMAND recon_server_accept_tests)
+
+# Compressing, and decompressing it with something else.
+#
+# A compressor cannot be checked by reading it: every fault it can have
+# produces bytes as plausible as correct ones. So the suite carries its own
+# inflater, written from RFC 1951 rather than from `deflate.c` and in the
+# opposite shape -- it reads the fixed tables by their bit patterns where the
+# encoder writes them by their ranges. `scripts/gzip-probe.py` is the third
+# opinion, through Python's zlib.
+add_executable(recon_server_deflate_tests
+    server/http/deflate.c
+    server/tests/test_deflate.c)
+
+add_test(NAME server_deflate COMMAND recon_server_deflate_tests)
 
 # Three answers, and the two ways of confusing them.
 #

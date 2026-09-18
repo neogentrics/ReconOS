@@ -211,6 +211,27 @@ struct socket *socket_accept(struct socket *s)
 	netdev_service();
 	ip_flush_pending();
 
+	/*
+	 * And the timers, which is the third of these and was the one missing.
+	 *
+	 * `tcp_tick` is the only thing that frees a connection out of
+	 * TIME_WAIT, and until this line it was called from `socket_recvfrom`
+	 * alone. A server with no live connection never calls `recv` -- it sits
+	 * in `accept` -- so nothing expired, the sixteen-entry table filled
+	 * with closed connections, and **the only thing that could have freed a
+	 * slot was a connection the table was too full to accept.**
+	 *
+	 * Measured rather than reasoned about: a server answered twelve
+	 * requests on separate connections and then went silent for the rest of
+	 * the boot, including after forty-five seconds of idling. With one
+	 * connection held open -- so that `recv` was being called, and with it
+	 * this function's missing sibling -- the same server answered
+	 * thirty-three of forty, and went back to answering none the moment
+	 * that connection closed. The capture shows every one of those
+	 * connections closing cleanly, four-way, on the wire. See VF-034.
+	 */
+	tcp_tick();
+
 	idx = tcp_accept_ready(s->conn);
 
 	if (idx < 0)

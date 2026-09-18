@@ -1229,3 +1229,148 @@ only a type it cannot send   HTTP/1.1 406 Not Acceptable
   itself. All twenty-five rows across four files are designated now, so the
   next field added to a route is simply absent from the tables that do not care
   about it.
+
+### VF-034 -- the server answered twelve requests and then stopped, for ever
+
+- **How it was found** Not by looking for it. Measuring what compression saved
+  needed a log with something in it, which needed more than a dozen requests --
+  and the machine stopped answering at twelve. **Every probe this project has
+  ever run used fewer than a dozen connections**, so nothing had ever asked for
+  a thirteenth.
+- **It is not a regression.** The previous version, 0.28.0, built from its own
+  commit, answers exactly twelve as well. How long it has been true is not
+  known; nothing in the repository would have shown it.
+- **Measured, and it does not recover:**
+
+```
+first burst                 answered 12 of 30
+after waiting 5 seconds     answered 0 of 8
+after waiting 10 seconds    answered 0 of 8
+after waiting 30 seconds    answered 0 of 8
+```
+
+- **The wire says the server is doing everything right.** A capture on the
+  virtual NIC, twelve flows and a thirteenth:
+
+```
+flow  2..13   SYN SYN+ACK ACK ACK+PSH ACK ACK+PSH ACK+PSH ACK ACK+FIN ACK ACK+FIN ACK
+flow 14       SYN SYN
+```
+
+  Twelve complete conversations, each with a clean four-way close. The
+  thirteenth SYN is retransmitted and never answered. Nothing is half-open and
+  nothing leaks on the wire.
+- **The server is not at fault either**, checked before blaming anything else:
+  `http_serve_once` accepts only when it has a free pool slot, `conn_drop`
+  closes, and the instrumented `web_poll` never once reported a failing
+  listener. `accept` was simply answering *nobody there*.
+- **The kernel's own allocator, instrumented, said which table:**
+
+```
+tcp: no free connection
+```
+
+  Not the socket table -- `TCP_MAX_CONNECTIONS`, which is sixteen.
+- **And the cause, which is one missing call.** A connection closed by this
+  server ends in `TIME_WAIT`, and `tcp_tick` is the only thing that frees one.
+  `tcp_tick` was called from **`socket_recvfrom` and nowhere else**. A server
+  with no live connection does not call `recv` -- it sits in `accept` -- so
+  nothing ever expired. **The only thing that could have freed a slot was a
+  connection the table was too full to accept.**
+- **Confirmed by making the prediction and testing it.** If the diagnosis is
+  right, giving the server something to call `recv` on should drain the table.
+  A client that sends half a request and holds the connection open does exactly
+  that:
+
+```
+with one connection held open:   answered 33 of 40
+and afterwards, with none held:  answered  0 of 20
+```
+
+  The first ordering of that experiment was wrong and is worth recording: the
+  burst ran first, exhausted the table, and the connection meant to be *held*
+  could never be accepted -- so the test reported 0 and proved nothing. A
+  measurement whose setup depends on the fault it is measuring has to be
+  ordered around it.
+- **The fix is one line**, in `socket_accept`, beside the two calls that were
+  already there: `netdev_service()` and `ip_flush_pending()` ran on every
+  accept and `tcp_tick()` did not. A caller asking for a connection is as much
+  entitled to a serviced stack as a caller asking for data.
+- **After it**, on the same machine:
+
+```
+first burst                 answered 30 of 30
+after waiting 5 seconds     answered 8 of 8
+after waiting 10 seconds    answered 8 of 8
+after waiting 30 seconds    answered 8 of 8
+two hundred connections     answered 200 of 200
+```
+
+- **The kernel change is on this branch and is not this seat's to own.**
+  `docs/SIGNALS.md` carries it as a ready signal with the measurements, and no
+  KF is claimed.
+- **What this says about the suites**, which is the part worth keeping: 1423
+  checks, twenty-four suites, all green, on a server that stopped answering
+  after twelve requests. Every one of them runs on a host with thousands of
+  descriptors and a real TCP stack. **A property that only exists on the target
+  is only ever going to be found on the target**, and the thing that found it
+  was wanting a number for a different feature.
+
+### VF-035 -- a compressor, and the one fault of five that only cost bytes
+
+- **What was built** `server/http/deflate.c`: gzip, with fixed Huffman codes, a
+  stored-block fallback, and a greedy matcher. Wired into `send_response`, so
+  the decision is the server's rather than each handler's -- the same argument
+  as the security headers and the access log.
+- **A compressor cannot be verified by reading it.** Every fault it can have
+  produces bytes exactly as plausible as correct ones: a Huffman code written
+  least-significant-bit first, a distance emitted through the literal table, a
+  length whose extra bits are off by one. And a round trip through the same
+  author's compress-then-decompress proves only that two functions written
+  from one misreading agree with each other.
+- **So it is checked three ways.** The suite carries its own inflater, written
+  from RFC 1951 and deliberately in the opposite shape -- it reads the fixed
+  tables by their **bit patterns** where the encoder writes them by their
+  **ranges**. `scripts/gzip-probe.py` sends the same bytes through Python's
+  `zlib`, which this project did not write. And the CRC is checked against the
+  published value for `123456789`, which is the one number here that somebody
+  else wrote down.
+- **Five faults were put back on purpose:**
+
+```
+a Huffman code written LSB first          9 of 55 fail
+a distance emitted as a literal code      6 of 55 fail
+a length's extra bits omitted             5 of 55 fail
+the CRC's final complement removed        2 of 55 fail
+positions inside a match not registered   0 of 55 fail
+```
+
+- **The fifth is the interesting one.** It produces a **perfectly correct
+  stream** that simply compresses worse, because the matcher cannot see back
+  past a match it has just emitted. Every round trip passed. A fault that only
+  costs bytes is invisible to a suite that only checks bytes come back.
+- **Measured on this repository's own text**, with and without that loop:
+
+```
+server/README.md     42546 -> 21184 with, 23727 without
+docs/WEB.md          29644 -> 14976 with, 16800 without
+server/http/serve.c  48763 -> 19836 with, 22530 without
+```
+
+  About eleven per cent, consistently. So the suite gained a corpus shaped like
+  that -- words drawn from a small vocabulary, which is what makes text
+  compressible -- and a bound set **between** the two numbers it produces:
+  5934 with, 6571 without, and the check is 6400.
+- **On the machine**, which is where the reason for any of this lives:
+
+```
+the console page   1547 -> 980 bytes
+the JSON log       3818 -> 815 bytes
+```
+
+  Both decompressed by Python's `gzip` on the other side of the socket, not by
+  anything here.
+- **What is not compressed, said plainly**: files. They go through the
+  streaming path, and `deflate.c` compresses a buffer in one call with no
+  incremental form. Files are the largest bodies this server sends, so the
+  gap is worth naming rather than leaving for somebody to discover.

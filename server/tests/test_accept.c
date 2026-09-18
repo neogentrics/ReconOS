@@ -294,6 +294,47 @@ int main(void)
 	ok(http_accept_matches("*", "plain", "text/plain") == 0,
 	   "and a wildcard type with a real subtype matches nothing");
 
+	/* --- Accept-Encoding, which is the same grammar with no slash -------------
+	 *
+	 * The case that separates this header from `Accept` is the absent one.
+	 * A client that did not mention encodings gets identity, deliberately:
+	 * RFC 9110 permits sending any coding when the field is missing, and
+	 * doing so is how a hand-written client that never heard of gzip is
+	 * handed bytes it cannot read. See `accept.h`.
+	 */
+	ok(http_accept_gzip(0) == 0, "no Accept-Encoding at all means no gzip");
+	ok(http_accept_gzip("gzip") == 1, "asking for gzip gets it");
+	ok(http_accept_gzip("GZIP") == 1, "and a shouted coding is the same coding");
+	ok(http_accept_gzip("gzip, deflate") == 1, "in a list");
+	ok(http_accept_gzip("deflate, gzip, br") == 1, "anywhere in a list");
+	ok(http_accept_gzip("gzip;q=0.5") == 1, "with a weight below one");
+	ok(http_accept_gzip("deflate") == 0, "a coding this cannot send is not gzip");
+	ok(http_accept_gzip("br, deflate, zstd") == 0, "nor are three of them");
+	ok(http_accept_gzip("identity") == 0, "nor is identity");
+	ok(http_accept_gzip("") == 0, "an empty header is not an invitation");
+
+	/* `q=0` is a refusal here too, and a named refusal beats a wildcard --
+	 * `*, gzip;q=0` means anything except gzip. */
+	ok(http_accept_gzip("gzip;q=0") == 0, "gzip at zero is a refusal");
+	ok(http_accept_gzip("*") == 1, "a wildcard accepts it");
+	ok(http_accept_gzip("*;q=0") == 0, "and a wildcard at zero refuses it");
+	ok(http_accept_gzip("*, gzip;q=0") == 0,
+	   "a named refusal beats a wildcard that accepts");
+	ok(http_accept_gzip("*;q=0, gzip") == 1,
+	   "and a named acceptance beats a wildcard that refuses");
+
+	/* What a browser sends. */
+	ok(http_accept_gzip("gzip, deflate, br, zstd") == 1,
+	   "Chrome's own Accept-Encoding");
+
+	/* A header that does not parse answers no rather than refusing the
+	 * request: this one is a preference, not a decision about whether the
+	 * request can be answered, so the safe reading is the bytes everybody
+	 * can read. */
+	ok(http_accept_gzip("gzip;q=") == 0, "a broken weight sends identity");
+	ok(http_accept_gzip("gzip;;q=1") == 0, "and so does a broken parameter");
+	ok(http_accept_gzip("gzip q=1") == 0, "and a missing comma");
+
 	/* --- asked for nothing ---------------------------------------------------- */
 	ok(http_accept_pick("*/*", 0, 0) == ACCEPT_NONE,
 	   "a route that offers nothing can satisfy nobody");

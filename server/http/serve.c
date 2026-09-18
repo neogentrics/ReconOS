@@ -40,6 +40,8 @@
 
 #include "serve.h"
 #include "chunked.h"
+#include "accept.h"
+#include "deflate.h"
 
 #include <errno.h>
 #include <string.h>
@@ -331,6 +333,80 @@ static int read_more(int fd, char *buf, size_t *have, size_t room,
 	"Content-Security-Policy: default-src 'none'; style-src 'self'; " \
 	"form-action 'self'; frame-ancestors 'none'; base-uri 'none'\r\n"
 
+/* --- compressing a response -------------------------------------------------
+ *
+ * --- Why this is here and not in each handler ---
+ *
+ * The same reason the security headers and the access log are: a transformation
+ * every handler must remember is one the next handler will not do. A handler
+ * fills in a body; whether that body goes on the wire compressed is a property
+ * of the response and the client, and both are known here.
+ *
+ * --- What is compressed, and what is not ---
+ *
+ * **Only whole responses.** The streaming path hands a handler a sink and it
+ * writes as it goes; `deflate.c` compresses a buffer in one call and has no
+ * incremental form. Files are served by the streaming path, so **files are not
+ * compressed today** -- which is worth stating plainly rather than leaving for
+ * somebody to discover, because files are the largest bodies this server sends.
+ * What is compressed is the console, the JSON API and the log, which are the
+ * bodies produced in memory.
+ *
+ * **Only text.** A media type that is already compressed -- an image, a
+ * download -- costs processor time to grow slightly. The list below is the
+ * types this server actually produces.
+ *
+ * **Only above a threshold.** gzip framing is eighteen bytes before a single
+ * byte of data, so a short body always grows. The threshold is measured against
+ * that, not chosen for neatness.
+ *
+ * **And only if the result is actually smaller**, which `deflate.c` already
+ * decides for itself by falling back to a stored block. Checked again here
+ * because a stored block plus framing is still larger than the body.
+ */
+
+/* Below this, framing costs more than compression saves. */
+#define HTTP_GZIP_MIN  256
+
+/*
+ * Where a compressed body lives.
+ *
+ * Static, sized for the largest body this server builds in memory, and one of
+ * them because the server is single-process and `conn_answer` runs to
+ * completion. A second concurrent compression would be a change to that shape
+ * rather than to this line -- the same note `deflate.c` makes about its
+ * matcher.
+ */
+static unsigned char GZIP_BODY[HTTP_BODY_MAX + 1024];
+
+/* The types worth compressing: the ones this server produces that are text. */
+static int compressible(const char *type)
+{
+	static const char *const TYPES[] = {
+		"text/", "application/json", "image/svg+xml"
+	};
+	size_t k;
+
+	if (!type)
+		return 0;
+	for (k = 0; k < sizeof(TYPES) / sizeof(TYPES[0]); k++) {
+		const char *want = TYPES[k];
+		size_t i;
+
+		for (i = 0; want[i]; i++) {
+			char c = type[i];
+
+			if (c >= 'A' && c <= 'Z')
+				c = (char)(c + 32);
+			if (c != want[i])
+				break;
+		}
+		if (!want[i])
+			return 1;
+	}
+	return 0;
+}
+
 /* --- the response ------------------------------------------------------- */
 
 void http_response_simple(struct http_response *out, int status,
@@ -361,9 +437,34 @@ static int send_response(int fd, const struct http_request *req,
                          unsigned long *counter)
 {
 	char head[2048];
+	const char *body = res->body;
+	size_t body_len = res->body_len;
+	const char *encoding = 0;
 	int n;
 
-	(void)req;
+	/*
+	 * Compress, if everything lines up. Decided here rather than by the
+	 * handler -- see the block above `HTTP_GZIP_MIN`.
+	 *
+	 * `req` is NULL for the refusals `send_status` writes, which are a
+	 * line of text each and below the threshold anyway.
+	 */
+	if (req && body_len >= HTTP_GZIP_MIN && compressible(res->content_type)
+	    && body_len <= HTTP_BODY_MAX
+	    && http_accept_gzip(http_header_get(req, "accept-encoding"))) {
+		long got = deflate_gzip(body, body_len, GZIP_BODY,
+		                        sizeof(GZIP_BODY));
+
+		/* Only if it actually got smaller. `deflate.c` already falls
+		 * back to a stored block rather than growing the data, and a
+		 * stored block plus eighteen bytes of framing is still larger
+		 * than the body it wraps. */
+		if (got > 0 && (size_t)got < body_len) {
+			body = (const char *)GZIP_BODY;
+			body_len = (size_t)got;
+			encoding = "gzip";
+		}
+	}
 
 	n = snprintf(head, sizeof(head),
 	             "HTTP/1.1 %d %s\r\n"
@@ -373,12 +474,20 @@ static int send_response(int fd, const struct http_request *req,
 	             SECURITY_HEADERS,
 	             res->status, http_reason(res->status),
 	             server_name ? server_name : "ReconOS",
-	             (unsigned long)res->body_len,
+	             (unsigned long)body_len,
 	             keep_alive ? "keep-alive" : "close");
 	if (n < 0 || (size_t)n >= sizeof(head))
 		return -1;
 
-	if (res->content_type && res->body_len > 0) {
+	if (encoding) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "Content-Encoding: %s\r\n", encoding);
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	}
+
+	if (res->content_type && body_len > 0) {
 		int m = snprintf(head + n, sizeof(head) - (size_t)n,
 		                 "Content-Type: %s\r\n", res->content_type);
 		if (m < 0 || (size_t)(n + m) >= sizeof(head))
@@ -386,15 +495,37 @@ static int send_response(int fd, const struct http_request *req,
 		n += m;
 	}
 
-	/* See `negotiated` in `serve.h`: the route said its body depends on
+	/*
+	 * See `negotiated` in `serve.h`: the route said its body depends on
 	 * `Accept`, and a response that does not say so is one a cache serves
-	 * to the next client that asked for something else. */
-	if (vary_accept) {
-		int m = snprintf(head + n, sizeof(head) - (size_t)n,
-		                 "Vary: Accept\r\n");
-		if (m < 0 || (size_t)(n + m) >= sizeof(head))
-			return -1;
-		n += m;
+	 * to the next client that asked for something else.
+	 *
+	 * **`Accept-Encoding` is named whenever the body could have been
+	 * compressed, not only when it was.** A cache that stored the identity
+	 * form of a compressible response and served it to a client that asked
+	 * for gzip is harmless; one that stored the gzip form and served it to
+	 * a client that did not ask is a page of binary. The condition is
+	 * therefore the same one the compression decision started from, minus
+	 * the client's own header.
+	 */
+	{
+		const char *vary = 0;
+
+		if (vary_accept && req && compressible(res->content_type))
+			vary = "Accept, Accept-Encoding";
+		else if (vary_accept)
+			vary = "Accept";
+		else if (req && compressible(res->content_type)
+		         && res->body_len >= HTTP_GZIP_MIN)
+			vary = "Accept-Encoding";
+
+		if (vary) {
+			int m = snprintf(head + n, sizeof(head) - (size_t)n,
+			                 "Vary: %s\r\n", vary);
+			if (m < 0 || (size_t)(n + m) >= sizeof(head))
+				return -1;
+			n += m;
+		}
 	}
 
 	if (res->extra_name && res->extra_value) {
@@ -413,9 +544,13 @@ static int send_response(int fd, const struct http_request *req,
 
 	if (send_all(fd, head, (size_t)n, counter) != 0)
 		return -1;
-	if (head_only || res->body_len == 0)
+	/* `body` and `body_len`, not `res->`: they are the compressed form when
+	 * one was made, and the declared `Content-Length` above is theirs. A
+	 * mismatch here is a response whose length lies, which is a connection
+	 * the next request is read out of the middle of. */
+	if (head_only || body_len == 0)
 		return 0;
-	return send_all(fd, res->body, res->body_len, counter);
+	return send_all(fd, body, body_len, counter);
 }
 
 /* --- streaming ------------------------------------------------------------ */

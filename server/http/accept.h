@@ -120,4 +120,27 @@ int http_accept_pick(const char *header, const char *const *offers,
 int http_accept_matches(const char *range_type, const char *range_sub,
                         const char *type);
 
+/*
+ * Will this client take `gzip`?
+ *
+ * `Accept-Encoding` has the same grammar as `Accept` with bare tokens in place
+ * of media ranges, so this is the same parser with the slash taken out -- and
+ * it is a separate function rather than a flag because the two headers differ
+ * on the case that matters, which is the absent one.
+ *
+ * **A missing header means no.** RFC 9110 permits a server to send any coding
+ * when the field is absent, and doing so is how a hand-written client that
+ * never heard of compression gets handed bytes it cannot read. Identity always
+ * works and costs only bytes; guessing costs the response.
+ *
+ * `gzip;q=0` is a refusal, `*` accepts it, and `*;q=0` with no explicit `gzip`
+ * refuses it -- the same rules the media ranges follow, for the same reason.
+ *
+ * Returns 1 when gzip may be sent, 0 otherwise. A header that does not parse
+ * answers 0: this one is a preference rather than a decision about whether the
+ * request can be answered at all, so the safe reading is to send the bytes
+ * everybody can read rather than to refuse the request.
+ */
+int http_accept_gzip(const char *header);
+
 #endif

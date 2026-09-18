@@ -386,3 +386,117 @@ int http_accept_pick(const char *header, const char *const *offers,
 
 	return best;
 }
+
+/*
+ * `Accept-Encoding`, which is the same grammar with the slash taken out.
+ *
+ * Written as its own walk rather than by making `read_header` optional about
+ * the slash. That function's whole value is that it refuses a media range that
+ * is not one, and a flag telling it not to would be a flag somebody passes by
+ * mistake -- the shape this project keeps naming, where one reader is asked to
+ * behave as two.
+ *
+ * It is also much smaller, because the only question is about one coding.
+ */
+int http_accept_gzip(const char *header)
+{
+	const char *p = header;
+	const char *end;
+	int gzip_weight = -1;		/* -1: not mentioned */
+	int star_weight = -1;
+
+	/* See `accept.h`: absent means no, deliberately. */
+	if (!header)
+		return 0;
+
+	for (end = header; *end; end++)
+		;
+
+	for (;;) {
+		const char *start;
+		size_t len;
+		int weight = 1000;
+		int is_gzip = 0, is_star = 0;
+
+		while (p < end && (is_space(*p) || *p == ','))
+			p++;
+		if (p >= end)
+			break;
+
+		start = p;
+		while (p < end && (is_token(*p) || *p == '*'))
+			p++;
+		len = (size_t)(p - start);
+		if (len == 0)
+			return 0;	/* not a coding: read nothing further */
+
+		{
+			static const char WORD[] = "gzip";
+			size_t i;
+
+			is_star = (len == 1 && start[0] == '*');
+			if (len == sizeof(WORD) - 1) {
+				is_gzip = 1;
+				for (i = 0; i < len; i++) {
+					if (lower(start[i]) != WORD[i])
+						is_gzip = 0;
+				}
+			}
+		}
+
+		for (;;) {
+			const char *name;
+			size_t name_len;
+
+			while (p < end && is_space(*p))
+				p++;
+			if (p >= end || *p != ';')
+				break;
+			p++;
+			while (p < end && is_space(*p))
+				p++;
+			name = p;
+			while (p < end && is_token(*p))
+				p++;
+			name_len = (size_t)(p - name);
+			if (name_len == 0)
+				return 0;
+			while (p < end && is_space(*p))
+				p++;
+			if (p >= end || *p != '=')
+				return 0;
+			p++;
+			while (p < end && is_space(*p))
+				p++;
+			if (name_len == 1 && lower(*name) == 'q') {
+				if (!read_q(&p, end, &weight))
+					return 0;
+				continue;
+			}
+			if (!skip_value(&p, end))
+				return 0;
+		}
+
+		if (is_gzip)
+			gzip_weight = weight;
+		else if (is_star)
+			star_weight = weight;
+
+		while (p < end && is_space(*p))
+			p++;
+		if (p >= end)
+			break;
+		if (*p != ',')
+			return 0;
+		p++;
+	}
+
+	/*
+	 * Named beats the wildcard, the same rule the media ranges follow: a
+	 * client writing `*, gzip;q=0` means *anything except gzip*, and a
+	 * reader that took the wildcard would send the one thing excluded.
+	 */
+	if (gzip_weight >= 0)
+		return gzip_weight > 0;
+	return star_weight > 0;
+}

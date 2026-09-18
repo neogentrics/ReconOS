@@ -94,7 +94,33 @@ static int handle_echo(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/*
+ * A body worth compressing: over the threshold, and text.
+ *
+ * Built rather than written out, so its size is stated once and the checks
+ * below can compare against it.
+ */
+#define BIG_LEN 2000
+
+static int handle_big(const struct http_request *r, const char *body,
+                      size_t body_len, struct http_response *out, void *ctx)
+{
+	static char text[BIG_LEN + 1];
+	static int built;
+	size_t i;
+
+	(void)r; (void)body; (void)body_len; (void)ctx;
+	if (!built) {
+		for (i = 0; i < BIG_LEN; i++)
+			text[i] = (char)('a' + (int)(i % 7));
+		built = 1;
+	}
+	http_response_simple(out, 200, "text/plain", text, BIG_LEN);
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
+	{ .method = "GET", .prefix = "/big", .exact = 1, .handler = handle_big },
 	{ .method = "GET", .prefix = "/", .exact = 1, .handler = handle_root },
 	{ .method = "GET", .prefix = "/api/status",
 	  .exact = 1, .handler = handle_status },
@@ -789,6 +815,107 @@ int main(void)
 
 		ok(*GUARD_SAW > 0, "the policy was actually consulted");
 	}
+
+	/* --- compressing a response ---------------------------------------------
+	 *
+	 * The decision is the server's, not the handler's, so these checks are
+	 * about a handler that knows nothing about compression at all.
+	 */
+	exchange(port, "GET /big HTTP/1.1\r\nHost: m16\r\n"
+	               "Accept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a body worth compressing is answered");
+	ok(strstr(reply, "Content-Encoding: gzip\r\n") != 0,
+	   "and says it is compressed");
+	ok(strstr(reply, "\r\n\r\n\x1f\x8b") != 0,
+	   "and the body begins with the gzip magic");
+	ok(strstr(reply, "Vary: Accept-Encoding\r\n") != 0,
+	   "and names the header its body depends on, so a cache cannot "
+	   "hand it to a client that did not ask");
+
+	/*
+	 * The length, which is the check that matters most.
+	 *
+	 * A `Content-Length` that described the *uncompressed* body while the
+	 * compressed one was sent would leave the connection holding the
+	 * difference, and the next request would be read out of the middle of
+	 * it -- which is the desynchronisation the whole framing section of
+	 * `docs/WEB.md` is about, arriving from the server's own side.
+	 */
+	{
+		/*
+		 * Counted from what arrived, not with `strlen`.
+		 *
+		 * A gzip body contains NUL bytes, so every `strstr` and
+		 * `strlen` in this file stops early inside one. The first
+		 * draft of this check used `strlen` and would have passed
+		 * against a server that sent nothing at all. `exchange`
+		 * already returns the real count; this uses it.
+		 */
+		size_t got = exchange(port, "GET /big HTTP/1.1\r\nHost: m16\r\n"
+		                            "Accept-Encoding: gzip\r\n"
+		                            "Connection: close\r\n\r\n",
+		                      reply, sizeof(reply));
+		const char *at = strstr(reply, "Content-Length: ");
+		const char *body = strstr(reply, "\r\n\r\n");
+		unsigned long said = 0;
+
+		ok(at != 0, "the answer carries a length");
+		if (at)
+			said = strtoul(at + 16, 0, 10);
+		ok(said > 0 && said < BIG_LEN,
+		   "which is smaller than the body the handler produced");
+		ok(body != 0 && got == (size_t)(body + 4 - reply) + said,
+		   "and exactly that many body bytes arrived");
+	}
+
+	/* A client that did not ask gets the bytes it can read. */
+	exchange(port, "GET /big HTTP/1.1\r\nHost: m16\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a client that said nothing about encodings is answered");
+	ok(strstr(reply, "Content-Encoding") == 0,
+	   "and gets no encoding it did not ask for");
+	ok(strstr(reply, "Content-Length: 2000\r\n") != 0,
+	   "and the whole body");
+	ok(strstr(reply, "Vary: Accept-Encoding\r\n") != 0,
+	   "and the answer still names the header, because it could have "
+	   "depended on it");
+
+	exchange(port, "GET /big HTTP/1.1\r\nHost: m16\r\n"
+	               "Accept-Encoding: gzip;q=0\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(strstr(reply, "Content-Encoding") == 0,
+	   "a client that refused gzip by name does not get it");
+
+	exchange(port, "GET /big HTTP/1.1\r\nHost: m16\r\n"
+	               "Accept-Encoding: br, zstd\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(strstr(reply, "Content-Encoding") == 0,
+	   "nor does one that asked only for codings this cannot send");
+
+	/* Below the threshold, where framing costs more than it saves. */
+	exchange(port, "GET / HTTP/1.1\r\nHost: m16\r\n"
+	               "Accept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"), "a short page is answered");
+	ok(strstr(reply, "Content-Encoding") == 0,
+	   "and is not compressed -- eighteen bytes of framing would make it "
+	   "bigger");
+
+	/* HEAD must report the length a GET would send, which is now the
+	 * compressed one. A HEAD that reported the other number would be a
+	 * different answer from the GET it mirrors. */
+	exchange(port, "HEAD /big HTTP/1.1\r\nHost: m16\r\n"
+	               "Accept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"), "HEAD is answered");
+	ok(strstr(reply, "Content-Encoding: gzip\r\n") != 0,
+	   "and says what the body would have been encoded as");
+	ok(strstr(reply, "Content-Length: 2000\r\n") == 0,
+	   "and reports the compressed length, not the handler's");
+	ok(strstr(reply, "\x1f\x8b") == 0, "and sends no body");
 
 	/* --- a chunked body, over a real socket ---------------------------------
 	 *

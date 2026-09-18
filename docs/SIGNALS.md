@@ -109,6 +109,80 @@ if (s->local_ip == IPV4_ANY) {
 **What is unfinished, and it matters:** fixing the packets did not make
 `connect` work. See directly below.
 
+### 3. `tcp_tick` was called from one place, and a server dies after twelve requests
+
+**The sharpest thing this seat has ever found, and it is one line.**
+
+**What landed.** `tcp_tick()` in `socket_accept`, beside `netdev_service()` and
+`ip_flush_pending()`, which were already there.
+
+**What it changed in an interface somebody else depends on.** Nothing in a
+signature. It makes a listening server able to answer more than twelve
+requests in a boot.
+
+**What was tested, and against what.** A server role boot, before and after,
+and the previous version built from its own commit to show it is not a
+regression:
+
+```
+before   first burst              answered 12 of 30
+         after waiting 5 seconds  answered  0 of 8
+         after waiting 30 seconds answered  0 of 8
+         (0.28.0, built from its own commit: also 12)
+
+after    first burst              answered 30 of 30
+         after every wait         answered  8 of 8
+         two hundred connections  answered 200 of 200
+```
+
+**The diagnosis, because the fix is small and the reason is not.** A capture on
+the virtual NIC shows twelve complete conversations, each closing cleanly
+four-way, and a thirteenth SYN retransmitted and never answered:
+
+```
+flow  2..13   SYN SYN+ACK ACK ACK+PSH ACK ACK+PSH ACK+PSH ACK ACK+FIN ACK ACK+FIN ACK
+flow 14       SYN SYN
+```
+
+Your allocator, instrumented, names the table:
+
+```
+tcp: no free connection
+```
+
+A connection this server closes ends in `TIME_WAIT`, and `tcp_tick` is the only
+thing that frees one. It was reached from `socket_recvfrom` and nowhere else. A
+server with no live connection does not call `recv` -- it sits in `accept` -- so
+nothing expired, the sixteen-entry table filled with closed connections, and
+**the only thing that could have freed a slot was a connection the table was too
+full to accept.**
+
+Confirmed by predicting the consequence and testing it: a client that sends half
+a request and holds the connection open gives the server something to call
+`recv` on, and the same machine answered **33 of 40** -- then 0 of 20 the moment
+that connection closed.
+
+**What is unfinished.** Three things this seat can see and did not touch,
+because they are yours to weigh:
+
+- `TCP_MAX_CONNECTIONS` is **16**, and a connection sits in `TIME_WAIT` for two
+  seconds. Sixteen connections in two seconds is not a large burst for a web
+  server; the fix above makes the table drain, and it does not make it big.
+- `tcp_tick` is now called from two places and is still driven by a program
+  asking for something. A machine with nothing running would still expire
+  nothing, which matters the day something other than this server listens.
+- The fix is in `kernel/core/socket.c`, which is the wrong branch for it. Take
+  it, number it, own the version bump -- this seat claims no KF.
+
+```c
+/* socket_accept, kernel/core/socket.c */
+netdev_service();
+ip_flush_pending();
+tcp_tick();          /* <- added */
+
+idx = tcp_accept_ready(s->conn);
+```
+
 ---
 
 ## Open, and yours: `connect` never reports a handshake that completed
@@ -493,8 +567,8 @@ for one of them. VF-033.
 
 ## Status of this branch
 
-**server 0.28.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the two socket fixes above. **1330 checks across twenty-three suites**, green. Both
+**server 0.29.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the **three** socket fixes above. **1423 checks across twenty-four suites**, green. Both
 roles build.
 
 `origin/kernel` has moved on to e01d423 since that merge and this branch has
@@ -504,7 +578,7 @@ lines and neither touches a signature.
 
 What runs on the machine: a web server holding several connections at once,
 with name-based virtual hosts read from a configuration file, chunked request
-bodies, and writes behind a boot token; a DNS resolver
+bodies, gzip on the way out, and writes behind a boot token; a DNS resolver
 answering with real addresses; an NTP client measuring this machine's clock
 against `time.cloudflare.com`, which it resolves itself; and a supervisor
 holding two services.
