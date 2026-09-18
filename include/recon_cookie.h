@@ -180,6 +180,24 @@ int recon_cookie_sweep(struct recon_cookie_jar *jar, time_t now);
 int recon_cookie_forget_host(struct recon_cookie_jar *jar, const char *host);
 int recon_cookie_forget_all(struct recon_cookie_jar *jar);
 
+/*
+ * Drop what was only for this window, and keep the rest.
+ *
+ * A cookie with no expiry is a **session** cookie, and the word is the
+ * specification: it lasts until the browser closes. So something has to end
+ * it -- and until v0.4.74 nothing did. Closing a built-in application hides
+ * its window rather than destroying it, so the destructor that seals the jar
+ * ran at shutdown and not on close, and a session cookie outlived the browser
+ * closing by the whole of the rest of the login.
+ *
+ * Which is the failure hardest to see from outside: everything looks right,
+ * because the cookie that *should* come back does. The one that should not is
+ * indistinguishable from it unless somebody is looking for it.
+ *
+ * Returns how many were dropped.
+ */
+int recon_cookie_forget_session(struct recon_cookie_jar *jar);
+
 /* --- Across a restart ---------------------------------------------------
  *
  * Kept in a sealed file, which is a file only the signed-in account can read.

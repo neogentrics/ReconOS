@@ -672,6 +672,14 @@ void recon_appwin_hide(struct recon_appwin *win) {
     if (win->impl->visibility != NULL) {
         win->impl->visibility(win->user, false);
     }
+    /*
+     * And the half that only a close means. After `visibility`, so an
+     * application that implements both has stopped working before it is asked
+     * to put anything away.
+     */
+    if (win->impl->closed != NULL) {
+        win->impl->closed(win->user);
+    }
     recon_damage_all(win->server);
 }
 

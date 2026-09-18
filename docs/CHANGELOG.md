@@ -9,6 +9,64 @@ way for the two to disagree.
 
 ---
 
+## v0.4.74 — closing the browser did not end the session
+
+Set two cookies: one with a day to run, one for the window only. Close the
+window. Open it again. **Both came back.**
+
+A cookie with no expiry is a *session* cookie, and the word is the
+specification -- it lasts until the browser closes. So one surviving the
+browser closing is not a cosmetic fault; it is the only thing that definition
+forbids.
+
+### Closing an application does not destroy its window
+
+`recon_apps.c` calls `recon_appwin_hide`. The window keeps its tabs, its
+scroll position and its jar, and opening the application again shows the same
+one back -- which is right, and is why it was written that way.
+
+But `web_destroy` was where the jar got sealed. A hidden window is not
+destroyed, so that ran **at shutdown and never before**: the jar was never
+written on a close, session cookies were never dropped, and both cookies just
+stayed in memory where nothing had asked them to be.
+
+`tests/test_cookie.c` had twenty-two tests on this and none of them could see
+it. Every one calls `recon_cookie_jar_save` itself. Not one goes through a
+window, and *whether the call happens at all* is the one thing a test that
+makes the call cannot check.
+
+### The obvious fix would have signed you out for minimising
+
+There is a `visibility(void *user, bool visible)` callback, and the browser
+never implemented it. It looks exactly like the hook this needs.
+
+It is not. **All four of show, hide, minimize and restore reach it** --
+verified by reading the four call sites, after writing a comment that
+confidently said otherwise. A browser that ended its session on
+`visibility(false)` would sign you out of everything **every time you
+minimised the window**, which is a far worse bug than the one being fixed, and
+it would have looked like a clean fix in the diff.
+
+So the seam grew a second half. `closed` fires from `recon_appwin_hide` alone,
+and the header for `visibility` now says in as many words that it fires on
+minimize too -- because the next person to reach for it will reach for it for
+this reason.
+
+### Both halves, photographed
+
+`scripts/cookie-survives-shot.sh` now runs twice against a live desktop, and
+`windows` is asked in between so neither run can pass by not having happened:
+
+| | closed and reopened | minimized and restored |
+| --- | --- | --- |
+| **before** | `keepme=survived; session-only=gone` | — |
+| **after** | `keepme=survived` | `keepme=survived; session-only=gone` |
+
+The second column is the one worth having. It fails on the fix that looks
+right.
+
+---
+
 ## v0.4.73 — 103 faults from opening four applications
 
 Nineteen versions today, all of them green, and none of them had looked at the

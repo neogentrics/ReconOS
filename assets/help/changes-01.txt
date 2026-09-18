@@ -1,62 +1,55 @@
-Nineteen versions today, all of them green, and none of them had looked at the
-machine. So: a live desktop, four applications opened, and then errors log.
+Set two cookies: one with a day to run, one for the window only. Close the
+window. Open it again. Both came back.
 
-103 faults. Every one of them an icon.
+A cookie with no expiry is a *session* cookie, and the word is the
+specification -- it lasts until the browser closes. So one surviving the
+browser closing is not a cosmetic fault; it is the only thing that definition
+forbids.
 
+### Closing an application does not destroy its window
 
-VT-B001  A file could not be read -- '/System/Icons/Metallic/help.png': No such file or directory
-VT-B001  A file could not be read -- '/System/Icons/help.ico': No such file or directory
+recon_apps.c calls recon_appwin_hide. The window keeps its tabs, its
+scroll position and its jar, and opening the application again shows the same
+one back -- which is right, and is why it was written that way.
 
+But web_destroy was where the jar got sealed. A hidden window is not
+destroyed, so that ran at shutdown and never before: the jar was never
+written on a close, session cookies were never dropped, and both cookies just
+stayed in memory where nothing had asked them to be.
 
-### The guard the comment described did not exist
+tests/test_cookie.c had twenty-two tests on this and none of them could see
+it. Every one calls recon_cookie_jar_save itself. Not one goes through a
+window, and *whether the call happens at all* is the one thing a test that
+makes the call cannot check.
 
-recon_fs_read raised VT-B001 whenever fopen failed, and the comment
-beside it said what that was supposed to mean:
+### The obvious fix would have signed you out for minimising
 
-> B-001's first half: the file is there — resolve and readable both said so —
-> and it still would not open.
+There is a visibility(void *user, bool visible) callback, and the browser
+never implemented it. It looks exactly like the hook this needs.
 
-Neither of them said so. recon_fs_resolve works on paths that do not
-exist yet, because a write has to be able to create one. readable answers a
-question about *permission* and returns true for an administrator without
-looking at the disk at all.
+It is not. All four of show, hide, minimize and restore reach it --
+verified by reading the four call sites, after writing a comment that
+confidently said otherwise. A browser that ended its session on
+visibility(false) would sign you out of everything every time you
+minimised the window, which is a far worse bug than the one being fixed, and
+it would have looked like a clean fix in the diff.
 
-So B-001 fired on every missing file — and looking for a file that may not be
-there is how a search works. The icon resolver tries Metallic/x.ico,
-Metallic/x.png, x.ico, x.png; finding the fourth means three faults
-logged, every time, for working correctly.
+So the seam grew a second half. closed fires from recon_appwin_hide alone,
+and the header for visibility now says in as many words that it fires on
+minimize too -- because the next person to reach for it will reach for it for
+this reason.
 
-A log that fills with normal operation is a log nobody reads, which is the
-sentence recon_apps.c already reaches about repeating a line for as long as a
-program sits there. And the error log is the thing somebody opens when
-something has actually gone wrong.
+### Both halves, photographed
 
-ENOENT is the caller's business, and a NULL return is how it is told.
-Everything else — a permission the host refused, a device that would not read,
-no descriptors left — is what B-001 is for, and is now the only thing it says.
+scripts/cookie-survives-shot.sh now runs twice against a live desktop, and
+windows is asked in between so neither run can pass by not having happened:
 
-103 to 0, measured the same way it was found.
+| | closed and reopened | minimized and restored |
+| --- | --- | --- |
+| before | keepme=survived; session-only=gone | — |
+| after | keepme=survived | keepme=survived; session-only=gone |
 
-### Both halves, because narrowing a check can turn it off
-
-A change that makes a check fire less often is exactly the change that can
-quietly stop it firing at all. So the suite checks that a missing file logs
-nothing *and* that a real failure still logs.
-
-Arranging a real failure took two attempts. A directory was the first, and
-it does not reach that path: fseek to the end of one gives a length nothing
-can allocate, so it comes out as "out of memory" somewhere else entirely. What
-works is a file the host refuses — chmod 000, and only for somebody who is
-not root. Which the test checks rather than assumes: run as root it would open
-the file anyway and report that B-001 still fires when nothing had failed.
-
-### This is the fourth comment this month claiming a guard and having none
-
-The clock-went-backwards clamp in recon_loop.c (v0.4.58), a Caps Lock branch
-in recon_key.c (v0.4.55), the alpha == 0 shortcut in recon_ui_fb.c
-(v0.4.45), and now this. The way to find out has been the same every time:
-take the line away and see whether anything notices. Here nothing would
-have — the comment was describing a guard two functions away that answers a
-different question.
+The second column is the one worth having. It fails on the fix that looks
+right.
 
 ---

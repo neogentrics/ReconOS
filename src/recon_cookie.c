@@ -878,6 +878,25 @@ bool recon_cookie_restore(struct recon_cookie_jar *jar,
     return true;
 }
 
+int recon_cookie_forget_session(struct recon_cookie_jar *jar) {
+    if (jar == NULL) {
+        return 0;
+    }
+
+    int gone = 0;
+
+    /* Backwards, so dropping one cannot skip the one that slides into its
+     * place -- the same walk `recon_cookie_sweep` makes, for the same reason
+     * and with the same helper. */
+    for (int i = jar->count - 1; i >= 0; i--) {
+        if (jar->at[i].expires == 0) {
+            drop_at(jar, i);
+            gone++;
+        }
+    }
+    return gone;
+}
+
 int recon_cookie_forget_all(struct recon_cookie_jar *jar) {
     if (jar == NULL) {
         return 0;

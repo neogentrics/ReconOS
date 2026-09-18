@@ -1,86 +1,108 @@
-Joshua asked how long until the desktop runs on the kernel. Checking rather
-than guessing turned up that /dev/input already exists and a program can
-open it — so the machine can already deliver keys — and that what stood in the
-way was a keymap and a font. Both are here.
+The file picker, which was the rest of form-gaps. A page that asked for a
+photograph used to get a control drawn dead and a refusal at Send; it now gets
+multipart/form-data, and the request was read back off the wire by a parser
+that is not ours.
 
-### The keymap: positions to meanings
+### The policy, which was a decision before it was code
 
-The kernel delivers USB HID usage codes, and they name *positions*. KEY_A
-is 4, and it is 4 whether the key under that finger produces an a, a q or
-an ä. Turning a position into a meaning needs a layout, which on Linux is
-what xkbcommon does — and there is no xkbcommon on a ReconOS machine.
+A viewer that can open a file chooser is a viewer that can be asked to read
+anything on the disk. Four rules, and each one closes something:
 
-recon_key_from_hid(keycode, modifiers) is that, for the us layout, in the
-file that already owns what a key is and already builds with no Linux under it.
-The modifier bits moved there too, from recon_appwin.h where they were named
-*"as the compositor reports them"*: they are not the compositor's any more.
-
-Four rules that every keyboard has and almost nobody writes down:
-
-| the rule | what breaks without it |
+| the rule | what it stops |
 |---|---|
-| Shift and Caps Lock combine by exclusive or | Caps Lock becomes impossible to type around, and reads as a stuck Shift |
-| Caps Lock does not touch the digits | somebody's password types @ when they meant 2 |
-| Shift-Tab is ISO_Left_Tab, a *different key* | Shift-Tab walks forwards, and it looks like a focus bug |
-| Ctrl-C is the letter C with Ctrl held | a text box gets a 0x03 in it |
+| A page never names a file. It says there is a file field; a click opens the chooser | a page that opens a chooser at a path of its choosing |
+| The page learns the name and the bytes, never the path | a page reading the account name off /Users/... |
+| The choice does not outlive the submission — Reset clears it, and so does leaving the page | a file still quietly attached, sent by accident |
+| Where the chooser may go is the chooser's business — it browses recon_fs, the same confined view every program gets | a viewer with a wider reach than the file manager |
 
-And one about the machine rather than the layout: a release clears a modifier
-whether or not a press was seen. The kernel's own queue makes the same choice
-for a release nobody saw, and the reason is the same — a Shift stuck on because
-one event was lost is a keyboard that types in capitals until it is restarted.
+The path is not merely unused: recon_form_body_multipart has no way to send
+one, so a later change to the viewer cannot leak a path by accident.
 
-43 checks, and five mutations all caught. Every one of those mutations
-produces a keyboard that *works* — letters appear, keys respond — and is wrong
-in a way somebody would blame on themselves before they blamed the machine.
+### The boundary is derived, not drawn
 
-There is no reference to sweep against: xkbcommon's us keymap is indexed by
-*evdev* codes and the kernel sends *HID usage* codes, and the table between
-those two is the thing that would have to be written to do the comparison. So
-the checks hold properties — and one chains to something already verified: a
-symbol this produces goes into recon_key_to_char, which is swept against
-xkbcommon, so a plausible-looking wrong symbol still shows up as the wrong
-character. Which is what would actually be typed.
+A multipart body is a small protocol with a delimiter in it, and a wrong one
+parses — the server reads it, accepts it, and stores something other than what
+was sent. The dangerous part is the boundary: one that also occurs inside an
+upload splits the request there instead, and somebody who can choose the bytes
+of a file can end the body early and append fields the person filling in the
+form never saw.
 
-### The font: borrowed once at the medium, owned afterwards
+The usual answer is a long random string and the argument that a collision is
+unlikely. That argument is fine against accident and worthless against somebody
+who has read the file. So the boundary is checked: built, looked for in
+every part it will separate, and rebuilt with a different number if it is found.
+Certain rather than probable, for one pass over the content.
 
-The desktop read the host's fonts — /usr/share/fonts/... — which is another
-borrowed thing nobody had written down. A machine running its own kernel has no
-/usr/share, and a desktop with no font draws nothing anybody can read: not
-a degraded screen, a blank one.
+recon_smtp_message.c reached the same conclusion for a letter, independently,
+some versions ago. Finding that was worth more than the code: two arguments
+arriving at the same place is the nearest thing to a second opinion this
+project gets.
 
-- /System/Fonts is the eleventh directory of the volume layout, laid down
-  every boot like the other ten. The suite holds
-  include/recon_fs.h and userland/init/layout.c to each other in both
-  directions, so adding to one alone fails — which it did, first try.
-- scripts/make-medium.sh carries DejaVu Sans and Sans Mono on the
-  medium, verified on a built image at 759,720 and 343,140 bytes.
-- src/recon_ui.c looks in /System/Fonts before the host's paths. Linux
-  falls through exactly as before, and the order says the right thing either
-  way: a machine given fonts of its own meant those fonts.
+### What it took to believe it
 
-And the licence ships with them. The Bitstream Vera terms say *"the above
-copyright and trademark notices and this permission notice shall be included in
-all copies"* — a stick with the font on it is a copy, and THIRD_PARTY.md
-travels with the repository rather than with the stick. So the notice goes on
-the medium beside the fonts. The file is renamed and the font is not
-modified: the clause about renaming applies to modified fonts, and this is
-byte for byte the file the host had, still identifying itself as DejaVu Sans.
+102 checks and 12 of 12 mutations caught — but the first pass caught only
+nine, and the three misses were the interesting part:
 
-### And the linker was asked what a desktop program needs
+- The filename was never searched for the boundary. A real hole. The test
+  was at fault: it put the boundary in a file's *contents*, which takes a file,
+  and never in its *name*, which takes a suggestion.
+- The buffer-size check was not load-bearing — snprintf already caught the
+  case the test used. It is not dead, it holds the *contract*; the test now
+  uses a buffer too small to be right and large enough to work by luck, which
+  is the only size that can tell the two apart.
+- One byte of slack in the fit check was invisible, and it wrote the
+  terminator one past the end of the allocation. Every other check in the suite
+  has slack in the buffer, and an off-by-one fit test is correct everywhere
+  there is slack. Caught now by asking for the exact length back and demanding
+  that a buffer of exactly that size is refused.
 
-The kernel session asked for the source list. Rather than write one from
-memory, a small program that draws a wallpaper, a window frame and some text
-was linked against an archive of every source that builds freestanding.
+And then the whole path was run rather than reasoned about: a server on
+localhost, the desktop driven headless through the chooser, and the request it
+sent handed to Python's email parser. Three parts, 338 bytes, the file's zero
+byte intact in the middle of it, the filename with no path in it, and the
+declared length agreeing with the body. A wrong body that passes the encoder's
+own tests is an agreed misunderstanding of the format; a foreign parser is the
+only thing that can catch one.
 
-It resolved everything except three symbols — recon_fs_write,
-recon_fs_append and recon_fs_mkdir, from recon_theme.c and
-recon_fonts.c, both core drawing and both needing to read and write their
-settings.
+### And the Recovery page stopped saying something untrue
 
-So the desktop is gated on src/recon_fs.c, which is gated on stat — which
-is already the largest open entry in docs/KERNEL-WANTS.md, and that entry
-already names recon_fs.c as what it blocks. Two instruments from opposite
-directions naming the same call: the entry was written by counting call sites
-in the library, and the probe knew nothing about that.
+Control Panel's Recovery page lists five things it cannot offer, with the
+reason for each. One reason had gone stale: *"Needs a boot path of our own.
+ReconOS is started by whatever is underneath it."* ReconOS is started by its own
+loader now, and that loader has a recovery entry.
+
+The replacement is not "coming soon". The loader's own comment settles it:
+*"recovery is a decision made in front of the machine"* — the menu choice
+overrides the file on the EFI partition rather than merging with it. So the
+desktop is not going to get a button that restarts into recovery, and that is
+an answer rather than a gap: a repair mode software can start is one a broken
+program can start, and the whole point of it is that it is where you go when
+the software is broken.
+
+What the page can do is say it exists and how to reach it, which is what
+somebody standing in front of a machine actually needs. The other four reasons
+were checked as well — this is the second list this week found to be describing
+finished work — and all four are still true.
+
+### Two things that were found on the way
+
+One media-type table, not two. recon_smtp_message.c had a private one.
+A .jpeg that is image/jpeg when mailed and application/octet-stream when
+uploaded is one fact with two answers, and the second copy is the one nobody
+updates. It moved to src/recon_media.c — a file of its own, after a first
+attempt put it in recon_http.c and the form test showed what that meant:
+anything wanting a media type would link an HTTP client to get one. The same
+trap the port kept hitting, caught this time by a build rather than by a
+reading.
+
+And stat is not the wall it was called. The linker probe in v0.4.51 named
+recon_fs_write, recon_fs_append and recon_fs_mkdir as all a desktop
+program needs from recon_fs.c. Walking the call graph transitively from those
+three — not one level of grep, which reports that recon_fs_write calls nothing
+— they reach fopen, fwrite, fclose, mkdir and realpath. No stat,
+no lstat. Those two are reachable only from the rest of the file.
+
+That corrects what this session told both Joshua and the kernel session.
+docs/KERNEL-WANTS.md now says so.
 
 ---

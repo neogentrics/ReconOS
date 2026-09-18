@@ -513,6 +513,82 @@ static void test_forgetting(void) {
     recon_cookie_jar_free(jar);
 }
 
+static void test_closing_the_window_ends_the_session(void) {
+    printf("closing a window ends the session cookies and keeps the rest\n");
+
+    /*
+     * A cookie with no expiry lasts until the browser closes, which is not a
+     * description but the definition -- so something has to end it, and until
+     * v0.4.74 nothing did. Closing a built-in application *hides* its window
+     * rather than destroying it, so the destructor that sealed the jar ran at
+     * shutdown and never on a close. Found by setting one, closing the
+     * window, opening it again, and watching it come back.
+     */
+    struct recon_cookie_jar *jar = recon_cookie_jar_new();
+
+    if (jar == NULL) {
+        return;
+    }
+
+    recon_cookie_set(jar, "a.example", "/", true, "stays=1; Max-Age=86400",
+        NOW);
+    recon_cookie_set(jar, "a.example", "/", true, "goes=2", NOW);
+    recon_cookie_set(jar, "b.example", "/", true, "also-goes=3", NOW);
+
+    check(recon_cookie_forget_session(jar) == 2,
+        "the ones with no expiry go, and it says how many");
+    check_text(sent(jar, "a.example", "/", true), "stays=1",
+        "what a server asked to outlive the window is still here");
+    check_text(sent(jar, "b.example", "/", true), "",
+        "and a host whose only cookie was for the window has nothing left");
+
+    /* Twice is not worse than once: a window closed while already closed is
+     * not a state the shell can reach, but a function that only works the
+     * first time is a trap for whoever calls it next. */
+    check(recon_cookie_forget_session(jar) == 0, "again drops nothing");
+    check(recon_cookie_count(jar) == 1, "and takes nothing with it");
+
+    recon_cookie_jar_free(jar);
+}
+
+static void test_it_is_not_every_cookie(void) {
+    printf("and ending a session is not the same as forgetting everything\n");
+
+    /*
+     * The failure this guards is the opposite one, and it is worse.
+     *
+     * Close and minimize arrive at the same `visibility(false)` callback, so
+     * the obvious way to write this fix ends the session on a **minimize** --
+     * and signing somebody out because they put the window down for a second
+     * is a far worse bug than a session cookie that lived too long. The
+     * browser uses `closed` instead, which fires from `recon_appwin_hide`
+     * alone.
+     *
+     * That dispatch needs a window and a server, so the check on it is
+     * `scripts/cookie-survives-shot.sh`, which minimizes a real browser and
+     * photographs what comes back. What is left for here is the half that
+     * this function owns: that it is a scalpel and not `forget_all`.
+     */
+    struct recon_cookie_jar *jar = recon_cookie_jar_new();
+
+    if (jar == NULL) {
+        return;
+    }
+
+    recon_cookie_set(jar, "a.example", "/", true, "one=1; Max-Age=86400",
+        NOW);
+    recon_cookie_set(jar, "a.example", "/", true, "two=2; Max-Age=86400",
+        NOW);
+
+    check(recon_cookie_forget_session(jar) == 0,
+        "a jar with nothing session-only loses nothing");
+    check(recon_cookie_count(jar) == 2, "all of it still there");
+
+    check(recon_cookie_forget_session(NULL) == 0, "and no jar is not a crash");
+
+    recon_cookie_jar_free(jar);
+}
+
 static void test_nothing_is_refused_with_a_crash(void) {
     printf("nonsense headers do not take anything down\n");
 
@@ -910,6 +986,8 @@ int main(void) {
     test_the_ceilings();
     test_a_header_stops_at_a_cookie();
     test_forgetting();
+    test_closing_the_window_ends_the_session();
+    test_it_is_not_every_cookie();
     test_nothing_is_refused_with_a_crash();
     test_a_control_character_is_refused();
 

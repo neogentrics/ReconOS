@@ -6117,6 +6117,59 @@ static void web_destroy(void *user) {
     free(w);
 }
 
+/*
+ * The window was closed, which is when a browsing session actually ends.
+ *
+ * --- Why not the destructor, which is where this used to live ---
+ *
+ * Closing a built-in application does not destroy its window. `recon_apps.c`
+ * calls `recon_appwin_hide`, the window keeps everything it had, and opening
+ * the application again shows the same one back -- which is right, because a
+ * browser that forgot its tabs every time it was closed would be a worse
+ * browser.
+ *
+ * But `web_destroy` is where the jar was sealed, and a hidden window is not
+ * destroyed. So until v0.4.74 the jar was written **at shutdown and never
+ * before**. Found live: set a session cookie, close the window, open it
+ * again, and it came back. A session cookie is *defined* as lasting until the
+ * browser closes, so that was the one thing it could not be allowed to do.
+ *
+ * --- Why `closed` and not `visibility`, which is the whole question ---
+ *
+ * `visibility(false)` looks like the hook and is not: it fires on **minimize**
+ * as well, and a browser that ended its session on minimize would sign you
+ * out of everything every time you put the window down for a second. That
+ * would be a far worse bug than the one being fixed. `closed` fires from
+ * `recon_appwin_hide` alone, which is the distinction that had to exist.
+ *
+ * --- The order ---
+ *
+ * Save first, because the save is what decides what is worth keeping --
+ * `include/recon_cookie.h` refusal 4, only what a server asked to outlive the
+ * window. Then forget the session cookies, because the window they belonged
+ * to is the one that just went. Reversed, nothing would be lost, since the
+ * save refuses them anyway; done this way round it says what is meant.
+ *
+ * Nothing happens on the way back in. What survived is still in the jar, in
+ * memory, because the window was hidden and not freed -- so reopening has it
+ * without reading the file back, and reading it back is how you end up with
+ * two of everything.
+ *
+ * Silent when the save fails, as it was in the destructor and for the same
+ * reason: somebody closing a window is the worst moment to hand them a
+ * message, and there is nothing they would do about it.
+ */
+static void web_closed(void *user) {
+    struct recon_web *w = user;
+
+    if (w->cookies == NULL) {
+        return;
+    }
+
+    recon_cookie_jar_save(w->cookies);
+    recon_cookie_forget_session(w->cookies);
+}
+
 static const struct recon_appwin_impl WEB_IMPL = {
     .title = WEB_APPLICATION,
     .help = "The web viewer",
@@ -6130,6 +6183,7 @@ static const struct recon_appwin_impl WEB_IMPL = {
     .key = web_key,
     .scroll = web_scroll,
     .describe = web_describe,
+    .closed = web_closed,
     .destroy = web_destroy,
 };
 

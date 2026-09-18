@@ -167,8 +167,36 @@ struct recon_appwin_impl {
     /* A choice made from the menu the application offered. */
     void (*context_action)(void *user, uint32_t id);
 
-    /* Shown or hidden, so an application can start and stop doing work. */
+    /*
+     * Shown or hidden, so an application can start and stop doing work.
+     *
+     * **This fires on minimize too**, and false does not mean closed. All
+     * four of show, hide, minimize and restore reach here, because from the
+     * point of view of "should I still be decoding this video" they are the
+     * same two answers.
+     *
+     * Which is worth saying plainly, because it is the trap: the browser
+     * reached for this to find out it had been closed, and the version that
+     * did would have signed you out of everything every time you minimised
+     * the window. Use `closed` for that.
+     */
     void (*visibility)(void *user, bool visible);
+
+    /*
+     * The window was closed -- and closed is not destroyed.
+     *
+     * A built-in application keeps its window when it is closed, so opening
+     * it again shows the same one back with its tabs and its scroll position
+     * still there. That is the behaviour worth having, and it is also why
+     * `destroy` is not the place to end a session: a window that is hidden is
+     * not destroyed, so a destructor runs at **shutdown**, once, and never
+     * when somebody actually shut the thing.
+     *
+     * So this is the moment "I am finished with this" means. It fires from
+     * `recon_appwin_hide` and from nowhere else -- not minimize, which is the
+     * distinction `visibility` cannot make and the reason this exists.
+     */
+    void (*closed)(void *user);
 
     /*
      * Report the application's own state in a few lines.
