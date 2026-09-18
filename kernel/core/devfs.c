@@ -29,6 +29,7 @@
  * There is no /dev/tty, no block devices, and no directory listing. A device
  * that cannot be opened by name is not in here pretending to be.
  */
+#include <recon/kernel/display.h>
 #include <recon/kernel/vfs.h>
 #include <recon/kernel/fbdev.h>
 #include <recon/kernel/input.h>
@@ -138,8 +139,49 @@ static const struct device_entry devices[] = {
 	{ "random",  &random_ops, OPEN_READ },
 	{ "console", NULL,        OPEN_WRITE },	/* built by the VFS itself */
 	{ "input",   &input_file_ops, OPEN_READ },
+	/* **One node per display, and they are not all real.**
+	 *
+	 * `fb0` is the screen the console is on and exists whenever there is
+	 * one at all -- that is what it has always meant and changing it would
+	 * redefine the device every existing program opens. `fb1` upward name
+	 * displays by position and are refused when the machine does not have
+	 * them, which is why `devfs_open` asks the display layer rather than
+	 * trusting this table, and why `devfs_list` leaves out the ones that
+	 * are not there. A device that opens and reads nothing is worse than
+	 * one that is absent: the first looks like a broken screen. */
 	{ "fb0",     &fb_file_ops, OPEN_READ | OPEN_WRITE },
+	{ "fb1",     &fb_file_ops, OPEN_READ | OPEN_WRITE },
+	{ "fb2",     &fb_file_ops, OPEN_READ | OPEN_WRITE },
+	{ "fb3",     &fb_file_ops, OPEN_READ | OPEN_WRITE },
 };
+
+/* The display a `fbN` node names, or null for a node this machine has no
+ * display for.
+ *
+ * `fb0` is special and deliberately so: it is the console's screen rather than
+ * display zero. On every machine with one display those are the same thing, and
+ * on a machine with two the console's choice is the one a program opening
+ * `/dev/fb0` has always got. */
+static struct display *fb_node_display(const char *name, bool *is_fb)
+{
+	unsigned n;
+
+	*is_fb = false;
+
+	if (name[0] != 'f' || name[1] != 'b' || !name[2] || name[3])
+		return NULL;
+
+	if (name[2] < '0' || name[2] > '9')
+		return NULL;
+
+	*is_fb = true;
+	n = (unsigned)(name[2] - '0');
+
+	if (n == 0)
+		return display_primary();
+
+	return display_at(n);
+}
 
 struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
 {
@@ -179,6 +221,27 @@ struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
 		if (!d->ops)
 			return file_open_console();
 
+		/* A framebuffer node carries which display it is about, and a
+		 * node for a display this machine does not have is not there.
+		 *
+		 * Refused at open rather than read: a program that opened
+		 * /dev/fb2 on a one-screen machine and got a file it could not
+		 * usefully read would spend its time deciding whether the
+		 * screen was broken. */
+		{
+			bool is_fb;
+			struct display *disp = fb_node_display(d->name, &is_fb);
+
+			if (is_fb) {
+				if (!disp) {
+					*error = SYS_ENOENT;
+					return NULL;
+				}
+
+				return file_new_external(d->ops, flags, disp);
+			}
+		}
+
 		return file_new_external(d->ops, flags, NULL);
 	}
 
@@ -193,8 +256,16 @@ i64 devfs_list(const char *rest, char *names, u64 names_len, unsigned *count)
 	if (!is_the_root(rest))
 		return SYS_ENOENT;
 
-	for (i = 0; i < sizeof(devices) / sizeof(devices[0]); i++)
+	for (i = 0; i < sizeof(devices) / sizeof(devices[0]); i++) {
+		bool is_fb;
+
+		/* A framebuffer node for a display this machine does not have
+		 * is not listed, for the same reason it will not open. */
+		if (!fb_node_display(devices[i].name, &is_fb) && is_fb)
+			continue;
+
 		emit(devices[i].name, names, names_len, &needed, count);
+	}
 
 	/* Nothing was written if it would not all fit, and the caller can tell
 	 * because the answer is larger than what it offered. Half a listing

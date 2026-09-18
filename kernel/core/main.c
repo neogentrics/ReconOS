@@ -50,6 +50,7 @@
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/display.h>
+#include <recon/kernel/fbdev.h>
 #include <recon/kernel/amd_display.h>
 #include <recon/kernel/intel_display.h>
 #include <recon/kernel/virtio_gpu.h>
@@ -329,6 +330,16 @@ void kmain(void)
 		pipe_self_test() ? "pass" : "FAIL");
 	kprintf("  devices as files   : %s\n",
 		devfs_self_test() ? "pass" : "FAIL");
+
+	/* That each /dev/fbN names the display at its own position.
+	 *
+	 * Not that fb1 opens -- a kernel where it is an alias for fb0 opens it,
+	 * reads the same pixels and passes anything that only asks whether the
+	 * device is there, which is what a half-finished version of this looks
+	 * like. The matrix gives QEMU two adapters in one machine so the
+	 * assertion has something to be about. */
+	kprintf("  a screen each      : %s\n",
+		fbdev_nodes_self_test() ? "pass" : "FAIL");
 	kprintf("  what the kernel knows : %s\n",
 		procfs_self_test() ? "pass" : "FAIL");
 	kprintf("  a clock off the core : %s\n",

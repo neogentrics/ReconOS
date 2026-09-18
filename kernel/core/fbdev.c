@@ -41,6 +41,7 @@
  */
 
 #include <recon/kernel/boot.h>
+#include <recon/kernel/console.h>
 #include <recon/kernel/display.h>
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/fbdev.h>
@@ -61,6 +62,40 @@ static const struct framebuffer *screen(void)
 	return fbcon_framebuffer();
 }
 
+/* Which display a `/dev/fbN` file is about.
+ *
+ * `f->private` carries it, which is how this kernel says what a file *is*
+ * everywhere else -- `struct pipe` in pipe.c, `struct socket` in
+ * socket_file.c, read straight back out. devfs puts it there when the file is
+ * made.
+ *
+ * **Null private means the console's screen**, and that is `/dev/fb0` keeping
+ * the meaning it has always had: not "display zero" but "the one being drawn
+ * on". The two are the same machine until there are two displays, and a change
+ * that silently redefined fb0 on the machines that have one would be a change
+ * nobody could see going wrong.
+ */
+static const struct framebuffer *screen_of(struct file *f)
+{
+	struct display *d = f ? f->private : NULL;
+
+	if (!d)
+		return screen();
+
+	if (!d->mode.width || !d->mode.height)
+		return NULL;
+
+	return &d->mode;
+}
+
+/* And the display itself, for the paths that have to flush it. */
+static struct display *display_of(struct file *f)
+{
+	struct display *d = f ? f->private : NULL;
+
+	return d ? d : display_primary();
+}
+
 /* How many bytes of it there are.
  *
  * `pitch * height`, not `size`: a firmware framebuffer's reported size is
@@ -74,7 +109,7 @@ static u64 screen_bytes(const struct framebuffer *fb)
 
 static i64 fb_read(struct file *f, void *out, u64 len)
 {
-	const struct framebuffer *fb = screen();
+	const struct framebuffer *fb = screen_of(f);
 	u64 total, left;
 
 	if (!fb)
@@ -105,7 +140,7 @@ static i64 fb_read(struct file *f, void *out, u64 len)
 
 static i64 fb_write(struct file *f, const void *in, u64 len)
 {
-	const struct framebuffer *fb = screen();
+	const struct framebuffer *fb = screen_of(f);
 	u64 total, left;
 
 	if (!fb)
@@ -136,11 +171,17 @@ static i64 fb_write(struct file *f, const void *in, u64 len)
 	 * the entire panel. Whole rows rather than a tighter box, because a
 	 * write is a run of bytes and a run of bytes that crosses a row boundary
 	 * is not a rectangle. */
-	if (display_needs_flush() && fb->pitch) {
+	if (display_needs_flush_on(display_of(f)) && fb->pitch) {
 		u32 first = (u32)(f->pos / fb->pitch);
 		u32 last  = (u32)((f->pos + len - 1) / fb->pitch);
 
-		display_flush(0, first, fb->width, last - first + 1);
+		/* **The display this file is about**, which is the primary only
+		 * when the file is /dev/fb0. Writing a row to /dev/fb1 and
+		 * presenting the primary would put one screen's pixels on
+		 * another's glass -- and on a machine with one display the two
+		 * are the same call, so nothing here would have looked wrong. */
+		display_flush_on(display_of(f), 0, first, fb->width,
+				 last - first + 1);
 	}
 
 	f->pos += len;
@@ -149,7 +190,7 @@ static i64 fb_write(struct file *f, const void *in, u64 len)
 
 static i64 fb_seek(struct file *f, i64 offset, unsigned from)
 {
-	const struct framebuffer *fb = screen();
+	const struct framebuffer *fb = screen_of(f);
 	i64 base, total;
 
 	if (!fb)
@@ -227,10 +268,73 @@ static i64 fb_seek(struct file *f, i64 offset, unsigned from)
  */
 static unsigned panel_claims;
 
+/* Which files are holding a claim.
+ *
+ * **This used to live in `f->private`**, as a sentinel meaning "this file has
+ * mapped the screen". That field now carries which display the file is about,
+ * which is what `private` means everywhere else in this kernel -- `struct pipe`
+ * in pipe.c, `struct socket` in socket_file.c -- so the claim needed somewhere
+ * of its own.
+ *
+ * A fixed table rather than a per-open allocation, and the reason is the shape
+ * of the thing being recorded: pipe and socket allocate because the file *is*
+ * that object, whereas here the object is a display, which is shared and
+ * outlives every file. An allocation existing only to hold one bool would have
+ * to be freed on a path that currently cannot fail.
+ *
+ * Bounded, and the bound is visible: a claim that will not fit is refused and
+ * said out loud rather than silently not taken, because a claim nobody recorded
+ * is a console that draws over a program with nothing to explain it. Four
+ * displays and a few files each is generous for a machine whose whole point is
+ * that one program owns the screen.
+ */
+#define PANEL_CLAIMS_MAX	8
+
+static struct file *panel_claimed_by[PANEL_CLAIMS_MAX];
+
+static bool panel_claim_take(struct file *f)
+{
+	unsigned i;
+
+	for (i = 0; i < PANEL_CLAIMS_MAX; i++)
+		if (panel_claimed_by[i] == f)
+			return true;		/* already holds one */
+
+	for (i = 0; i < PANEL_CLAIMS_MAX; i++) {
+		if (panel_claimed_by[i])
+			continue;
+
+		panel_claimed_by[i] = f;
+		panel_claims++;
+		return true;
+	}
+
+	kputs("fbdev: no room to record that a program has taken the screen, "
+	      "so the console will keep drawing on it\n");
+	return false;
+}
+
+static bool panel_claim_release(struct file *f)
+{
+	unsigned i;
+
+	for (i = 0; i < PANEL_CLAIMS_MAX; i++) {
+		if (panel_claimed_by[i] != f)
+			continue;
+
+		panel_claimed_by[i] = NULL;
+
+		if (panel_claims)
+			panel_claims--;
+
+		return true;
+	}
+
+	return false;
+}
+
 /* A file that is holding one. Any non-null value will do; the address of the
  * counter is used so that a stray pointer landing here is obviously wrong. */
-#define PANEL_HELD	((void *)&panel_claims)
-
 bool fbdev_panel_claimed(void)
 {
 	return panel_claims != 0;
@@ -238,13 +342,8 @@ bool fbdev_panel_claimed(void)
 
 static i64 fb_close(struct file *f)
 {
-	if (f->private != PANEL_HELD)
+	if (!panel_claim_release(f))
 		return SYS_OK;
-
-	f->private = 0;
-
-	if (panel_claims)
-		panel_claims--;
 
 	/* **And that is all it does.**
 	 *
@@ -268,7 +367,7 @@ static i64 fb_close(struct file *f)
 
 static bool fb_map(struct file *f, paddr_t *pa, u64 *len, unsigned *flags)
 {
-	const struct framebuffer *fb = screen();
+	const struct framebuffer *fb = screen_of(f);
 
 	if (!fb)
 		return false;
@@ -277,10 +376,8 @@ static bool fb_map(struct file *f, paddr_t *pa, u64 *len, unsigned *flags)
 	 * them. Taken here rather than at `open`, because opening /dev/fb0 to
 	 * ask its geometry or to write a row through it is not taking the
 	 * screen -- mapping it is. */
-	if (f && f->private != PANEL_HELD) {
-		f->private = PANEL_HELD;
-		panel_claims++;
-	}
+	if (f)
+		panel_claim_take(f);
 
 	*pa    = fb->base;
 	*len   = screen_bytes(fb);
@@ -312,8 +409,103 @@ const struct file_ops fb_file_ops = {
  * anything at all depending on the number, is the one interface design that
  * cannot be checked.
  */
+
+/* --- that the nodes name different screens ---------------------------------
+ *
+ * **The assertion is not that `/dev/fb1` opens.** A kernel where `fb1` is an
+ * alias for `fb0` opens it perfectly, reads the same pixels from it, and passes
+ * any check that only asks whether the device is there -- which is the failure
+ * this is written to catch, because it is what a half-finished version of this
+ * change looks like.
+ *
+ * So what is checked is that each node resolves to the display at its own
+ * position, that a node for a display the machine does not have is **absent**
+ * rather than empty, and -- on a machine with two -- that the first two are not
+ * the same object.
+ *
+ * It runs on every boot in the matrix. On a machine with one display that is
+ * three assertions about `fb0` and three absences; on the two-adapter path it
+ * is the whole thing.
+ */
+bool fbdev_nodes_self_test(void)
+{
+	unsigned total = display_total();
+	unsigned n;
+	bool ok = true;
+	struct display *seen[4];
+
+	if (!total) {
+		kputs("fbdev: no display on this machine, so there are no "
+		      "framebuffer nodes to check\n");
+		return true;
+	}
+
+	for (n = 0; n < 4; n++) {
+		char name[4] = { 'f', 'b', (char)('0' + n), 0 };
+		i64 err = 0;
+		struct file *f;
+
+		seen[n] = NULL;
+		f = devfs_open(name, OPEN_READ, 0, &err);
+
+		if (n < total) {
+			if (!f) {
+				kprintf("fbdev: this machine has %u display(s) "
+					"and /dev/%s would not open (%d)\n",
+					total, name, (int)err);
+				ok = false;
+				continue;
+			}
+
+			seen[n] = f->private ? f->private : display_primary();
+
+			/* fb0 is the console's screen rather than display
+			 * zero, which is the meaning it has always had; every
+			 * node above it names a display by position. */
+			if (n && seen[n] != display_at(n)) {
+				kprintf("fbdev: /dev/%s resolved to a display "
+					"that is not the one at position %u\n",
+					name, n);
+				ok = false;
+			}
+
+			file_release(f);
+			continue;
+		}
+
+		/* Past the end. Absent, not empty. */
+		if (f) {
+			kprintf("fbdev: this machine has %u display(s) and "
+				"/dev/%s opened anyway\n", total, name);
+			file_release(f);
+			ok = false;
+		}
+	}
+
+	/* **And that the first two are not the same screen.**
+	 *
+	 * This is the one that catches an alias, and it can only be asked on a
+	 * machine that has two -- which the matrix provides by giving QEMU a
+	 * virtio-gpu alongside the adapter it supplies by default. */
+	if (total > 1 && seen[0] && seen[1] && seen[0] == seen[1]) {
+		kputs("fbdev: /dev/fb0 and /dev/fb1 are the same display, so "
+		      "naming a second screen does nothing\n");
+		ok = false;
+	}
+
+	kprintf("fbdev: %u framebuffer node(s) for %u display(s), and the "
+		"ones past the end are absent\n", total, total);
+
+	return ok;
+}
+
+
 int fbdev_describe(struct fb_info *out)
 {
+	/* The console's screen, not a file's: this answers SYS_SCREEN, which
+	 * takes no descriptor. Making it per-display is half of the proposal in
+	 * docs/SIGNALS.md and is the kernel session's call, because SYS_SCREEN
+	 * is theirs. */
 	const struct framebuffer *fb = screen();
 
 	if (!out)

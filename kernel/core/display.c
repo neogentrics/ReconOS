@@ -411,6 +411,25 @@ struct display *display_primary(void)
 	return primary;
 }
 
+/* How many displays this machine has, and the nth of them.
+ *
+ * The table has always held more than one and nothing could reach past the
+ * first. These exist because `/dev/fbN` needs to name a head rather than "the
+ * screen the console happens to be on", and they are the whole of what
+ * addressing a second display requires from this layer. */
+unsigned display_total(void)
+{
+	return display_count;
+}
+
+struct display *display_at(unsigned n)
+{
+	if (n >= display_count)
+		return NULL;
+
+	return &displays[n];
+}
+
 bool display_set_mode(u32 width, u32 height)
 {
 	if (!primary) {
@@ -499,21 +518,47 @@ static u64 fb_pages_kept;
  */
 bool display_owns_page(paddr_t pa)
 {
-	const struct framebuffer *fb;
+	unsigned n;
 
-	if (!primary || !primary->mode.base)
-		return false;
+	/* **Every display, not the primary one.**
+	 *
+	 * This asked only about `primary`, which answers "is this page part of
+	 * *the* screen" when the question is "is it part of *a* screen". On a
+	 * machine with two displays in modes, a program that mapped the second
+	 * would have those pages handed back to the page allocator underneath
+	 * it -- which is GX-001 exactly, arriving through the door GX-001's own
+	 * fix left open.
+	 *
+	 * **It was unreachable when it was written and it is still unreachable
+	 * today**, and that is worth saying rather than dressing up: no
+	 * non-primary display is ever put in a mode. `display_init` sets one on
+	 * the primary alone, and `amd_display_attach` gives the firmware's
+	 * framebuffer to the first adapter and deliberately not the second, so
+	 * `mode.base` is zero on every secondary and the old check returned
+	 * false for the right answer by the wrong route.
+	 *
+	 * Fixed anyway, because it costs five lines and because the same shape
+	 * -- correct while there is one of something, written when there was
+	 * one -- is what GX-001, GX-002 and GX-009 all were. */
+	for (n = 0; n < display_count; n++) {
+		const struct framebuffer *fb = &displays[n].mode;
 
-	fb = &primary->mode;
+		if (!fb->base || !fb->height)
+			continue;
 
-	/* `pitch * height` rather than `size`, the same reckoning /dev/fb0
-	 * makes: `size` is sometimes the whole aperture and sometimes rounded
-	 * up, and the rows are the part that exists. */
-	if (pa < fb->base || pa >= fb->base + (u64)fb->pitch * fb->height)
-		return false;
+		/* `pitch * height` rather than `size`, the same reckoning
+		 * /dev/fb0 makes: `size` is sometimes the whole aperture and
+		 * sometimes rounded up, and the rows are the part that
+		 * exists. */
+		if (pa < fb->base ||
+		    pa >= fb->base + (u64)fb->pitch * fb->height)
+			continue;
 
-	fb_pages_kept++;
-	return true;
+		fb_pages_kept++;
+		return true;
+	}
+
+	return false;
 }
 
 /* Print a device's base address registers, as they were actually found.
@@ -547,9 +592,37 @@ void display_print_bars(const struct pci_device *d)
 	}
 }
 
+bool display_needs_flush_on(const struct display *d)
+{
+	return d && d->ops && d->ops->flush;
+}
+
 bool display_needs_flush(void)
 {
-	return primary && primary->ops && primary->ops->flush;
+	return display_needs_flush_on(primary);
+}
+
+bool display_flush_on(struct display *d, u32 x, u32 y, u32 w, u32 h)
+{
+	/* **Every word of `display_flush`'s contract, about a named display.**
+	 *
+	 * True where there is nothing to do, which is both "no such display"
+	 * and "this one scans itself out" -- see `display_flush`, which is now
+	 * this function applied to the primary and keeps the argument for why
+	 * those two are one answer. */
+	if (!display_needs_flush_on(d))
+		return true;
+
+	if (!w || !h)
+		return true;
+
+	if (!d->ops->flush(d, x, y, w, h)) {
+		flushes_refused++;
+		return false;
+	}
+
+	flushes_done++;
+	return true;
 }
 
 bool display_flush(u32 x, u32 y, u32 w, u32 h)
@@ -566,19 +639,7 @@ bool display_flush(u32 x, u32 y, u32 w, u32 h)
 	 *
 	 * False is kept for the one case worth acting on: a display that was
 	 * asked to present and would not. */
-	if (!display_needs_flush())
-		return true;
-
-	if (!w || !h)
-		return true;
-
-	if (!primary->ops->flush(primary, x, y, w, h)) {
-		flushes_refused++;
-		return false;
-	}
-
-	flushes_done++;
-	return true;
+	return display_flush_on(primary, x, y, w, h);
 }
 
 /* --- bringing it up --------------------------------------------------------- */

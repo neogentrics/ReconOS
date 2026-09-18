@@ -152,8 +152,24 @@ struct display *display_register(const char *name,
  */
 void display_init(void);
 
-/* The primary display, or null where there is none. */
+/* The primary display, or null where there is none.
+ *
+ * "Primary" means the one the console adopted, which is the first that could be
+ * put in a mode. It is the right answer for the console and the wrong one for
+ * anything addressing a particular screen -- see `display_at`. */
 struct display *display_primary(void);
+
+/* How many displays this machine has, and the nth of them.
+ *
+ * The table has held more than one since `DISPLAY_MAX` was raised to four, and
+ * until now nothing could reach past the first: every entry point in this file
+ * meant `primary` silently. These are what `/dev/fbN` needs in order to name a
+ * head rather than "the screen the console happens to be on".
+ *
+ * `display_at` returns null past the end rather than the last one, because a
+ * caller asking for a display that is not there wants to be told so. */
+unsigned display_total(void);
+struct display *display_at(unsigned n);
 
 /* Change the mode on the primary display. False where there is no display, or
  * where it cannot be told, or where the hardware refused -- and the three are
@@ -174,12 +190,22 @@ bool display_set_mode(u32 width, u32 height);
  */
 bool display_flush(u32 x, u32 y, u32 w, u32 h);
 
+/* The same, about a display somebody names.
+ *
+ * `display_flush` is this applied to the primary, and everything its comment
+ * says about "true where there was nothing to do" holds here unchanged -- a
+ * display that scans itself out and a display that is not there are both
+ * outcomes the caller cannot act on, and reporting them as failures would
+ * teach every caller to ignore the return value. */
+bool display_flush_on(struct display *d, u32 x, u32 y, u32 w, u32 h);
+
 /* Whether presenting is a step on this machine at all.
  *
  * For code that must know the *shape* of the screen it has rather than merely
  * getting the right answer from `display_flush` -- `/dev/fb0` has to tell a
  * program mapping the pixels whether its stores will be seen on their own. */
 bool display_needs_flush(void);
+bool display_needs_flush_on(const struct display *d);
 
 /* Whether this physical page is part of the screen in force right now.
  *

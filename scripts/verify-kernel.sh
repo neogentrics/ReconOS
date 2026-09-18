@@ -996,7 +996,7 @@ check_screen_without "  PVH, the console leaves a program alone" \
 		-kernel "$X64_ELF"
 
 check_screen_colour "  PVH, a program presents what it mapped" \
-	"asked for it to be shown" 2b3342:100000 \
+	"drew on the screen and presented it" 2b3342:100000 \
 	qemu-system-x86_64 -m 1024M -vga none \
 		-device virtio-gpu-pci,xres=2560,yres=1600 -kernel "$X64_ELF"
 check_screen "  PVH, virtio-gpu really shows pixels" \
@@ -1072,6 +1072,19 @@ check_for "the register map and its arithmetic are checked" \
 # disposition: virtio-gpu is primary and reports its present count, while the
 # Bochs adapter beside it reports that it scans itself out. One report, two
 # backends, and they say different things about the same question (GX-009).
+# One /dev/fbN per display, and they name different screens.
+#
+# **Asserted on the count, and the self-test asserts the rest.** A kernel where
+# fb1 is an alias for fb0 opens it, reads the same pixels from it, and passes
+# anything that only asks whether the device is there -- which is exactly what a
+# half-finished version of this change looks like. The boot check below is the
+# machine having two nodes at all; `a screen each` inside it is the one that
+# fails when they are the same display.
+check_for "2 framebuffer node(s) for 2 display(s)" \
+	"  PVH, a node for each screen" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-device virtio-gpu-pci -kernel "$X64_ELF"
+
 check_for "also         : bochs-display, found and not in any mode, scans itself out" \
 	"  PVH, two display adapters at once" \
 	qemu-system-x86_64 -m 1024M -nographic -no-reboot \

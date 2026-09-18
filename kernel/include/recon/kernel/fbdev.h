@@ -27,4 +27,12 @@ int fbdev_describe(struct fb_info *out);
  * promises. */
 bool fbdev_panel_claimed(void);
 
+/* That each /dev/fbN names the display at its own position, and that a node for
+ * a display this machine does not have is absent rather than empty.
+ *
+ * The assertion that matters is the last one: a kernel where fb1 is an alias
+ * for fb0 opens it, reads the same pixels, and passes anything that only asks
+ * whether the device exists. */
+bool fbdev_nodes_self_test(void);
+
 #endif /* RECON_KERNEL_FBDEV_H */
