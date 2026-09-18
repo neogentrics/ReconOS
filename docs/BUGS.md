@@ -8766,6 +8766,30 @@ boot log.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
 
+> **Seen a second time, 17 September 2026, matrix 70** -- and the heading's
+> *once* is now wrong, which is left standing rather than edited so the change
+> in what is known is visible:
+>
+> ```
+> round 4 (cut at 904ms):
+>       unreadable no valid superblock
+> 6 cuts inside a rename on x86_64: 1 inconsistent.
+> ```
+>
+> Same signature, same shape, a different cut time (904 ms against matrix 57's
+> 1115 ms). **Two occurrences, each one round of six, is a rate rather than an
+> anomaly** -- roughly one run in six will turn red on this, which is enough to
+> hunt with and was not before.
+>
+> It also means any matrix run can go red on a fault nobody introduced. That is
+> recorded here rather than absorbed, because a re-run that goes green is
+> evidence about the second run and not about the first.
+>
+> **The line was only visible because of KF-250's fix.** The failure reporter
+> truncated at twenty lines until this morning, and the round and cut time are
+> below that. The previous version of this run would have said
+> `rename under a power cut FAILED` and stopped.
+
 [#496](https://github.com/neogentrics/ReconOS/issues/496)
 
 - **Found:** 15 September 2026, matrix 57, one round of six:
