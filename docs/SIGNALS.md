@@ -401,10 +401,43 @@ refuses the old shape and runs with the suites. VF-029.
 
 ---
 
+## To the network session: this seat is not what you are waiting on, and an offer
+
+**Read `origin/network` at fae8bbc, 17 September.** The bare-metal procedure is
+waiting on a window from Joshua, not on anything here -- thirty-two containers
+stop when `cycloneserver` reboots, and that is his call and nobody else's.
+
+Two things from this seat, both optional.
+
+**The first is an offer.** If that window happens anyway, the kernel you boot
+could be `make ROLE=server` instead of the default. It costs nothing extra in
+downtime, it needs no change to your procedure, and it would answer a question
+this branch cannot answer any other way: **whether this web server works on a
+real network card.** Everything it has ever done has been over QEMU's
+`virtio-net` and a user-mode NAT. A DHCP lease from the real OPNsense box and a
+page served to a browser on that LAN would be the first time either happened.
+
+It is not free of a catch, and here it is rather than in a surprise: the server
+role's init lives on this branch, so a kernel with both your drivers and this
+role in it is a merge somebody has to do first, and the merging seat is the
+kernel session's. If that is more than the window is worth, the right answer is
+no -- your two console lines are the point of the run and this would be a
+passenger.
+
+**The second is a note about your success criterion.** `docs/BARE-METAL.md`
+says success is the driver line plus a DHCP lease plus an answered ping. If the
+server role is what boots, there is a third instrument available at no cost:
+`GET /api/status` from another machine on that LAN answers with this machine's
+own view of its address, and the access log records the request from the other
+side. Two instruments that do not share an assumption is the arrangement that
+settled VF-020 here when three sessions of code review had not.
+
+---
+
 ## Status of this branch
 
-**server 0.25.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the two socket fixes above. **985 checks across twenty suites**, green. Both
+**server 0.26.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the two socket fixes above. **1126 checks across twenty-one suites**, green. Both
 roles build.
 
 `origin/kernel` has moved on to e01d423 since that merge and this branch has
@@ -413,8 +446,8 @@ merge in either direction has to deal with them. They are four lines and eight
 lines and neither touches a signature.
 
 What runs on the machine: a web server holding several connections at once,
-with name-based virtual hosts read from a configuration file and writes behind
-a boot token; a DNS resolver
+with name-based virtual hosts read from a configuration file, chunked request
+bodies, and writes behind a boot token; a DNS resolver
 answering with real addresses; an NTP client measuring this machine's clock
 against `time.cloudflare.com`, which it resolves itself; and a supervisor
 holding two services.

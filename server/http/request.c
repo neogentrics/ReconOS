@@ -8,12 +8,20 @@
  *
  * --- What is deliberately not implemented, and why that is safer ---
  *
- * **`Transfer-Encoding` is refused outright, in any form.** Chunked transfer
- * is not implemented here, and a server that ignores a header it does not
- * understand while something upstream honours it is the exact shape of request
- * smuggling: the proxy frames the body one way, the origin frames it another,
- * and the tail of one request becomes the head of the next. Refusing the
- * message is the only answer that cannot be desynchronised.
+ * **`Transfer-Encoding` is accepted only as exactly `chunked`, and only when
+ * nothing else frames the message.** It was refused outright until 0.26.0,
+ * when `chunked.c` arrived to read one; what has not changed by a word is the
+ * reason the refusals are there. A server that ignores a framing header while
+ * something upstream honours it is the exact shape of request smuggling: the
+ * proxy frames the body one way, the origin frames it another, and the tail of
+ * one request becomes the head of the next.
+ *
+ * So: `chunked` alone, on HTTP/1.1, is read. `Transfer-Encoding` **with**
+ * `Content-Length` is refused. Two `Transfer-Encoding` headers are refused. Any
+ * coding this does not implement -- `gzip`, `deflate`, a list, `chunked`
+ * appearing anywhere but alone -- is refused. And chunked on HTTP/1.0 is
+ * refused, because the framing postdates it and a 1.0 client that sent it is
+ * not a 1.0 client.
  *
  * **Line folding (`obs-fold`) is refused rather than unfolded.** A header
  * continued onto the next line was deprecated for the same reason -- two
@@ -476,21 +484,65 @@ static int parse_length(const char *v, unsigned long *into)
 	return HTTP_OK;
 }
 
+/*
+ * Is this value exactly the token `chunked`, and nothing else?
+ *
+ * Deliberately not a list parser. `gzip, chunked` is legal and this server
+ * does not implement `gzip`, so the only honest answer to it is a refusal --
+ * and a function that walked the list would be a function that could be made
+ * to accept `chunked` in a position that means something different to the
+ * proxy in front of it. One token, compared whole.
+ *
+ * Case-insensitive, because a transfer coding is a token and tokens are.
+ * Surrounding whitespace has already been trimmed by the header parser.
+ */
+static int is_chunked(const char *value)
+{
+	static const char WORD[] = "chunked";
+	size_t i;
+
+	for (i = 0; WORD[i]; i++) {
+		char c = value[i];
+
+		if (c >= 'A' && c <= 'Z')
+			c = (char)(c + 32);
+		if (c != WORD[i])
+			return 0;
+	}
+	return value[i] == '\0';
+}
+
 static int frame(struct http_request *r)
 {
 	size_t i;
 	int seen_length = 0;
 	int seen_host = 0;
+	int seen_coding = 0;
 
 	r->has_length = 0;
 	r->content_length = 0;
+	r->chunked = 0;
 
 	for (i = 0; i < r->header_count; i++) {
 		const char *n = r->headers[i].name;
 
-		/* Refused in any form. See the file header. */
-		if (seq(n, "transfer-encoding"))
-			return HTTP_ESMUGGLE;
+		/*
+		 * `chunked`, alone, or nothing. See the file header.
+		 *
+		 * A second one is refused for the same reason a second
+		 * `Content-Length` is, and more sharply: `Transfer-Encoding:
+		 * chunked` twice is a published smuggling vector, because a
+		 * reader that takes the last sees chunked framing and one that
+		 * refuses the duplicate does not.
+		 */
+		if (seq(n, "transfer-encoding")) {
+			if (seen_coding)
+				return HTTP_ESMUGGLE;
+			seen_coding = 1;
+			if (!is_chunked(r->headers[i].value))
+				return HTTP_ESMUGGLE;
+			r->chunked = 1;
+		}
 
 		if (seq(n, "content-length")) {
 			unsigned long v;
@@ -543,6 +595,29 @@ static int frame(struct http_request *r)
 	 */
 	if (r->minor >= 1 && !seen_host)
 		return HTTP_EMALFORMED;
+
+	/*
+	 * Framed twice, which is the fault this whole function exists for.
+	 *
+	 * Checked after the loop rather than inside it, because the two
+	 * headers may arrive in either order and a check that fired on the
+	 * second would let the pair through whenever the client chose the
+	 * other order. That is not a hypothetical: sending them in an
+	 * unexpected order is the first thing a smuggling tool tries.
+	 */
+	if (r->chunked && r->has_length)
+		return HTTP_ESMUGGLE;
+
+	/*
+	 * Chunked postdates HTTP/1.0.
+	 *
+	 * A 1.0 message carrying it is either a client that does not know what
+	 * version it is speaking or something deliberately shaped so that a
+	 * 1.1 reader frames it one way and a 1.0 reader frames it another.
+	 * There is no reading of it that both would agree on.
+	 */
+	if (r->chunked && r->minor < 1)
+		return HTTP_ESMUGGLE;
 
 	return HTTP_OK;
 }
@@ -621,11 +696,18 @@ int http_request_parse(const char *buf, size_t len, struct http_request *into)
 	if (rc != HTTP_OK)
 		return rc;
 
-	/* A request with a body and no length cannot be framed, and this
-	 * server does not read one to end-of-connection: that is how a POST
-	 * becomes half of the next request. */
-	if (!into->has_length && (seq(into->method, "POST")
-	                          || seq(into->method, "PUT")))
+	/*
+	 * A request with a body and **no framing at all**.
+	 *
+	 * Not the same as no `Content-Length`, which is what this said until
+	 * 0.26.0 and was correct while chunked was refused: a chunked POST has
+	 * no length and is framed perfectly well. The condition is *neither*
+	 * framing, and the reason it is refused has not changed -- this server
+	 * does not read a body to end-of-connection, because that is how a
+	 * POST becomes half of the next request.
+	 */
+	if (!into->has_length && !into->chunked
+	    && (seq(into->method, "POST") || seq(into->method, "PUT")))
 		return HTTP_EMALFORMED;
 
 	/* The methods this server implements. Everything else is 501, which is

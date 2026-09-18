@@ -76,7 +76,7 @@ fixed.
 | HTTP/1.0 | **built** | including its default of closing |
 | HTTP/1.1 keep-alive | **built** | 64 requests per connection, then closed |
 | Pipelining | **partial** | queued requests are answered in order; not tested under load |
-| Chunked transfer (`Transfer-Encoding`) | **refused** | see below — this is deliberate |
+| Chunked transfer (`Transfer-Encoding`) | **built, in one form** | `chunked` alone, on HTTP/1.1, is read — `server/http/chunked.c`, 116 checks. Everything around it is still refused, and the list below is why |
 | Range requests (`206`) | **built** | `range.c` — 45 checks. One range only; a list is ignored and the whole file served |
 | Conditional requests (`ETag`, `If-None-Match`, `304`) | **built** | `cache.c` — 31 checks; a strong validator, because there is no `stat` for `Last-Modified` |
 | `Expect: 100-continue` | **built** | answered before the body is read; an expectation this server cannot meet gets 417 |
@@ -84,11 +84,11 @@ fixed.
 | HTTP/3, QUIC | not planned yet | needs UDP, which the kernel has no call for |
 | TLS | **blocked** | no certificate store, no TLS implementation |
 
-### `Transfer-Encoding` is refused, and that is a decision
+### `Transfer-Encoding` is read in one form and refused in every other
 
-Chunked transfer is not implemented, and a request carrying
-`Transfer-Encoding` is **rejected** rather than ignored. This is the single
-most important thing in this document.
+Chunked transfer was refused outright until 0.26.0 and this section said so.
+What has not changed by a word is the reason for the refusals around it, which
+is the single most important thing in this document.
 
 A server that ignores a framing header something upstream honours is the exact
 shape of **request smuggling**: the proxy frames the body one way, the origin
@@ -96,8 +96,23 @@ frames it another, and the tail of one request becomes the head of the next —
 which is how one client's request gets answered with another's session. Every
 ambiguity in framing is therefore answered by rejecting the message:
 
-- `Content-Length` **and** `Transfer-Encoding` together → refused.
-- `Transfer-Encoding` alone → refused, because chunked is not implemented.
+- `Content-Length` **and** `Transfer-Encoding` together → refused, in either
+  order — a check that fired only on the second header would pass the pair
+  whenever the client chose the other order.
+- **Two `Transfer-Encoding` headers** → refused. A published vector: a reader
+  taking the last sees chunked framing and one refusing the duplicate does not.
+- Any coding this server does not implement — `gzip`, `deflate`, a list,
+  `chunked` anywhere but alone → refused. There is no list parser here on
+  purpose; one would be something to shape an input for.
+- **`chunked` on HTTP/1.0** → refused. The framing postdates it, so the
+  message is one that two readers of different versions frame differently.
+- `Transfer-Encoding: chunked` **alone, on HTTP/1.1** → read. Inside the body,
+  the same rule again: a bare LF where CRLF belongs, a chunk extension, a size
+  with `+`, `-` or `0x` in front of it, a chunk that does not end where it said
+  — every one is a refusal rather than a repair. Trailers are parsed, bounded
+  and **discarded**: a trailer arrives after every decision this server has
+  made about the request, so one that became a header would be a credential
+  presented after it was accepted.
 - **Two `Content-Length` headers, even identical ones** → refused. Agreement is
   not the property that makes a message safe; being unambiguous is, and it
   already is not.
@@ -105,8 +120,13 @@ ambiguity in framing is therefore answered by rejecting the message:
   an empty value — → refused. `strtoul` accepts every one of those and reports
   success.
 
-When chunked is implemented it must be implemented *fully*, including trailers
-and the `0\r\n\r\n` terminator, and the dual-framing rejection stays.
+The chunked bullet above is what this file asked for before any of it was
+written —
+*implemented fully, including trailers and the terminator, and the dual-framing
+rejection stays* — and it is the condition 0.26.0 was built to meet. The
+terminator is not `0\r\n`: the trailer section still has to end, and a decoder
+that stopped there would hand whatever followed to the parser looking for the
+next request line.
 
 ---
 

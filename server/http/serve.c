@@ -39,6 +39,7 @@
  */
 
 #include "serve.h"
+#include "chunked.h"
 
 #include <errno.h>
 #include <string.h>
@@ -757,6 +758,16 @@ struct http_conn {
 
 	struct http_request req;
 
+	/*
+	 * Where a chunked body has got to. Meaningless unless `req.chunked`.
+	 *
+	 * Per connection rather than per call, because a body arrives across
+	 * as many reads as the network chooses and the decoder has to resume
+	 * exactly where it stopped -- which is the same reason `have` and
+	 * `need` live here.
+	 */
+	struct http_chunked dec;
+
 	char buf[HTTP_CONN_BUF];
 };
 
@@ -782,7 +793,18 @@ static void conn_drop(struct http_conn *c)
  * A client may pipeline, and those bytes are the next request. */
 static void conn_next(struct http_conn *c)
 {
-	size_t used = c->req.head_length + c->req.content_length;
+	/*
+	 * `need`, not head plus `content_length`.
+	 *
+	 * They are the same number for a body framed by a length and they are
+	 * **not** for a chunked one: `content_length` is then how long the
+	 * body decoded to, while the bytes this request occupied include every
+	 * chunk header, every CRLF and the trailer section. Taking the decoded
+	 * length here would leave the difference in the buffer to be read as
+	 * the next request -- which is the desynchronisation `chunked.h` is
+	 * about, arriving by the back door.
+	 */
+	size_t used = c->need;
 	size_t left = c->have - used;
 	size_t k;
 
@@ -1066,8 +1088,22 @@ static int conn_step(struct http_conn *c)
 			return 1;
 		}
 
-		/* The body, if one was framed. */
-		c->need = c->req.head_length + c->req.content_length;
+		/*
+		 * The body, if one was framed.
+		 *
+		 * A chunked body has no length in its head -- that is the
+		 * whole reason the framing exists -- so `need` is not knowable
+		 * yet and is filled in below, once the terminator has arrived.
+		 * Until then it is the head alone, so that a decoder that
+		 * refuses leaves the connection with a consistent idea of what
+		 * this request occupied.
+		 */
+		if (c->req.chunked) {
+			http_chunked_begin(&c->dec);
+			c->need = c->req.head_length;
+		} else {
+			c->need = c->req.head_length + c->req.content_length;
+		}
 		if (c->need > sizeof(c->buf)) {
 			send_status(c->fd, 413, s->server_name, s->bytes_sent);
 			conn_drop(c);
@@ -1099,7 +1135,8 @@ static int conn_step(struct http_conn *c)
 		 * Only for HTTP/1.1. The mechanism did not exist in 1.0, and a
 		 * 1.0 client handed an interim reply reads it as *the* reply.
 		 */
-		if (c->req.minor >= 1 && c->req.content_length > 0) {
+		if (c->req.minor >= 1
+		    && (c->req.content_length > 0 || c->req.chunked)) {
 			const char *expect = http_header_get(&c->req, "expect");
 
 			if (expect && seq_fold(expect, "100-continue")) {
@@ -1131,9 +1168,83 @@ static int conn_step(struct http_conn *c)
 		c->since = s->now_ms ? s->now_ms() : 0;
 	}
 
-	/* CONN_BODY. Always in progress by definition: the head has been read
-	 * and declared a length, so the bytes are promised. A zero here is
-	 * *not yet* every time. */
+	/*
+	 * CONN_BODY, chunked.
+	 *
+	 * Fed whatever has arrived, every time round, and it resumes where it
+	 * stopped. The decoder is what decides the body is over -- there is no
+	 * count to compare against, which is why this cannot be folded into
+	 * the branch below.
+	 */
+	if (c->state == CONN_BODY && c->req.chunked) {
+		int rc = http_chunked_feed(&c->dec,
+		                           c->buf + c->req.head_length,
+		                           c->have - c->req.head_length,
+		                           HTTP_BODY_MAX);
+
+		if (rc == HTTP_PARTIAL) {
+			/*
+			 * The buffer is full and the body is not finished.
+			 *
+			 * 413 rather than reading on, because there is nowhere
+			 * to put the next byte. The equivalent of the declared
+			 * length being too large, arriving later because a
+			 * chunked client never declares one.
+			 */
+			if (c->have >= sizeof(c->buf)) {
+				send_status(c->fd, 413, s->server_name,
+				            s->bytes_sent);
+				note(s, &c->req, 413, c->sent_before);
+				conn_drop(c);
+				return 1;
+			}
+
+			got = read_more(c->fd, c->buf, &c->have, sizeof(c->buf),
+			                1, &c->stalls, c->since, s);
+			if (got < 0) {
+				send_status(c->fd, 408, s->server_name,
+				            s->bytes_sent);
+				note(s, &c->req, 408, c->sent_before);
+				conn_drop(c);
+				return 1;
+			}
+			if (!got) {
+				conn_drop(c);
+				return 1;
+			}
+			return 1;
+		}
+
+		if (rc != HTTP_OK) {
+			int status = http_status_for(rc);
+
+			send_status(c->fd, status, s->server_name,
+			            s->bytes_sent);
+			note(s, &c->req, status, c->sent_before);
+			/*
+			 * Dropped, never reused. A refused body means the
+			 * framing is in doubt, and there is no way to know
+			 * where the next request would start -- which is
+			 * exactly the state a smuggled request wants the
+			 * server left in.
+			 */
+			conn_drop(c);
+			return 1;
+		}
+
+		/*
+		 * Decoded, in place, over the encoded bytes. From here the
+		 * request looks like any other: a body at `head_length`, this
+		 * long. `need` becomes what the request actually occupied, so
+		 * `conn_next` finds the pipelined remainder.
+		 */
+		c->req.content_length = c->dec.out;
+		c->need = c->req.head_length + c->dec.in;
+	}
+
+	/* CONN_BODY, framed by a length. Always in progress by definition: the
+	 * head has been read and declared a length, so the bytes are promised.
+	 * A zero here is *not yet* every time. */
 	if (c->have < c->need) {
 		got = read_more(c->fd, c->buf, &c->have, sizeof(c->buf), 1,
 		                &c->stalls, c->since, s);

@@ -29,10 +29,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.25.0 |
+| **Version** | 0.26.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
-| **Checks** | 985 across twenty suites, by `scripts/server-tests.sh` |
+| **Checks** | 1126 across twenty-one suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -174,8 +174,8 @@ project builds with, and following them left two suites unbuildable.
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 123 | one request, and every way of writing two |
-| `server_http_serve` | 59 | the server over a real socket, `serve.c` unmodified |
+| `server_http` | 132 | one request, and every way of writing two |
+| `server_http_serve` | 75 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
@@ -193,6 +193,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_logfile` | 45 | numbering segments, and the sort order that makes a log readable |
 | `server_dial` | 38 | three answers, and the two ways of confusing them |
 | `server_config` | 159 | reading a configuration, and the files that must not be believed |
+| `server_chunked` | 116 | reading a chunked body, and every way of framing one twice |
 
 It reads its target list out of `CMakeLists.txt` rather than keeping one of its
 own, for the same reason `http_reason` is generated from an X-macro: two lists
@@ -283,6 +284,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.26.0** | **A chunked request body is read instead of refused — and every way of framing one twice is still refused.** `docs/WEB.md` has carried the condition since 0.0.2: *when chunked is implemented it must be implemented fully, including trailers and the terminator, and the dual-framing rejection stays.* It is the last framing a client can use that this server had no answer to, and it is the only one available when the sender does not know the length in advance, which is every upload produced as it is sent. 116 checks, and **each one runs twice — whole, and a byte at a time**, because a decoder can be correct on whole inputs and wrong on every real connection. Refused: a bare LF where CRLF belongs, a chunk extension, a size with `+`, `-` or `0x` in front of it, a size padded past the digit bound, a chunk shorter or longer than it said, a trailer section past its bounds. **Trailers are read, checked and discarded**: a trailer arrives after every decision this server has already made about the request, so one that became a header would be a credential presented after it was accepted. Watched failing against three decoders somebody would plausibly write — one that stops at `0\r\n` (18 of 116), one that takes a bare LF (4), one that does not insist on the CRLF after the data (4). On the machine, with the boot token: a form split mid-value across two chunks arrived joined, a trailer was consumed and did not become a header, and all four malformed framings answered 400. VF-031. |
 | **0.25.0** | **The server reads a configuration file, so a virtual host is something you can have rather than something the source can.** `server/config.c` -- 159 checks, and most of them are files that must be **refused**: an unknown key, a key twice, a key in the wrong section, two sites with one name, a site with no root, a port of 0 or 65536, a resolver given as a name, a root that climbs out of itself. **A configuration parser that ignores a line it does not understand produces a machine running something nobody wrote**, and the person who wrote the file has no way to find out. So the whole file is taken or none of it is, the console names the line and the word, and the built-in console keeps serving -- the one place here that does not refuse outright, because the alternative is a machine whose only repair route is the web console it has stopped serving. Watched failing against three lenient parsers: one that skips unknown keys (7 of 155), one that does not check roots (10), one that allows two sites with one name (1). Measured on the machine across two boots and then with two names: `shop.example` gets the volume's `index.html` at 564 bytes, every other name gets the console. **And the machine cannot edit the file it just wrote** -- nothing in user mode can replace or remove a file, which is now the sharpest entry in `docs/KERNEL-WANTS.md` rather than a footnote. VF-030. |
 | **0.24.1** | **The virtual hosts shipped a version earlier dispatched on a name out of uninitialised memory.** `serve.c` was right and the init program was not: `struct http_site site;` on the stack, ten fields assigned by hand, and the two fields added that same version -- `host` and `next`, the ones the dispatch reads -- among the ones nobody assigned. Instrumented and booted, the previous shape printed `host=0 next=0`, which is why every check in 0.24.0 passed. **It behaved correctly for a reason nobody chose**, and the same shape on a host, in a frame other work has used, gives `host` pointing at a string the previous call left behind -- a server comparing `Host:` against its own leftovers and answering 421 to everything. The site is a file-scope designated initializer now, so every field added after this line is zero by the language rather than by anybody remembering. `scripts/check-site-init.py` runs with the suites and refuses the old shape. VF-029. |
 | **0.24.0** | **Name-based virtual hosts -- and the header they dispatch on had never been enforced.** A site now carries a name and a `next`; the first whose name matches answers, one with no name claims everything, and a name nobody claims gets **421** rather than 404, because the resource may well exist and this is simply not the machine that has it. Picked **per request**, not per connection: a keep-alive client may ask two sites down one socket, and the pipelined pair proving it is the check that fails against every shape that decides once. Watched failing at 9 of 59 against a dispatch that always answers with the head of the chain -- and the 200s still passed, which is why the body is the site's own context rather than the route's. Building it found the older fault: `request.c` accepted **HTTP/1.1 with no `Host` at all**, and accepted **two `Host` headers**, in the same file that has refused two `Content-Length` headers since 0.0.2 on the stated grounds that *agreement is not the property that makes a message safe, being unambiguous is.* The one header that says which machine is being addressed was the one header that rule had never been applied to. Both are 400 now, HTTP/1.0 untouched, measured on the machine before and after. VF-028. |

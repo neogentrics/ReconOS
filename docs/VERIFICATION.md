@@ -982,3 +982,81 @@ the-console      HTTP/1.1 200 OK   1543 bytes   the console dashboard
 - **What would close it**, smallest first: `SYS_CREATE` with a replace flag.
   ReconFS already writes a whole file in one transaction, and whole-file
   replacement is exactly what a configuration file wants.
+
+### VF-031 -- a chunked body, and the terminator that is not the terminator
+
+- **What was built** `server/http/chunked.c`: `Transfer-Encoding: chunked` on a
+  request is read instead of refused. It is the last framing a client can use
+  that this server had no answer to, and the only one available when the sender
+  does not know the length in advance -- which is every upload produced as it
+  is sent.
+- **The condition it had to meet was written down in 0.0.2**, in `docs/WEB.md`,
+  next to the row saying the header was refused: *when chunked is implemented it
+  must be implemented fully, including trailers and the terminator, and the
+  dual-framing rejection stays.* That was a condition on a future version rather
+  than a plan, and it is worth noticing that it was still there to be read
+  twenty-six versions later.
+- **Every check runs twice**: whole, and then a byte at a time. A decoder can be
+  correct on whole inputs and wrong on every real connection, because a body
+  arrives across as many reads as the network chooses. The dribbled pass is
+  half the value of the suite.
+- **Watched failing against three decoders somebody would plausibly write:**
+
+```
+stops at `0\r\n`, treating it as the terminator     18 of 116 fail
+accepts a bare LF where CRLF belongs                 4 of 116 fail
+does not insist on the CRLF after the data           4 of 116 fail
+```
+
+  The first is the one to look at, and it is the reason `0\r\n` is not the end
+  of a chunked body: the trailer section still has to end. A decoder that
+  stopped there would leave the trailers in the buffer, and on a keep-alive
+  connection the next thing to read them is the parser looking for a request
+  line. A trailer is attacker-chosen text; a request line is what it would be
+  read as.
+- **And one that only a socket could catch.** `conn_next` computed where the
+  next request began from `head_length + content_length`, which is right for a
+  body framed by a length and wrong for a chunked one -- `content_length` is
+  then how long the body *decoded to*, while the bytes the request occupied
+  include every chunk header and the terminator. Put back on purpose: **2 of 75
+  checks in `test_http_serve` fail**, both of them the pipelined case, and none
+  of the 116 string-level checks notice. It now takes `c->need`.
+- **Trailers are read, checked and discarded.** Not laziness: a trailer arrives
+  after which site, which route and whether the guard permits it have all been
+  decided from the headers. A trailer merged into them would be a header whose
+  value arrived later, and `Authorization` in a trailer would be a credential
+  presented after the decision to accept it.
+- **Chunk extensions are refused**, which is a deviation from *ignore what you
+  may ignore* and is deliberate. `1;a=b` is legal and ignorable, and ignoring it
+  means reading to the next CRLF through text with no rules this parser
+  enforces -- the *skip what you do not understand* shape that the smuggling
+  section of `docs/WEB.md` is entirely about. Nothing in ordinary use sends one.
+- **Measured on the machine**, server role, with the boot token, against the
+  real kernel's sockets:
+
+```
+a form sent chunked, split mid-value     HTTP/1.1 200 OK  "name":"M17"
+the same, with a trailer after it        HTTP/1.1 200 OK  "name":"M18"
+a chunk size ended with a bare LF        HTTP/1.1 400 Bad Request
+a chunk extension                        HTTP/1.1 400 Bad Request
+framed twice: chunked and a length       HTTP/1.1 400 Bad Request
+chunked on HTTP/1.0, which predates it   HTTP/1.1 400 Bad Request
+and what the machine is called now       HTTP/1.1 200 OK  "name":"M18"
+```
+
+  The first two are the ones that prove something a host cannot: the form was
+  split in the middle of its value across two chunks and arrived joined, and
+  the trailer was consumed without becoming anything. The last line is read
+  back from the machine rather than from the reply that claimed it.
+- **One thing the suite found about itself.** It began dying with exit 141 and
+  no output -- `SIGPIPE`, because it now sends requests the server is *meant*
+  to refuse, and the server answers 400 and closes while the client is still
+  writing. The signal is ignored before the fork, which covers the server side
+  too: a server that dies of a signal when a browser closes a tab is not a
+  server. ReconOS has no `SIGPIPE` on a socket, so this is one more thing a
+  host needs in order to behave like the target.
+- **And one about the README checker.** `check-readme-suites.py` reads the
+  suite count out of the summary box as a word, from a hand-written map that
+  ran `twelve` to `twenty`. The twenty-first suite made it report *which this
+  cannot read as a number* -- the check that exists to stop the README drifting
+  failing for its own vocabulary. The map is built now rather than listed.

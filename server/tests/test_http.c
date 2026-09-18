@@ -151,9 +151,69 @@ int main(void)
 	refuses("POST / HTTP/1.1\r\nHost: m16\r\nContent-Length: 6\r\n"
 	        "Transfer-Encoding: chunked\r\n\r\n",
 	        HTTP_ESMUGGLE, "Content-Length and Transfer-Encoding together");
-	refuses("POST / HTTP/1.1\r\nHost: m16\r\n"
+
+	/*
+	 * `Transfer-Encoding: chunked` alone, on HTTP/1.1, is the one form
+	 * that is read -- since 0.26.0, when `chunked.c` arrived to read one.
+	 * Everything around it stays refused, and the block below is the list.
+	 */
+	{
+		struct http_request r;
+		static const char CHUNKED[] =
+			"POST / HTTP/1.1\r\nHost: m16\r\n"
+			"Transfer-Encoding: chunked\r\n\r\n";
+
+		checks++;
+		if (http_request_parse(CHUNKED, sizeof(CHUNKED) - 1, &r)
+		    != HTTP_OK) {
+			failures++;
+			printf("  FAIL  chunked alone is accepted\n");
+		}
+		checks++;
+		if (!r.chunked || r.has_length) {
+			failures++;
+			printf("  FAIL  chunked framing is reported, and no "
+			       "length with it\n");
+		}
+	}
+
+	/* Two of them. A published vector: a reader taking the last sees
+	 * chunked framing and one refusing the duplicate does not. */
+	refuses("POST / HTTP/1.1\r\nHost: m16\r\nTransfer-Encoding: chunked\r\n"
 	        "Transfer-Encoding: chunked\r\n\r\n",
-	        HTTP_ESMUGGLE, "Transfer-Encoding at all -- chunked is not implemented");
+	        HTTP_ESMUGGLE, "two Transfer-Encoding headers");
+
+	/* A coding this does not implement, including one with `chunked` in
+	 * the list. A list parser here would be a list parser somebody shapes
+	 * an input for. */
+	refuses("POST / HTTP/1.1\r\nHost: m16\r\n"
+	        "Transfer-Encoding: gzip\r\n\r\n",
+	        HTTP_ESMUGGLE, "a coding this server does not implement");
+	refuses("POST / HTTP/1.1\r\nHost: m16\r\n"
+	        "Transfer-Encoding: gzip, chunked\r\n\r\n",
+	        HTTP_ESMUGGLE, "chunked at the end of a list");
+	refuses("POST / HTTP/1.1\r\nHost: m16\r\n"
+	        "Transfer-Encoding: chunked, gzip\r\n\r\n",
+	        HTTP_ESMUGGLE, "chunked at the start of one");
+	refuses("POST / HTTP/1.1\r\nHost: m16\r\n"
+	        "Transfer-Encoding: chunkedx\r\n\r\n",
+	        HTTP_ESMUGGLE, "a token that merely begins with chunked");
+	refuses("POST / HTTP/1.1\r\nHost: m16\r\n"
+	        "Transfer-Encoding: \r\n\r\n",
+	        HTTP_ESMUGGLE, "an empty Transfer-Encoding");
+
+	/* Chunked postdates HTTP/1.0: a 1.0 message carrying it is one that
+	 * two readers of different versions frame differently. */
+	refuses("POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
+	        HTTP_ESMUGGLE, "chunked on HTTP/1.0");
+
+	/* And the order the two framing headers arrive in must not matter. A
+	 * check that fired on the second header only would pass the pair
+	 * whenever the client chose the other order, which is the first thing
+	 * anybody tries. */
+	refuses("POST / HTTP/1.1\r\nHost: m16\r\n"
+	        "Transfer-Encoding: chunked\r\nContent-Length: 6\r\n\r\n",
+	        HTTP_ESMUGGLE, "Transfer-Encoding before Content-Length");
 	refuses("POST / HTTP/1.1\r\nHost: m16\r\nContent-Length: 6\r\n"
 	        "Content-Length: 5\r\n\r\n",
 	        HTTP_ESMUGGLE, "two Content-Lengths that disagree");

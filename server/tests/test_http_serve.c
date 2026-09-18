@@ -338,6 +338,26 @@ int main(void)
 
 	printf("the server, over a real socket\n");
 
+	/*
+	 * A write to a socket the other end has closed must be an error here,
+	 * not a signal.
+	 *
+	 * The default for `SIGPIPE` is to kill the process, and this suite now
+	 * sends requests the server is **meant** to refuse: it answers 400 and
+	 * closes while the client is still writing. That killed the suite
+	 * outright -- exit 141, no output, nothing printed about which check
+	 * was running, which is the least informative failure there is.
+	 *
+	 * Set before the fork, so the server side is covered too: it writes to
+	 * clients that have gone away, and a server that dies of a signal when
+	 * a browser closes a tab is not a server.
+	 *
+	 * ReconOS has no `SIGPIPE` on a socket, so this is one more thing the
+	 * host needs in order to behave like the target -- the same category
+	 * as `unblock`.
+	 */
+	signal(SIGPIPE, SIG_IGN);
+
 	/* The counter must live in memory both processes see. A plain global
 	 * would be copied by `fork`, and the parent would read its own zero --
 	 * which looks exactly like a server that sent nothing. That failure
@@ -766,6 +786,131 @@ int main(void)
 
 		ok(*GUARD_SAW > 0, "the policy was actually consulted");
 	}
+
+	/* --- a chunked body, over a real socket ---------------------------------
+	 *
+	 * `test_chunked.c` proves the decoder against strings. What only a
+	 * socket shows is the part the decoder cannot: that the connection
+	 * loop keeps feeding it as bytes arrive, that the handler is handed
+	 * the **decoded** body, and that the connection afterwards is left
+	 * pointing at the right byte.
+	 */
+	exchange(port, "POST /api/echo HTTP/1.1\r\nHost: m16\r\n"
+	               "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+	               "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a chunked POST is answered 200");
+	ok(strstr(reply, "\r\n\r\nhello world") != 0,
+	   "and the handler is given the decoded body, joined");
+	ok(strstr(reply, "Content-Length: 11\r\n") != 0,
+	   "eleven bytes, not the twenty-four that arrived");
+
+	exchange(port, "POST /api/echo HTTP/1.1\r\nHost: m16\r\n"
+	               "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+	               "0\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "an empty chunked body is a body");
+
+	/* With a trailer, which must be consumed and must not become a
+	 * header -- `chunked.h` says why at length. */
+	exchange(port, "POST /api/echo HTTP/1.1\r\nHost: m16\r\n"
+	               "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+	               "5\r\nhello\r\n0\r\nX-Checksum: 42\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+	   "a chunked body with a trailer is answered");
+	ok(strstr(reply, "X-Checksum") == 0,
+	   "and the trailer does not come back as a header");
+
+	/*
+	 * Sent in pieces, with a pause, which is the arrangement a real client
+	 * produces and the one the whole-message cases above cannot show. A
+	 * loop that fed the decoder a fresh view each time instead of resuming
+	 * would pass everything else and fail here.
+	 */
+	{
+		int fd = dial(port);
+		size_t n;
+
+		/* Counted by the compiler. A hand-written length here was
+		 * three bytes too long on the first draft and sent whatever
+		 * followed the literal -- the same mistake this file already
+		 * made once, in the pipelined virtual-host case below. */
+		static const char HEAD[] =
+			"POST /api/echo HTTP/1.1\r\nHost: m16\r\n"
+			"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+
+		ok(fd >= 0, "a connection for a body sent in pieces");
+		send(fd, HEAD, sizeof(HEAD) - 1, 0);
+		usleep(50000);
+		send(fd, "3\r\nabc\r\n", 8, 0);
+		usleep(50000);
+		send(fd, "3\r\nd", 4, 0);
+		usleep(50000);
+		send(fd, "ef\r\n0\r\n\r\n", 9, 0);
+		n = slurp(fd, reply, sizeof(reply));
+		close(fd);
+
+		ok(n > 0 && starts_with(reply, "HTTP/1.1 200 OK\r\n"),
+		   "a body arriving in pieces, one of them mid-chunk, is answered");
+		ok(n > 0 && strstr(reply, "\r\n\r\nabcdef") != 0,
+		   "and decodes to the same six bytes");
+	}
+
+	/*
+	 * The check that decides where the next request starts.
+	 *
+	 * A second request pipelined behind a chunked body. If the connection
+	 * took the *decoded* length as the bytes this request occupied, the
+	 * chunk headers and the terminator would be left in the buffer and
+	 * read as the next request line.
+	 */
+	{
+		static const char BOTH[] =
+			"POST /api/echo HTTP/1.1\r\nHost: m16\r\n"
+			"Transfer-Encoding: chunked\r\n\r\n"
+			"5\r\nhello\r\n0\r\n\r\n"
+			"GET / HTTP/1.1\r\nHost: m16\r\nConnection: close\r\n\r\n";
+		int fd = dial(port);
+		const char *first, *second;
+		size_t n;
+
+		ok(fd >= 0, "a connection for a chunked body and one behind it");
+		send(fd, BOTH, sizeof(BOTH) - 1, 0);
+		n = slurp(fd, reply, sizeof(reply));
+		close(fd);
+
+		first = strstr(reply, "\r\n\r\nhello");
+		second = strstr(reply, "<h1>ReconOS Server</h1>");
+		ok(n > 0 && first != 0, "the chunked request is answered");
+		ok(second != 0,
+		   "and so is the request pipelined behind it");
+		ok(first != 0 && second != 0 && first < second,
+		   "in that order, which is the one the client sent");
+	}
+
+	/* --- and a body that must not be believed -------------------------------- */
+	exchange(port, "POST /api/echo HTTP/1.1\r\nHost: m16\r\n"
+	               "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+	               "5\nhello\r\n0\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 400 Bad Request\r\n"),
+	   "a chunk size ended with a bare LF is refused over the socket too");
+
+	exchange(port, "POST /api/echo HTTP/1.1\r\nHost: m16\r\n"
+	               "Transfer-Encoding: chunked\r\nContent-Length: 5\r\n"
+	               "Connection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 400 Bad Request\r\n"),
+	   "and so is a request framed both ways");
+
+	exchange(port, "POST /api/echo HTTP/1.0\r\n"
+	               "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+	         reply, sizeof(reply));
+	ok(starts_with(reply, "HTTP/1.1 400 Bad Request\r\n"),
+	   "and chunked on HTTP/1.0, which predates it");
 
 	/* --- virtual hosts, and the name nobody claims ------------------------
 	 *

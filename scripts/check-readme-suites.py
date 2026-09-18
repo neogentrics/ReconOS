@@ -56,6 +56,40 @@ def read_table(readme):
     return rows
 
 
+#
+# The suite count is written out in words in the summary box, so it has to be
+# read back as a number.
+#
+# **Built rather than listed.** The first version was a literal map that went
+# `twelve` to `twenty`, which was every count that had existed when it was
+# written; the twenty-first suite made it answer *which this cannot read as a
+# number*, so the check that exists to stop the README drifting failed for its
+# own vocabulary. A hand-kept list of the numbers that happen to have come up
+# is exactly the shape this project has been bitten by three times.
+#
+UNITS = ("zero", "one", "two", "three", "four", "five", "six", "seven",
+         "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+         "fifteen", "sixteen", "seventeen", "eighteen", "nineteen")
+TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+        "eighty", "ninety")
+
+
+def number_of(word):
+    """The number a written-out count means, or None. 0 to 99."""
+    word = word.strip().lower()
+
+    if word in UNITS:
+        return UNITS.index(word)
+    if word in TENS:
+        return TENS.index(word) * 10
+
+    if "-" in word:
+        tens, _, unit = word.partition("-")
+        if tens in TENS and TENS.index(tens) >= 2 and unit in UNITS[1:10]:
+            return TENS.index(tens) * 10 + UNITS.index(unit)
+    return None
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: check-readme-suites.py <summary-file>", file=sys.stderr)
@@ -100,7 +134,7 @@ def main():
 
     # The summary box at the top, which is the number anybody actually quotes.
     total = sum(ran.values())
-    m = re.search(r"\*\*Checks\*\*\s*\|\s*(\d+) across (\w+) suites", readme)
+    m = re.search(r"\*\*Checks\*\*\s*\|\s*(\d+) across ([\w-]+) suites", readme)
     if not m:
         problems.append("the summary box's check line could not be read")
     else:
@@ -108,10 +142,7 @@ def main():
             problems.append("the summary box says %s checks, the suites gave %d"
                             % (m.group(1), total))
 
-        words = {"twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-                 "sixteen": 16, "seventeen": 17, "eighteen": 18,
-                 "nineteen": 19, "twenty": 20}
-        said = words.get(m.group(2))
+        said = number_of(m.group(2))
         if said is None:
             problems.append("the summary box says '%s' suites, which this "
                             "cannot read as a number" % m.group(2))

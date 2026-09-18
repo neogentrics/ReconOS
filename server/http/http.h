@@ -118,6 +118,18 @@ struct http_request {
 	size_t header_count;
 	unsigned long content_length;
 	int    has_length;
+
+	/*
+	 * The body is framed by `Transfer-Encoding: chunked` rather than by a
+	 * length. `has_length` is then zero and `content_length` means nothing
+	 * until the body has been decoded, because a chunked body's length is
+	 * not knowable from its head -- which is the whole reason the framing
+	 * exists.
+	 *
+	 * The two are never both set. A message that framed itself twice was
+	 * refused before this field was reached: see `HTTP_ESMUGGLE`.
+	 */
+	int    chunked;
 	size_t head_length;		/* bytes consumed, body starts here */
 };
 

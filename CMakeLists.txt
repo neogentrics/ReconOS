@@ -904,6 +904,7 @@ add_test(NAME server_http COMMAND recon_server_http_tests)
 add_executable(recon_server_serve_tests
     server/http/request.c
     server/http/serve.c
+    server/http/chunked.c
     server/tests/test_http_serve.c)
 
 add_test(NAME server_http_serve COMMAND recon_server_serve_tests)
@@ -919,6 +920,7 @@ add_test(NAME server_http_serve COMMAND recon_server_serve_tests)
 add_executable(recon_server_files_tests
     server/http/request.c
     server/http/serve.c
+    server/http/chunked.c
     server/http/files.c
     server/http/cache.c
     server/http/range.c
@@ -941,6 +943,7 @@ add_test(NAME server_http_files COMMAND recon_server_files_tests)
 add_executable(recon_server_stream_tests
     server/http/request.c
     server/http/serve.c
+    server/http/chunked.c
     server/tests/test_http_stream.c)
 
 add_test(NAME server_http_stream COMMAND recon_server_stream_tests)
@@ -1053,6 +1056,7 @@ add_test(NAME server_http_multipart COMMAND recon_server_multipart_tests)
 add_executable(recon_server_concurrent_tests
     server/http/request.c
     server/http/serve.c
+    server/http/chunked.c
     server/tests/test_http_concurrent.c)
 
 add_test(NAME server_http_concurrent COMMAND recon_server_concurrent_tests)
@@ -1141,6 +1145,19 @@ add_executable(recon_server_config_tests
     server/tests/test_config.c)
 
 add_test(NAME server_config COMMAND recon_server_config_tests)
+
+# Reading a chunked body, and every way of framing one twice.
+#
+# Chunked framing is where request smuggling lives -- not because the format
+# is hard, but because it has several places where a parser can meet text it
+# does not understand and carry on. Most of this suite is bodies that must be
+# refused, and every case is run twice: whole, and a byte at a time, which is
+# the arrangement a real network produces.
+add_executable(recon_server_chunked_tests
+    server/http/chunked.c
+    server/tests/test_chunked.c)
+
+add_test(NAME server_chunked COMMAND recon_server_chunked_tests)
 
 # Three answers, and the two ways of confusing them.
 #
