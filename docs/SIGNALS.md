@@ -16,9 +16,10 @@ git show origin/graphics:docs/SIGNALS.md
 This track merges into **`kernel`**, not `main`: it is kernel code, and the
 kernel session verifies it against the full matrix first.
 
-**`VERSION` in `kernel/Makefile` reads 0.4.2 in this branch.** 0.4.0 is the
+**`VERSION` in `kernel/Makefile` reads 0.4.3 in this branch.** 0.4.0 is the
 kernel session's, taken for the log port, and the merged tree keeps the later
-number as it did at 0.2.38/0.2.39. 0.4.1 and 0.4.2 are NW-010 and NW-011.
+number as it did at 0.2.38/0.2.39. 0.4.1, 0.4.2 and 0.4.3 are NW-010, NW-011
+and NW-012. NW-013 is open, so it buys nothing.
 
 Setting it here at all is a departure from the rule that the merging session
 owns the number; Joshua set the direction and told this session to apply it.
@@ -128,7 +129,7 @@ register still pointed at, closed the new ones, and left the originals open.
 Directly above the lookup is a refusal that fires when no title starts with a
 known prefix, commented *every title looks new and the run makes a second copy
 of the whole register.* That is this fault described exactly, guarded only when
-it happens to all 356 entries at once. One at a time is the same fault, quieter,
+it happens to every entry at once. One at a time is the same fault, quieter,
 and the run looks normal — which is worse, because nothing invites you to look.
 
 **Nothing in the repository could have detected it and nothing did.** `--check`
@@ -311,17 +312,18 @@ the list instead. The reason you gave is the one that matters and it is worth
 repeating: if both counts are built from the same list of prefixes, an unknown
 track is invisible to the parser *and* to the thing watching the parser. Taken
 whole, your side of the conflict as you asked. Verified after rather than
-assumed — the badge script now reports 356 bugs across four prefixes and names
-10 `NW`, where before this branch's entries counted as zero.
+assumed — the badge script now reports 358 bugs across four prefixes and names
+13 `NW`, where before this branch's entries counted as zero.
 
-**2. `VERSION` is 0.4.2, and 0.4.0 is yours.** The merged tree takes the later
+**2. `VERSION` is 0.4.3, and 0.4.0 is yours.** The merged tree takes the later
 number, as at 0.2.38/0.2.39, and a log port is plainly a capability rather than
 a fix. Your justification was in the **commit message**, which is the one
 address the paragraph at the top of that block rules out — *a rule kept anywhere
 else is a rule read after the fact*, and a commit message is read later than a
 document, not sooner. It is copied into the Makefile where that paragraph says
 it belongs, attributed to you. The decision is not being second-guessed; only
-its location. 0.4.1 and 0.4.2 are NW-010 and NW-011.
+its location. 0.4.1, 0.4.2 and 0.4.3 are NW-010, NW-011 and NW-012; NW-013 is
+open and buys nothing.
 
 **3. `docs/SIGNALS.md` conflicts structurally, in both directions, for ever.**
 It conflicted across 300 lines on this merge. The file is an **outbox**, one per
@@ -354,7 +356,7 @@ self-test's, which is why that test does not accept false as proof.
 `KF-216` and `KF-237` had issues on the tracker — #450 and #496 — and no link in
 their entries, so `--check` reported them unlinked on every run by everybody.
 Titles verified against the tracker character for character before anything was
-written. The register is now **356 links, 0 wrong, 0 unlinked**, which it has
+written. The register is now **358 links, 0 wrong, 0 unlinked**, which it has
 not been before. Nothing else in those entries was touched.
 
 ---
@@ -678,7 +680,7 @@ See the section on the two tests below.
 
 ## Three things you need to do on merge
 
-**1. The version is `0.4.2`, and the 0.4.0 in it is yours rather than mine.**
+**1. The version is `0.4.3`, and the 0.4.0 in it is yours rather than mine.**
 
 This section asked for `0.4.0` once and Joshua refused it, rightly: the Realtek
 had never touched silicon, so *"the kernel can network on real hardware"* — the
@@ -689,11 +691,15 @@ The 0.4.0 in the tree is the **log port's**, taken on your side of the merge for
 a capability this kernel did not have at 0.3.x. The merged tree keeps the later
 number, as at 0.2.38/0.2.39.
 
-**Nine patches, one per fault fixed**, which is the arithmetic this file has
+**Ten patches, one per fault fixed**, which is the arithmetic this file has
 followed since 0.1.x: NW-001, NW-002, NW-006, NW-007, NW-009, then NW-003 and
-NW-008 once those turned out to be mine rather than yours, and now NW-010 and
-NW-011. Two entries remain open — NW-004 and NW-005 — and both are genuinely
-interface decisions, so they buy nothing.
+NW-008 once those turned out to be mine rather than yours, and now NW-010,
+NW-011 and NW-012.
+
+**Three entries remain open and none of them buys a patch, because none is
+fixed.** NW-004 and NW-005 are yours and unchanged. NW-013 is the BIOS command
+line, and it is open because it is the boot track's file to change, not because
+nobody knows what to do about it.
 
 Setting the number here at all is a departure from the convention that the
 merging session owns it, on Joshua's explicit instruction rather than this
