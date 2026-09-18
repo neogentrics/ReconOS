@@ -507,14 +507,29 @@ static bool the_primary_device_has_a_cable(void)
 	}
 
 	/* And now the cable comes out. The address does not go with it: that is
-	 * the whole case, and it is what a lease outliving a cable looks like. */
+	 * the whole case, and it is what a lease outliving a cable looks like.
+	 *
+	 * **What `netdev_primary` is actually load-bearing for, stated exactly,
+	 * because an earlier version of this overstated it.** `logport_start`
+	 * binds to `IPV4_ANY`, so the socket does listen on every card whatever
+	 * this answers. The answer is used for two other things: as a *gate* --
+	 * no addressable device and the port refuses to start at all -- and as
+	 * the address printed in the boot report.
+	 *
+	 * The gate is the interesting half, because the comment beside it says
+	 * why it is there: a listener on 0.0.0.0 would "succeed" on a machine
+	 * with no network and print a port nobody can reach, which is the
+	 * confident wrong answer this project keeps refusing to give. A card
+	 * that is up and addressed with no cable in it walks straight through
+	 * that gate -- so the check fails at the one thing it was written to
+	 * prevent, which is worse than not having it. */
 	d->link = false;
 
 	if (netdev_primary() == d) {
 		kputs("  nic: a card with no cable was offered as this "
-		      "machine's address -- the log port would listen on an "
-		      "address nothing can reach, which is the one case it "
-		      "exists for\n");
+		      "machine's address -- logport would start on a machine "
+		      "nobody can reach and print a port to go with it, which "
+		      "is the answer its own comment refuses to give\n");
 		ok = false;
 	}
 

@@ -731,11 +731,19 @@ turned out to be true.
   Two predicates for "a card you can use", in two files, differing on exactly
   the field NW-003 had just given a meaning to. The one that picks the address
   a machine advertises was the one that did not care whether the wire was in.
-- **What it would cost.** The log port exists for the boot where the disk
-  cannot record the fault — the machine you would otherwise diagnose by
-  photographing a panel, which this project has now done four times. Its
-  failure mode here is to print and listen on an address nothing can reach,
-  which looks like a working log port right up until somebody needs it.
+- **What it would cost, stated exactly, because the first version of this
+  entry overstated it.** `logport_start` binds to `IPV4_ANY`, so the socket
+  listens on every card regardless. `netdev_primary`'s answer is used as a
+  **gate** — no addressable device and the port refuses to start — and as the
+  address **printed** in the boot report.
+
+  The gate is where it bites, and the comment beside it says why it exists: a
+  listener on 0.0.0.0 would *"succeed" on a machine with no network and print a
+  port nobody can reach, which is the confident wrong answer this project keeps
+  refusing to give.* A card that is up and addressed with no cable walks
+  straight through it. **So the check fails at the one thing it was written to
+  prevent**, which is worse than not having the check, because its presence is
+  what makes the printed address believable.
 - **Honestly: it was latent, not live, and the guard was a coincidence in
   another file.** A cableless card does not normally hold an address, because
   NW-003 made `net_bring_up` skip DHCP when there is no cable — so `ip` was
