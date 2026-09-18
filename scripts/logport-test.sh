@@ -29,8 +29,47 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD
 ARCH=${1:-x86_64}
 KERNEL=kernel/build/$ARCH/reconos-kernel.elf
-HOSTPORT=${HOSTPORT:-14919}
+# A free port, asked for rather than assumed.
+#
+# It was a fixed 14919. Two of these at once -- two worktrees, or this wired
+# into a run that something else is already running -- both bind the same host
+# port, and the second one fails in a way that reads like the kernel did not
+# listen. Nothing about that failure would point at the port.
+#
+# Overridable, because a fixed port is what you want when debugging by hand and
+# a free one is what you want when something else chose the moment to run.
+free_port() {
+	python3 - <<-'PY' 2>/dev/null || echo 14919
+	import socket
+	s = socket.socket()
+	s.bind(('127.0.0.1', 0))
+	print(s.getsockname()[1])
+	s.close()
+	PY
+}
+
+HOSTPORT=${HOSTPORT:-$(free_port)}
 GUESTPORT=4919
+
+# Which card carries it. Defaults to virtio-net, so an ordinary run is exactly
+# the run this test was written against.
+#
+# **It is a variable because the machine this feature exists for does not have
+# a virtio-net in it.** The log port's case is the boot where the medium cannot
+# record the fault -- which on the server means USB, and the network there is
+# two Realtek 8168s. A feature proved over one emulated card is proved over the
+# hypervisor, not over the network stack: virtio-net has no descriptor
+# ownership to get wrong, no FCS in its lengths, and no cable to lose. Those
+# are precisely the things a real card driver can get wrong underneath a
+# working TCP stack.
+#
+#   NIC=e1000 scripts/logport-test.sh        the Intel 8254x driver
+#   NIC=virtio-net scripts/logport-test.sh   the default
+#
+# No Realtek gigabit part is emulated by QEMU, so r8169 still cannot be run
+# this way. e1000 is the closest available proxy: a real descriptor ring, a
+# real link register, driven by a driver this branch wrote.
+NIC=${NIC:-virtio-net}
 
 [ -f "$KERNEL" ] || { echo "no kernel at $KERNEL"; exit 2; }
 command -v qemu-system-x86_64 >/dev/null || { echo "no qemu"; exit 2; }
@@ -60,7 +99,7 @@ run_guest() {
 
 	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
 		-netdev user,id=n0,hostfwd=tcp::$HOSTPORT-:$GUESTPORT \
-		-device virtio-net,netdev=n0 \
+		-device "$NIC",netdev=n0 \
 		-kernel "$KERNEL" -append "$append" > "$out" 2>&1 &
 
 	# Wait for the kernel to say it is listening, rather than sleeping a
