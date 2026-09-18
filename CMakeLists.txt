@@ -1172,6 +1172,19 @@ add_executable(recon_server_jsonread_tests
 
 add_test(NAME server_jsonread COMMAND recon_server_jsonread_tests)
 
+# Choosing what to send, and the headers that are read wrong.
+#
+# `Accept` is the header most often handled by looking for a substring, which
+# fails in both directions: `application/json` is a substring of
+# `application/jsonrequest`, and a client sending only a wildcard matches
+# nothing. Both failures are silent, so most of this suite is headers whose
+# correct answer is not the obvious one.
+add_executable(recon_server_accept_tests
+    server/http/accept.c
+    server/tests/test_accept.c)
+
+add_test(NAME server_accept COMMAND recon_server_accept_tests)
+
 # Three answers, and the two ways of confusing them.
 #
 # KF-244 made `connect` say `SYS_OK`, `SYS_EAGAIN` or `SYS_EIO` -- established,

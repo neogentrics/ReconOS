@@ -463,10 +463,38 @@ runs in milliseconds. VF-032.
 
 ---
 
+## One for everybody: a table its own suite cannot check
+
+Short, and it applies to anything here with a list of numbers in it.
+
+`http.h` carries one X-macro of every HTTP status with its reason phrase. It
+exists because the function and the suite had each enumerated them by hand and
+drifted twice -- `304 Unknown` went out on the wire, then 206 and 416 did the
+same a day later, *after* a case had been added for every status then known.
+One list, read by both, fixed that.
+
+**It cannot fix a number missing from the list entirely.** The suite walks the
+same table the function is built from, so a status nobody added is invisible
+from both sides. This version sent `HTTP/1.1 406 Unknown` from a machine with
+every suite green.
+
+The fix is a third reader that goes the other way: `scripts/check-statuses.py`
+reads every status *literal in the source* and checks it against the table. It
+found a second one the same minute -- a 502 the resolver has been able to send
+since 0.18.0 and nobody had ever seen.
+
+If your branch has a table of numbers with names -- syscalls, errnos, register
+fields, bug prefixes -- the question worth asking is not *do the two readers
+agree* but *is there a third reader that would notice an entry nobody wrote*.
+`scripts/check-syscall-numbers.py` on the kernel branch is already that shape
+for one of them. VF-033.
+
+---
+
 ## Status of this branch
 
-**server 0.27.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
-the two socket fixes above. **1254 checks across twenty-two suites**, green. Both
+**server 0.28.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+the two socket fixes above. **1330 checks across twenty-three suites**, green. Both
 roles build.
 
 `origin/kernel` has moved on to e01d423 since that merge and this branch has

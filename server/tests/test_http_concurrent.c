@@ -90,8 +90,8 @@ static int handle_take(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET",  "/hello", 1, handle_hello, 0, 0, 0 },
-	{ "POST", "/take",  1, handle_take,  0, 0, 0 },
+	{ .method = "GET", .prefix = "/hello", .exact = 1, .handler = handle_hello },
+	{ .method = "POST", .prefix = "/take", .exact = 1, .handler = handle_take },
 };
 
 /* What the host must do to a socket so it behaves like one on the target.

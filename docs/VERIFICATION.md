@@ -1145,3 +1145,87 @@ a media type this does not read  415       send a form or application/json
   builds with `-O2 -Werror`, which turns glibc's fortify warning into a failed
   build. A suite that overruns its own buffer is a suite whose results are
   whatever the stack happened to hold.
+
+### VF-033 -- two statuses this server could send and had no words for
+
+- **What was built** Content negotiation: `server/http/accept.c`, and
+  `GET /api/log` rendering the same entries as text or as JSON depending on
+  `Accept`. The row in `docs/WEB.md` had said since 0.12.0 that a JSON log was
+  *unblocked and not built* because two representations of one thing drift
+  exactly like two lists do. The answer is not a second endpoint -- that is two
+  handlers reading one ring, and the second to be edited is the one that goes
+  wrong. One handler, one walk over the entries, a branch on which bytes to
+  emit.
+- **`Accept` is the header most often read wrong**, and it fails in both
+  directions at once: `application/json` is a substring of
+  `application/jsonrequest`, so a client that will not take JSON is sent it;
+  and a client sending only a wildcard matches nothing, because the string is
+  not there. Both silently.
+- **Three properties carry it**, and each has a section in the suite: `q`
+  orders the ranges and the header is **not** in preference order -- Chrome's
+  own is deliberately unsorted; `q=0` means *not acceptable*, which is the only
+  way a client can say "anything but this"; and the **most specific** matching
+  range decides an offer, so `text/*;q=1, text/plain;q=0` excludes plain rather
+  than preferring it.
+- **Parameters other than `q` are checked for shape and ignored**, which is a
+  deliberate exception to this project's *refuse rather than skip* rule, and it
+  is measured rather than argued. Chrome sends
+  `application/signed-exchange;v=b3;q=0.7` on every request. A parser that
+  refused a parameter it did not know would answer **400 to every request a
+  browser makes** -- a strictness with no safety in it, because unlike a
+  framing header, misreading `Accept` cannot make two readers disagree about
+  where a message ends.
+- **Watched failing against four plausible implementations:**
+
+```
+takes the first matching range        4 of 69 fail
+treats q=0 as merely low              4 of 69 fail
+takes the best-weighted match         3 of 69 fail
+does not require the type to end where the range's does   0 of 69 fail
+```
+
+- **The fourth survived, and that is the finding.** Every substring check in
+  the suite used a hostile *range* against this server's two real offers, and
+  none used a hostile *offer*. With the check deleted, `text` matched
+  `textual/plain` and all sixty-nine checks stayed green -- a client asking for
+  one media type being sent another, silently, which is the exact failure the
+  file opens by describing. Five checks added; the mutant now fails two.
+- **And then the machine printed this:**
+
+```
+only a type it cannot send   HTTP/1.1 406 Unknown
+```
+
+- **`HTTP_STATUSES` could never have caught it.** That X-macro exists because
+  `http_reason` and its suite drifted twice -- 304 went out as `304 Unknown`,
+  then 206 and 416 did the same *after* a case had been added for every status
+  then known. The list fixed the drift between the function and the suite. It
+  cannot fix a status that is in neither: **the suite walks the same table the
+  function is built from, so a status missing from the table is invisible from
+  both sides.** Only the wire showed it.
+- **So `scripts/check-statuses.py` reads the other direction** -- every status
+  literal at a call that sends one, checked against the table -- and it found a
+  second one in the same minute:
+
+```
+server/init/server_init.c:1272: 502 is sent and has no reason phrase
+```
+
+  A 502 the resolver has been able to send since 0.18.0, which would have gone
+  out as `502 Unknown` the first time a name failed to resolve in a way that
+  reached it. Nobody had ever seen it.
+- **Watched failing**, by taking 406 back out: the check names the file, the
+  line and the consequence. It runs with every suite.
+- **Confirmed on the machine afterwards**, which is where the fault was found
+  and so is where it has to be shown fixed:
+
+```
+only a type it cannot send   HTTP/1.1 406 Not Acceptable
+```
+
+- **One more thing this version moved**, because the compiler asked. Adding
+  `negotiated` to `struct http_route` broke every positional route initializer
+  under `-Wextra -Werror` -- the same shape as VF-029, this time announcing
+  itself. All twenty-five rows across four files are designated now, so the
+  next field added to a route is simply absent from the tables that do not care
+  about it.

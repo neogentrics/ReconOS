@@ -148,12 +148,15 @@ static int both_handler(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET", "/known",    1, 0, stream_known,   0, 0 },
-	{ "GET", "/unknown",  1, 0, stream_unknown, 0, 0 },
-	{ "GET", "/short",    1, 0, stream_short,   0, 0 },
-	{ "GET", "/over",     1, 0, stream_over,    0, 0 },
-	{ "GET", "/refuses",  1, 0, stream_refuses, 0, 0 },
-	{ "GET", "/both",     1, both_handler, stream_known, 0, 0 },
+	{ .method = "GET", .prefix = "/known", .exact = 1, .stream = stream_known },
+	{ .method = "GET", .prefix = "/unknown",
+	  .exact = 1, .stream = stream_unknown },
+	{ .method = "GET", .prefix = "/short", .exact = 1, .stream = stream_short },
+	{ .method = "GET", .prefix = "/over", .exact = 1, .stream = stream_over },
+	{ .method = "GET", .prefix = "/refuses",
+	  .exact = 1, .stream = stream_refuses },
+	{ .method = "GET", .prefix = "/both",
+	  .exact = 1, .handler = both_handler, .stream = stream_known },
 };
 
 static unsigned long *BYTES;

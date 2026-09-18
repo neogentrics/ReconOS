@@ -95,9 +95,11 @@ static int handle_echo(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET",  "/",            1, handle_root,   0, 0, 0 },
-	{ "GET",  "/api/status",  1, handle_status, 0, 0, 0 },
-	{ "POST", "/api/echo",    1, handle_echo,   0, 0, 0 },
+	{ .method = "GET", .prefix = "/", .exact = 1, .handler = handle_root },
+	{ .method = "GET", .prefix = "/api/status",
+	  .exact = 1, .handler = handle_status },
+	{ .method = "POST", .prefix = "/api/echo",
+	  .exact = 1, .handler = handle_echo },
 };
 
 /* The byte counter lives in shared memory, because the server runs in the
@@ -150,8 +152,9 @@ static int handle_secret(const struct http_request *r, const char *body,
 }
 
 static const struct http_route GUARDED_ROUTES[] = {
-	{ "GET", "/open",   1, handle_root,    0, 0, 0 },
-	{ "GET", "/secret", 1, handle_secret,  0, 0, 1 },
+	{ .method = "GET", .prefix = "/open", .exact = 1, .handler = handle_root },
+	{ .method = "GET", .prefix = "/secret",
+	  .exact = 1, .handler = handle_secret, .guarded = 1 },
 };
 
 /* Allows only the exact header. Deliberately trivial: the real decision is
@@ -237,7 +240,7 @@ static int handle_whoami(const struct http_request *r, const char *body,
 }
 
 static const struct http_route VHOST_ROUTES[] = {
-	{ "GET", "/who", 1, handle_whoami, 0, 0, 0 },
+	{ .method = "GET", .prefix = "/who", .exact = 1, .handler = handle_whoami },
 };
 
 static struct http_site BETA_SITE = {

@@ -50,6 +50,7 @@
 #include "../http/escape.h"
 #include "../http/json.h"
 #include "../http/jsonread.h"
+#include "../http/accept.h"
 #include "../http/multipart.h"
 #include "../auth.h"
 #include "../dns.h"
@@ -932,15 +933,99 @@ static int handle_services(const struct http_request *r, const char *body,
  * will draw conclusions from a log that is missing exactly the burst they are
  * looking for.
  */
+/*
+ * The access log, as text or as JSON.
+ *
+ * **One endpoint, two renderings, and that is the decision `docs/WEB.md` has
+ * been waiting on since 0.12.0.** The row there said a JSON log was unblocked
+ * and not built because it *would make one endpoint serve two formats, and two
+ * representations of one thing drift exactly like two lists do*. The drift is
+ * real and the answer is not a second endpoint -- that is two handlers reading
+ * one ring, and the second one to be edited is the one that goes wrong. It is
+ * one handler, one walk over the entries, and a branch on which bytes to emit.
+ *
+ * The route is marked `negotiated`, so the server sends `Vary: Accept` without
+ * this function remembering to.
+ */
 static int handle_log(const struct http_request *r, const char *body,
                       size_t body_len, struct http_response *out, void *ctx)
 {
+	static const char *const OFFERS[] = {
+		"text/plain",		/* first, so a browser and curl get
+					 * something a person can read */
+		"application/json"
+	};
 	static char text[LOG_ENTRIES_MAX * (LOG_LINE_MAX + 32) + 128];
 	struct logbook *book = (struct logbook *)ctx;
 	size_t held = log_held(book), i;
-	int n, m;
+	int n, m, pick;
 
-	(void)r; (void)body; (void)body_len;
+	(void)body; (void)body_len;
+
+	pick = http_accept_pick(http_header_get(r, "accept"), OFFERS, 2);
+	if (pick == ACCEPT_EMALFORMED) {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: an Accept header this"
+		                     " cannot read\n", 51);
+		return HTTP_OK;
+	}
+	if (pick == ACCEPT_NONE) {
+		/*
+		 * 406, and it carries a body saying what is on offer.
+		 *
+		 * A bare 406 tells a client it asked for the wrong thing and
+		 * not what the right thing would have been, which leaves it
+		 * with nothing to do but guess.
+		 */
+		http_response_simple(out, 406, "text/plain",
+		                     "406 Not Acceptable: this endpoint can"
+		                     " send text/plain or application/json\n",
+		                     74);
+		return HTTP_OK;
+	}
+
+	if (pick == 1) {
+		n = snprintf(text, sizeof(text),
+		             "{\"held\":%lu,\"capacity\":%d,\"dropped\":%lu,"
+		             "\"entries\":[",
+		             (unsigned long)held, LOG_ENTRIES_MAX,
+		             log_dropped(book));
+		if (n < 0 || (size_t)n >= sizeof(text))
+			return HTTP_EINTERNAL;
+
+		for (i = 0; i < held; i++) {
+			const struct log_entry *e = log_at(book, i);
+			char line[JSON_ROOM(LOG_LINE_MAX)];
+
+			/*
+			 * Escaped, not written straight in.
+			 *
+			 * A log line is the one text on this machine composed
+			 * entirely by somebody else -- it carries the request
+			 * target, which a client chose. VF-010 is this
+			 * project's entry about a value that reached a JSON
+			 * document unescaped and was safe only by coincidence.
+			 */
+			if (json_escape(e->line, line, sizeof(line)) < 0)
+				return HTTP_EINTERNAL;
+
+			m = snprintf(text + n, sizeof(text) - (size_t)n,
+			             "%s{\"at\":%lu,\"line\":\"%s\"}",
+			             i ? "," : "", e->at, line);
+			if (m < 0 || (size_t)(n + m) >= sizeof(text))
+				return HTTP_EBODY_LONG;
+			n += m;
+		}
+
+		m = snprintf(text + n, sizeof(text) - (size_t)n, "]}\n");
+		if (m < 0 || (size_t)(n + m) >= sizeof(text))
+			return HTTP_EBODY_LONG;
+		n += m;
+
+		http_response_simple(out, 200, "application/json", text,
+		                     (size_t)n);
+		return HTTP_OK;
+	}
 
 	n = snprintf(text, sizeof(text),
 	             "held %lu of %d, dropped %lu\n\n",
@@ -1439,24 +1524,35 @@ static int handle_log_segment(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS, 0 },
-	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS, 0 },
-	{ "GET",  "/health",      1, handle_health,    0, 0, 0 },
-	{ "GET",  "/api/services", 1, handle_services,  0, &SUPERVISOR, 0 },
-	{ "GET",  "/api/log",     1, handle_log,       0, &LOGBOOK, 0 },
-	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS, 1 },
-	{ "POST", "/api/upload",  1, handle_upload,    0, 0, 1 },
-	{ "GET",  "/api/resolve", 1, handle_resolve,   0, &RESOLVER, 1 },
+	{ .method = "GET", .prefix = "/",
+	  .exact = 1, .handler = handle_dashboard, .ctx = &FACTS },
+	{ .method = "GET", .prefix = "/api/status",
+	  .exact = 1, .handler = handle_status, .ctx = &FACTS },
+	{ .method = "GET", .prefix = "/health",
+	  .exact = 1, .handler = handle_health },
+	{ .method = "GET", .prefix = "/api/services",
+	  .exact = 1, .handler = handle_services, .ctx = &SUPERVISOR },
+	{ .method = "GET", .prefix = "/api/log",
+	  .exact = 1, .handler = handle_log, .ctx = &LOGBOOK,
+	  .negotiated = 1 },
+	{ .method = "POST", .prefix = "/api/name",
+	  .exact = 1, .handler = handle_set_name, .ctx = &FACTS, .guarded = 1 },
+	{ .method = "POST", .prefix = "/api/upload",
+	  .exact = 1, .handler = handle_upload, .guarded = 1 },
+	{ .method = "GET", .prefix = "/api/resolve",
+	  .exact = 1, .handler = handle_resolve, .ctx = &RESOLVER, .guarded = 1 },
 	/* The archive, guarded. The ring at `/api/log` is a snapshot and stays
 	 * open; these are every path this machine has ever been asked for. See
 	 * the block above `handle_log_segments`. */
-	{ "GET",  "/api/log/segments", 1, handle_log_segments, 0, 0, 1 },
-	{ "GET",  "/api/log/segment",  1, handle_log_segment,  0, 0, 1 },
+	{ .method = "GET", .prefix = "/api/log/segments",
+	  .exact = 1, .handler = handle_log_segments, .guarded = 1 },
+	{ .method = "GET", .prefix = "/api/log/segment",
+	  .exact = 1, .handler = handle_log_segment, .guarded = 1 },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
 	 * the volume can serve something larger than this program's memory. */
-	{ "GET", "",              0, 0, http_files_handler,
-	  (void *)&SITE_FILES, 0 },
+	{ .method = "GET", .prefix = "",
+	  .stream = http_files_handler, .ctx = (void *)&SITE_FILES },
 };
 
 /*

@@ -199,6 +199,7 @@ int http_host_matches(const char *pattern, const char *header);
 	X(403, "Forbidden")                                    \
 	X(404, "Not Found")                                    \
 	X(405, "Method Not Allowed")                           \
+	X(406, "Not Acceptable")                               \
 	X(408, "Request Timeout")                              \
 	X(409, "Conflict")                                     \
 	X(413, "Content Too Large")                            \
@@ -210,6 +211,7 @@ int http_host_matches(const char *pattern, const char *header);
 	X(431, "Request Header Fields Too Large")              \
 	X(500, "Internal Server Error")                        \
 	X(501, "Not Implemented")                              \
+	X(502, "Bad Gateway")                                  \
 	X(503, "Service Unavailable")                          \
 	X(505, "HTTP Version Not Supported")
 

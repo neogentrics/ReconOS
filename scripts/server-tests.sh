@@ -129,6 +129,26 @@ if command -v python3 >/dev/null 2>&1; then
 	fi
 fi
 
+#
+# And does every status this server sends have a reason phrase?
+#
+# `HTTP_STATUSES` in `http.h` fixed the drift between `http_reason` and the
+# suite -- both read the one list. It could not fix the other half: a status
+# used in a handler and never added to the list at all. That is invisible from
+# both sides, because the suite walks the same table the function is built
+# from, and it reached the wire in 0.28.0 as `HTTP/1.1 406 Unknown`.
+#
+# This reads the other direction -- every status literal in the source, checked
+# against the list -- and found a second one the same minute: a 502 the
+# resolver had been able to send since 0.18.0.
+#
+if command -v python3 >/dev/null 2>&1; then
+	if ! python3 "$here/check-statuses.py"; then
+		echo "refusing to run the suites against a server that can send a status with no phrase" >&2
+		exit 2
+	fi
+fi
+
 printf '%s\n' "--- server suites ---"
 
 for entry in $(printf '%s\n' "$targets" | tr ' ' '\001'); do

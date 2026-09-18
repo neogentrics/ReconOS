@@ -153,7 +153,7 @@ can run, not by what it can send.
 | **Template rendering** | partial | `escape.c` exists and the dashboard uses it. A template engine does not, and when one arrives it must escape by default — one that escapes on request is one that is forgotten once. |
 | **A JSON API** | **built** | `/api/status`, `/api/services` and the reply from `POST /api/name`. Escaped through `json.c` since 0.14.0; before that the machine name went in raw and was safe by coincidence — VF-010.. **Reads JSON too, since 0.27.0** — `jsonread.c`, 128 checks. The reader is chosen by `Content-Type`, never by sniffing the body, and a type this cannot read is 415 rather than 400 |
 | **Name resolution** | **built** | `GET /api/resolve?name=` — `server/dns.c`, 72 checks. **Guarded**, because an open resolver endpoint is an open resolver: it makes this machine send a query somebody else chose. |
-| **The access log as JSON** | **unblocked** | 0.12.0 refused it because a request target can carry a quote via `%22` and there was no escaper. There is one now. Still not built, and the reason has changed: it would make one endpoint serve two formats, and two representations of one thing drift exactly like two lists do. It needs a decision about content negotiation first, not a few more lines. |
+| **The access log as JSON** | **built** | `GET /api/log` renders the same entries as text or as JSON, chosen by `Accept` — `server/http/accept.c`, 74 checks. **One handler, one walk over the ring, a branch on which bytes to emit**: a second endpoint would be two pieces of code rendering one thing, and the second to be edited is the one that goes wrong. The response carries `Vary: Accept`, sent by the server rather than by the handler. 0.28.0 |
 
 ### The two that shape the others
 

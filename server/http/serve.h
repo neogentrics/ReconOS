@@ -260,6 +260,23 @@ struct http_route {
 	 * outcome nobody wanted.
 	 */
 	int          guarded;
+
+	/*
+	 * Whether this route chooses its representation from `Accept`.
+	 *
+	 * The server sends `Vary: Accept` on the answer, and it does it here
+	 * rather than leaving it to the handler for the same reason the
+	 * security headers and the access log are the server's: a header every
+	 * handler must remember is a header the next handler will not send.
+	 *
+	 * **It is not decoration.** A response whose body depends on a request
+	 * header and does not say so is a response a cache between here and
+	 * the client will hand to the next person who asked for something
+	 * else -- the JSON stored for a management client served to a browser
+	 * that asked for text. The route knows it negotiates; nothing further
+	 * down does.
+	 */
+	int          negotiated;
 };
 
 struct http_site {

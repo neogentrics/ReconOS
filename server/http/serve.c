@@ -357,7 +357,8 @@ void http_response_simple(struct http_response *out, int status,
 static int send_response(int fd, const struct http_request *req,
                          const struct http_response *res,
                          const char *server_name, int keep_alive,
-                         int head_only, unsigned long *counter)
+                         int head_only, int vary_accept,
+                         unsigned long *counter)
 {
 	char head[2048];
 	int n;
@@ -380,6 +381,17 @@ static int send_response(int fd, const struct http_request *req,
 	if (res->content_type && res->body_len > 0) {
 		int m = snprintf(head + n, sizeof(head) - (size_t)n,
 		                 "Content-Type: %s\r\n", res->content_type);
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	}
+
+	/* See `negotiated` in `serve.h`: the route said its body depends on
+	 * `Accept`, and a response that does not say so is one a cache serves
+	 * to the next client that asked for something else. */
+	if (vary_accept) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "Vary: Accept\r\n");
 		if (m < 0 || (size_t)(n + m) >= sizeof(head))
 			return -1;
 		n += m;
@@ -619,7 +631,7 @@ static int send_status(int fd, int status, const char *server_name,
 	if (n < 0)
 		return -1;
 	http_response_simple(&res, status, "text/plain", body, (size_t)n);
-	return send_response(fd, 0, &res, server_name, 0, 0, counter);
+	return send_response(fd, 0, &res, server_name, 0, 0, 0, counter);
 }
 
 /*
@@ -834,6 +846,14 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 	unsigned long sent_before = c->sent_before;
 	int verdict, keep, head_only, i, matched = 0;
 
+	/*
+	 * The route that answered, kept because one thing after the loop needs
+	 * it: whether to send `Vary: Accept`. Held as a pointer rather than
+	 * copying the flag, so the next question the server wants to ask a
+	 * route after dispatch does not need a second variable beside it.
+	 */
+	const struct http_route *chosen = 0;
+
 	head_only = (strcmp(req->method, "HEAD") == 0);
 	keep = req->keep_alive;
 
@@ -903,7 +923,7 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 				res.close = 1;
 				if (send_response(fd, req, &res,
 				                  site->server_name, 0,
-				                  head_only,
+				                  head_only, rt->negotiated,
 				                  site->bytes_sent) != 0) {
 					note(site, req, 401, sent_before);
 					return 0;
@@ -976,6 +996,7 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 			return 0;
 		}
 		matched = 1;
+		chosen = rt;
 		break;
 	}
 
@@ -1000,7 +1021,8 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 		keep = 0;
 
 	if (send_response(fd, req, &res, site->server_name, keep,
-	                  head_only, site->bytes_sent) != 0) {
+	                  head_only, chosen ? chosen->negotiated : 0,
+	                  site->bytes_sent) != 0) {
 		/* Logged even though the send failed. What was
 		 * attempted is the useful record; a request that
 		 * vanishes from the log because the client went away
