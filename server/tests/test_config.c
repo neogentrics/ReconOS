@@ -457,6 +457,83 @@ int main(void)
 		}
 	}
 
+	/* --- generations, because a file here is written once ---------------------
+	 *
+	 * See `config.h`. A configuration is superseded rather than edited, and
+	 * the numbering is what makes that work. It is the same shape as the
+	 * log's, and it has the same two ways of going wrong: a name that does
+	 * not sort chronologically, and a number taken from memory rather than
+	 * from the directory.
+	 */
+	{
+		char name[CONFIG_NAME_MAX];
+		unsigned long n = 0;
+		unsigned long highest = 0;
+
+		ok(config_generation_name(1, name, sizeof(name)) == 11
+		   && strcmp(name, "000001.conf") == 0,
+		   "a generation is zero-padded, so a lexical sort is a "
+		   "chronological one");
+		ok(config_generation_name(999999, name, sizeof(name)) == 11
+		   && strcmp(name, "999999.conf") == 0,
+		   "and the last one fits");
+		ok(config_generation_name(1000000, name, sizeof(name)) < 0,
+		   "one past the end is refused rather than wrapping");
+		ok(config_generation_name(1, name, 4) < 0,
+		   "and so is a buffer too small to hold it");
+
+		ok(config_is_generation("000007.conf", 11, &n) == 1 && n == 7,
+		   "a generation's name reads back as its number");
+		ok(config_is_generation("7.conf", 6, &n) == 0,
+		   "an unpadded name is not one -- it would sort wrongly");
+		ok(config_is_generation("000007.txt", 10, &n) == 0,
+		   "nor is another suffix");
+		ok(config_is_generation("00000a.conf", 11, &n) == 0,
+		   "nor a letter among the digits");
+		ok(config_is_generation("000007.conf", 10, &n) == 0,
+		   "nor the right name with the wrong length");
+		ok(config_is_generation("", 0, &n) == 0, "nor nothing at all");
+
+		/*
+		 * The next number comes from the listing.
+		 *
+		 * `logfile.h` records what happens when it comes from memory
+		 * instead: a machine starting again at one each boot does not
+		 * clobber anything, because `SYS_CREATE` refuses -- it fails
+		 * every write from the second boot onwards, and says nothing.
+		 */
+		{
+			static const char LISTING[] =
+				"000001.conf\0" "000003.conf\0" "000002.conf\0";
+
+			ok(config_generation_next(LISTING, sizeof(LISTING) - 1,
+			                          &highest) == 4
+			   && highest == 3,
+			   "the next number is one past the highest, whatever "
+			   "order the directory gives them in");
+		}
+		{
+			static const char MIXED[] =
+				"000002.conf\0" "notes.txt\0" "\0"
+				"000010.conf\0" "9.conf\0";
+
+			ok(config_generation_next(MIXED, sizeof(MIXED) - 1,
+			                          &highest) == 11
+			   && highest == 10,
+			   "and names that are not generations are stepped "
+			   "over, so a stray file cannot stop a machine "
+			   "configuring itself");
+		}
+		{
+			static const char EMPTY[] = "";
+
+			ok(config_generation_next(EMPTY, 0, &highest) == 1
+			   && highest == 0,
+			   "an empty directory starts at one, and says there "
+			   "is nothing in force");
+		}
+	}
+
 	printf("  %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

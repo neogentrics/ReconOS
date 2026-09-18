@@ -214,6 +214,7 @@ int http_host_matches(const char *pattern, const char *header);
 	X(501, "Not Implemented")                              \
 	X(502, "Bad Gateway")                                  \
 	X(503, "Service Unavailable")                          \
+	X(507, "Insufficient Storage")                        \
 	X(505, "HTTP Version Not Supported")
 
 /* The reason phrase for a status. Never NULL: a status not in the table above

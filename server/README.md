@@ -29,11 +29,12 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.32.0 |
+| **Version** | 0.33.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
-| **Checks** | 1453 across twenty-four suites, by `scripts/server-tests.sh`,
-and 74 more on a booted machine by `scripts/machine-tests.sh` |
+| **Checks** | 1467 across twenty-four suites, by `scripts/server-tests.sh`,
+79 more on a booted machine by `scripts/machine-tests.sh`, and 13 across two
+boots by `scripts/config-round-trip.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -174,8 +175,19 @@ They run on the host and need no machine:
 ./scripts/machine-tests.sh
 ```
 
+```bash
+./scripts/config-round-trip.sh
+```
+
+The second one needs **two** boots, because that is the design: a configuration
+written over the network takes effect at the next start, so a single boot cannot
+show it working. It makes its own volume, refuses a candidate that will not
+parse, writes one that will, restarts the machine and finds it running the new
+generation. The shape is VF-025's, which is the entry about an upload endpoint
+that had never been shown to keep anything.
+
 Boots the server role under QEMU, waits for the line that says it is listening,
-reads the boot token off the console, and asks the machine seventy-four questions
+reads the boot token off the console, and asks the machine seventy-nine questions
 over a real socket. About a minute.
 
 **It exists because every suite above was green on a server that answered twelve
@@ -203,7 +215,7 @@ project builds with, and following them left two suites unbuildable.
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 135 | one request, and every way of writing two |
+| `server_http` | 136 | one request, and every way of writing two |
 | `server_http_serve` | 108 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
@@ -221,7 +233,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
 | `server_logfile` | 45 | numbering segments, and the sort order that makes a log readable |
 | `server_dial` | 38 | three answers, and the two ways of confusing them |
-| `server_config` | 159 | reading a configuration, and the files that must not be believed |
+| `server_config` | 172 | reading a configuration, and the files that must not be believed |
 | `server_chunked` | 116 | reading a chunked body, and every way of framing one twice |
 | `server_jsonread` | 128 | reading JSON, and every document that means two things |
 | `server_accept` | 93 | choosing what to send, and the headers that are read wrong |
@@ -316,6 +328,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.33.0** | **The machine can be configured over the network, on a kernel that cannot replace a file.** That was the sharpest entry in `docs/KERNEL-WANTS.md` since 0.25.0: `SYS_CREATE` writes a file whole and refuses a name that exists, there is no unlink and no rename, so a configuration could be **written once and never corrected** — which is not a configuration. It is the same wall `logfile.h` hit, and it has the same answer: *a log that appends is impossible here; a log that rotates is natural.* A configuration is not edited, it is **superseded**. `POST /api/config` parses a candidate, refuses it with the line and the reason if it will not read, and otherwise writes it as the next numbered generation in `/System/Config`; the machine reads the highest it finds at boot. Three things fall out of that and only one was designed: every configuration this machine has ever run is still on the volume, a generation is whole or absent because ReconFS writes in one transaction, and getting it wrong is recoverable because writing another is the same operation. **It takes effect at the next boot, deliberately** — applying it live would change the listening port underneath the connection asking for the change, and a mistake would take the console with it before anybody could write the correction. `scripts/config-round-trip.sh` makes its own volume, boots, refuses a bad candidate, writes a good one, reboots, and finds the machine running it: 13 checks across two boots. The numbering comes from the directory, not from memory, which is the mistake `logfile.h` records — a machine starting again at one does not clobber anything, it fails every write from its second boot onwards and says nothing. VF-039. |
 | **0.32.0** | **The console shows what the machine is configured as, and what it has recently been asked for.** Both were facts with no reader: the configuration was applied at boot and then let go, so a person asking *is my file in force?* had to read the serial console from boot time or guess; and the access log had an API and no place on the page. `GET /api/config` reports what is running — **guarded**, because a site's document root is a path somebody chose and a reader who can list them has the shape of the filesystem for free — and says **where it came from**, so a machine running its defaults because a file would not parse is not the same answer as one running them because there is no file. The page and the endpoint are built from one structure, because two readers of one fact eventually become two facts. **The log on the page is the first place on this machine where text a stranger sent reaches a document somebody else's browser parses.** `request.c` admits every printable byte in a target, including `<`, so every line goes through `escape.c` — and the machine suite now asks for `/%3Cscript%3E...` and reads the page back to prove it. Watched failing: with the escaping removed, `<script>alert(1)` arrives as markup. The same suite reads the console's own form rather than only the API it posts to, which is what VF-022 was about. 74 machine checks. VF-038. |
 | **0.31.0** | **A program can now read the machine's name, cache it, and change it only if it is still what it read.** `POST /api/name` has been an unconditional write since 0.3.0: two clients that both read and both write leave whichever arrived second in charge, and the first is never told its change was lost. A shrug with one administrator; the oldest fault in shared state once 0.27.0 made the API drivable by a program. So the name is a resource with a validator — `GET /api/name` answers it with an `ETag`, and `POST` honours `If-Match` and answers **412** when the client's view is stale. **The server does the conditional read, not the handler**: a handler sets `etag` and knows nothing else, and `serve.c` turns a matching `If-None-Match` into a 304 with no body — the same argument as the security headers, `Vary` and the access log. `cache.h` had already written down the rule this needed: `If-None-Match` compares **weakly** and `If-Match` **strongly**, because a weak tag says two bodies are equivalent, not that they are the same bytes somebody may overwrite. One walker with a flag rather than two, and fifteen checks that every malformed header refuses the write rather than allowing it. Without an `If-Match` the write is unconditional exactly as before, because the console's own form sends none and VF-022 is this project's entry about an API change that quietly broke it. VF-037. |
 | **0.30.0** | **A suite that runs on the machine, because every other one runs on a host.** VF-034 was found by accident — 1423 checks green on a server that answered twelve requests and then went silent — and the answer to a fault found by accident is not to be more careful. `scripts/machine-tests.sh` boots the server role, waits for the line that says it is listening, reads the boot token off the console, and asks forty-four questions over a real socket: two hundred connections in a row, forty down one, a six-kilobyte body, the guard, the volume, gzip decompressed by a library this project did not write, and every status carrying its phrase **on the wire** rather than in a table. A minute, and a separate command from the suites for that reason. **Its first run failed seven checks, and two of them were faults in the checks rather than in the server** — a client that cannot reassemble a response across two reads reported two of forty against a server answering all forty, and a check that posted six kilobytes into a 512-byte form field measured the bound rather than the property. The two real ones are the same fault twice: **a status that names the wrong end of the request.** A form field past its bound answered `431 Request Header Fields Too Large`, sending a client to look at the one part of its request that was fine; an upload on a diskless boot answered `500`, which claims the server broke when the truth is that there is nowhere to put the file. 413 and 503 now. VF-036. |

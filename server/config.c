@@ -689,3 +689,82 @@ const char *config_reason(int verdict)
 	default:                 return "unknown";
 	}
 }
+
+/* --- generations ----------------------------------------------------------
+ *
+ * See `config.h` for why a configuration is superseded rather than edited. This
+ * is the naming, and it is deliberately the same shape as `logfile.c`'s: the
+ * two solve one problem and a reader who has understood one has understood the
+ * other.
+ */
+
+long config_generation_name(unsigned long number, char *out, size_t room)
+{
+	static const char SUFFIX[] = ".conf";
+	size_t i;
+
+	if (!out || room < CONFIG_NAME_MAX)
+		return -1;
+	if (number > CONFIG_MAX_NUMBER)
+		return -1;
+
+	/* Written backwards from the last digit, which is what makes the
+	 * zero-padding fall out rather than needing a second pass. */
+	for (i = CONFIG_DIGITS; i > 0; i--) {
+		out[i - 1] = (char)('0' + (int)(number % 10));
+		number /= 10;
+	}
+	for (i = 0; i < sizeof(SUFFIX) - 1; i++)
+		out[CONFIG_DIGITS + i] = SUFFIX[i];
+	out[CONFIG_DIGITS + sizeof(SUFFIX) - 1] = 0;
+
+	return (long)(CONFIG_DIGITS + sizeof(SUFFIX) - 1);
+}
+
+int config_is_generation(const char *name, size_t len, unsigned long *number)
+{
+	static const char SUFFIX[] = ".conf";
+	unsigned long n = 0;
+	size_t i;
+
+	if (!name || len != CONFIG_DIGITS + sizeof(SUFFIX) - 1)
+		return 0;
+
+	for (i = 0; i < CONFIG_DIGITS; i++) {
+		if (!is_digit(name[i]))
+			return 0;
+		n = n * 10UL + (unsigned long)(name[i] - '0');
+	}
+	for (i = 0; i < sizeof(SUFFIX) - 1; i++) {
+		if (name[CONFIG_DIGITS + i] != SUFFIX[i])
+			return 0;
+	}
+
+	if (number)
+		*number = n;
+	return 1;
+}
+
+unsigned long config_generation_next(const char *names, size_t len,
+                                     unsigned long *highest)
+{
+	unsigned long best = 0;
+	size_t at = 0;
+
+	while (at < len) {
+		size_t end = at;
+		unsigned long n = 0;
+
+		while (end < len && names[end])
+			end++;
+
+		if (config_is_generation(names + at, end - at, &n) && n > best)
+			best = n;
+
+		at = end + 1;		/* step over the terminator */
+	}
+
+	if (highest)
+		*highest = best;
+	return best + 1;
+}

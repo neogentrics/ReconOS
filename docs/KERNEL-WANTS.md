@@ -296,7 +296,7 @@ newer than its caller.
 
 ---
 
-## A file can be created and never changed, so a machine cannot be configured
+## A file can be created and never changed, so nothing can be corrected in place
 
 ### What is missing
 
@@ -314,14 +314,24 @@ port, its resolver, its clock, and its virtual hosts. It is the first piece of
 this role that is configuration rather than a build, which is what
 `docs/ROLES.md` says a role is meant to be.
 
-**And this machine cannot write that file a second time.** The server creates a
-commented template when a volume has none, so there is something to edit -- and
-then nothing on the machine can edit it. Not the console, not an endpoint, not
-a future text editor. A configuration that can be written once and never
-corrected is a configuration nobody should be encouraged to use, and the
-verification of it (VF-030) had to embed the bytes in a build to see two
-virtual hosts answer, because there is no way to put a file on the volume from
-outside either.
+**This machine cannot write that file a second time, and since 0.33.0 it does
+not try.** A configuration is superseded rather than edited: `POST /api/config`
+writes the next numbered generation into `/System/Config`, and the machine reads
+the highest it finds at boot. That is the shape `logfile.c` was pushed into by
+this same limitation, and it suits a configuration better than editing would
+have -- every one the machine has ever run is still on the volume, and a
+generation is whole or absent because ReconFS writes a file in one transaction.
+
+**So this entry is narrowed rather than closed, and what is left is sharper.** A
+generation that *parses* and is wrong -- a port nothing can reach -- takes
+effect at the next boot and cannot be undone from the network. Every earlier
+generation is sitting on the volume and **nothing can select one**, because
+nothing here can read a boot argument and nothing can remove the newest file.
+The machine is then recoverable only by somebody standing in front of it.
+
+What this costs is no longer *configuration is impossible*. It is *a mistake is
+permanent*, which is a smaller thing to ask about and a worse thing to leave
+alone.
 
 The same gap is why the access log rotates rather than appends. That one found
 a good shape by being pushed into it; this one has no good shape to be pushed

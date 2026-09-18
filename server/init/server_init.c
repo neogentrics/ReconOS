@@ -167,6 +167,9 @@ static struct server_facts FACTS;
  */
 struct config_summary {
 	int      read;			/* a file was found and parsed */
+	unsigned long generation;	/* which one, or 0 for none */
+	unsigned long next;		/* the number a write would use */
+	int      legacy;		/* read from the 0.25.0 path instead */
 	int      refused;		/* a file was found and would not parse */
 	unsigned line;			/* where, when refused */
 	char     why[64];		/* and in a few words */
@@ -470,13 +473,28 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 		         "<strong>" CONFIG_PATH " was refused</strong> at line "
 		         "%u: %s. This machine is running its built-in "
 		         "defaults.", IN_FORCE.line, IN_FORCE.why);
+	else if (IN_FORCE.read && IN_FORCE.legacy)
+		snprintf(config_said, sizeof(config_said),
+		         "Read from <code>" CONFIG_PATH "</code>, which is "
+		         "where 0.25.0 put it. A write would make generation "
+		         "%lu in <code>" CONFIG_DIR "</code>.",
+		         IN_FORCE.next);
 	else if (IN_FORCE.read)
 		snprintf(config_said, sizeof(config_said),
-		         "Read from <code>" CONFIG_PATH "</code>.");
+		         "Generation %lu, from <code>" CONFIG_DIR "</code>. "
+		         "A write would make generation %lu, and it would take "
+		         "effect at the next boot.",
+		         IN_FORCE.generation, IN_FORCE.next);
+	else if (IN_FORCE.generation)
+		snprintf(config_said, sizeof(config_said),
+		         "Generation %lu is on the volume and says nothing, so "
+		         "these are the built-in defaults. A write would make "
+		         "generation %lu.",
+		         IN_FORCE.generation, IN_FORCE.next);
 	else
 		snprintf(config_said, sizeof(config_said),
-		         "No <code>" CONFIG_PATH "</code>; these are the "
-		         "built-in defaults.");
+		         "No volume to keep one on; these are the built-in "
+		         "defaults.");
 
 	snprintf(sites_said, sizeof(sites_said),
 	         "%lu, and the console, which answers to every other name",
@@ -993,6 +1011,152 @@ static int name_wanted(const struct http_request *r, const char *body,
 }
 
 
+
+/*
+ * Write the next configuration.
+ *
+ * **Parsed before it is written, and applied at the next boot.** Both halves
+ * matter and neither is the obvious choice, so both are written down here.
+ *
+ * *Parsed first*, because a file this machine cannot read is a file the next
+ * boot falls back from -- and then the machine is running its defaults with a
+ * generation on the volume saying otherwise. A candidate that does not parse is
+ * refused with the line and the reason, exactly as the boot path would report
+ * it, and nothing is written.
+ *
+ * *Applied at the next boot*, because applying it live would mean the listening
+ * port or the site list changing underneath the connection that asked for the
+ * change -- and a mistake would take the console with it before anybody could
+ * write the correction. Written and read later means a person who mistypes a
+ * port writes another generation instead of walking to the machine.
+ *
+ * What this does not solve, said plainly: a configuration that **parses** and is
+ * still wrong -- a port nothing can reach -- takes effect at the next boot and
+ * cannot be undone from the network afterwards. The generations before it are
+ * all still there, and none of them can be selected without something that can
+ * read a boot argument. `docs/KERNEL-WANTS.md` has the entry.
+ */
+static int handle_put_config(const struct http_request *r, const char *body,
+                             size_t body_len, struct http_response *out,
+                             void *ctx)
+{
+	static struct config candidate;
+	static char answer[256];
+	char path[sizeof(CONFIG_DIR) + CONFIG_NAME_MAX + 1];
+	char name[CONFIG_NAME_MAX];
+	const char *type = http_header_get(r, "content-type");
+	int at = 0, n, wrote, rc;
+	size_t k;
+
+	(void)ctx;
+
+	/*
+	 * The bytes are a configuration file, so the type is the file's.
+	 * Refused rather than sniffed: a body that happens to parse is not the
+	 * same as a client that meant to send one, and this endpoint writes to
+	 * the volume.
+	 */
+	if (type && !media_is(type, "text/plain")) {
+		http_response_simple(out, 415, "text/plain",
+		                     "415 Unsupported Media Type: send the"
+		                     " file as text/plain\n", 57);
+		return HTTP_OK;
+	}
+
+	if (body_len == 0) {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: an empty body is not a"
+		                     " configuration\n", 54);
+		return HTTP_OK;
+	}
+
+	rc = config_parse(body, body_len, &candidate);
+	if (rc != CONFIG_OK) {
+		n = snprintf(answer, sizeof(answer),
+		             "400 Bad Request: line %u: %s (%s)\n"
+		             "Nothing was written.\n",
+		             candidate.line, config_reason(rc),
+		             candidate.found);
+		if (n < 0 || (size_t)n >= sizeof(answer))
+			return HTTP_EINTERNAL;
+		http_response_simple(out, 400, "text/plain", answer,
+		                     (size_t)n);
+		return HTTP_OK;
+	}
+
+	/*
+	 * The machine's name is checked here too, against the same validator
+	 * the boot path uses. A generation that parses and then has its name
+	 * refused at boot is a generation that silently does less than it
+	 * says.
+	 */
+	if (candidate.has_name) {
+		struct name_family family;
+		int split = server_name_split(candidate.name, &family);
+
+		if (split != SERVER_OK && split != SERVER_EUNNUMBERED) {
+			n = snprintf(answer, sizeof(answer),
+			             "400 Bad Request: line %u: `%s` is not a"
+			             " machine name\nNothing was written.\n",
+			             candidate.line, candidate.name);
+			if (n < 0 || (size_t)n >= sizeof(answer))
+				return HTTP_EINTERNAL;
+			http_response_simple(out, 400, "text/plain", answer,
+			                     (size_t)n);
+			return HTTP_OK;
+		}
+	}
+
+	if (config_generation_name(IN_FORCE.next, name, sizeof(name)) < 0) {
+		http_response_simple(out, 507, "text/plain",
+		                     "507 Insufficient Storage: this volume has"
+		                     " no generation numbers left\n", 66);
+		return HTTP_OK;
+	}
+
+	for (k = 0; k < sizeof(CONFIG_DIR) - 1; k++)
+		path[at++] = CONFIG_DIR[k];
+	path[at++] = '/';
+	for (k = 0; name[k]; k++)
+		path[at++] = name[k];
+	path[at] = 0;
+
+	wrote = put_if_absent(path, (unsigned long)at, body, body_len);
+	if (wrote == 1) {
+		/*
+		 * Already there. Not an overwrite and not a retry: the number
+		 * came from a listing taken at boot, so a name that exists
+		 * means something else has written to this volume since.
+		 */
+		http_response_simple(out, 409, "text/plain",
+		                     "409 Conflict: that generation already"
+		                     " exists\n", 45);
+		return HTTP_OK;
+	}
+	if (wrote < 0) {
+		http_response_simple(out, 503, "text/plain",
+		                     "503 Service Unavailable: no volume to"
+		                     " keep it on\n", 51);
+		return HTTP_OK;
+	}
+
+	n = snprintf(answer, sizeof(answer),
+	             "{\"written\":%lu,\"path\":\"%s/%s\","
+	             "\"in_force\":%lu,\"takes_effect\":\"next boot\"}\n",
+	             IN_FORCE.next, CONFIG_DIR, name, IN_FORCE.generation);
+	if (n < 0 || (size_t)n >= sizeof(answer))
+		return HTTP_EINTERNAL;
+
+	/* The next write gets the next number, without re-listing: this is the
+	 * only thing on this machine that creates them. */
+	IN_FORCE.next++;
+
+	http_response_simple(out, 201, "application/json", answer, (size_t)n);
+	out->extra_name = "Location";
+	out->extra_value = "/api/config";
+	return HTTP_OK;
+}
+
 /*
  * What this machine is configured as.
  *
@@ -1021,11 +1185,14 @@ static int handle_config(const struct http_request *r, const char *body,
 		return HTTP_EINTERNAL;
 
 	n = snprintf(answer, sizeof(answer),
-	             "{\"from\":\"%s\",\"port\":%u,"
+	             "{\"from\":\"%s\",\"generation\":%lu,\"next\":%lu,"
+	             "\"port\":%u,"
 	             "\"resolver\":\"%u.%u.%u.%u\",\"clock\":\"%s\","
 	             "\"sites\":[",
 	             IN_FORCE.refused ? "refused"
-	                              : IN_FORCE.read ? CONFIG_PATH : "defaults",
+	                              : IN_FORCE.legacy ? CONFIG_PATH
+	                              : IN_FORCE.read ? CONFIG_DIR : "defaults",
+	             IN_FORCE.generation, IN_FORCE.next,
 	             IN_FORCE.port,
 	             (IN_FORCE.resolver >> 24) & 0xFF,
 	             (IN_FORCE.resolver >> 16) & 0xFF,
@@ -1950,6 +2117,8 @@ static const struct http_route ROUTES[] = {
 	 * the block above `handle_log_segments`. */
 	{ .method = "GET", .prefix = "/api/config",
 	  .exact = 1, .handler = handle_config, .guarded = 1 },
+	{ .method = "POST", .prefix = "/api/config",
+	  .exact = 1, .handler = handle_put_config, .guarded = 1 },
 	{ .method = "GET", .prefix = "/api/log/segments",
 	  .exact = 1, .handler = handle_log_segments, .guarded = 1 },
 	{ .method = "GET", .prefix = "/api/log/segment",
@@ -2203,7 +2372,83 @@ static void configure(void)
 	int rc;
 	size_t i;
 
-	got = read_whole(CONFIG_PATH, text, sizeof(text));
+	/*
+	 * The newest generation, or the file 0.25.0 wrote, or neither.
+	 *
+	 * See `config.h`: a configuration cannot be edited on this system, so
+	 * it is superseded. The directory decides which one is in force, and
+	 * the number to write next comes from the same listing -- taking it
+	 * from memory is the mistake `logfile.h` records, where a machine that
+	 * starts again at one fails every write from its second boot onwards
+	 * and says nothing.
+	 */
+	{
+		static char names[4096];
+		long need;
+
+		mkdir(CONFIG_DIR, 0755);	/* already there is ordinary */
+
+		need = (long)recon_call6(SYS_LIST,
+		                         (u64)(unsigned long)CONFIG_DIR,
+		                         sizeof(CONFIG_DIR) - 1,
+		                         (u64)(unsigned long)names,
+		                         sizeof(names), 0, 0);
+
+		/*
+		 * `SYS_LIST` answers with the size of the whole listing
+		 * whether or not it fitted, so a number larger than what was
+		 * offered means nothing was written -- and a partial listing
+		 * would give a highest that is not the highest, which is a
+		 * machine running an old configuration and reporting a new
+		 * one.
+		 */
+		if (need >= 0 && (size_t)need <= sizeof(names)) {
+			IN_FORCE.next = config_generation_next(
+				names, (size_t)need, &IN_FORCE.generation);
+		} else {
+			IN_FORCE.next = 1;
+			IN_FORCE.generation = 0;
+		}
+	}
+
+	got = -1;
+	if (IN_FORCE.generation) {
+		char path[sizeof(CONFIG_DIR) + CONFIG_NAME_MAX + 1];
+		char name[CONFIG_NAME_MAX];
+		int at = 0;
+		size_t k;
+
+		if (config_generation_name(IN_FORCE.generation, name,
+		                           sizeof(name)) > 0) {
+			for (k = 0; k < sizeof(CONFIG_DIR) - 1; k++)
+				path[at++] = CONFIG_DIR[k];
+			path[at++] = '/';
+			for (k = 0; name[k]; k++)
+				path[at++] = name[k];
+			path[at] = 0;
+			got = read_whole(path, text, sizeof(text));
+		}
+		if (got < 0) {
+			/* Listed and then unreadable. Reported rather than
+			 * quietly falling back, because the two are different
+			 * machines: one has no configuration and one has one
+			 * it cannot read. */
+			snprintf(line, sizeof(line),
+			         "  the configuration: generation %lu is"
+			         " listed and could not be read\n",
+			         IN_FORCE.generation);
+			say(line);
+			IN_FORCE.generation = 0;
+		}
+	}
+
+	/* The path 0.25.0 wrote, for a volume made by it. */
+	if (got < 0) {
+		got = read_whole(CONFIG_PATH, text, sizeof(text));
+		if (got >= 0)
+			IN_FORCE.legacy = 1;
+	}
+
 	if (got < 0) {
 		/*
 		 * No file. Leave one.
@@ -2229,11 +2474,28 @@ static void configure(void)
 		int wrote;
 
 		tmpl = config_template(&tmpl_len);
-		wrote = put_if_absent(CONFIG_PATH, sizeof(CONFIG_PATH) - 1,
+		wrote = put_if_absent(CONFIG_DIR "/000001.conf",
+		                      sizeof(CONFIG_DIR "/000001.conf") - 1,
 		                      tmpl, tmpl_len);
-		if (wrote == 2)
+		if (wrote == 2) {
+			/*
+			 * Generation 1 is now on the volume and this boot is
+			 * still running its defaults, which are two true
+			 * statements rather than one.
+			 *
+			 * `read` stays zero on purpose: the template was
+			 * written, not parsed, and a machine that claimed to
+			 * have read a file it had only written would be
+			 * reporting something it did not do. The next boot
+			 * reads it and says *generation 1, and it says
+			 * nothing* -- the same machine, described from the
+			 * other side.
+			 */
+			IN_FORCE.generation = 1;
+			IN_FORCE.next = 2;
 			say("  the configuration: none found, wrote a template"
-			    " to " CONFIG_PATH "\n");
+			    " as " CONFIG_DIR "/000001.conf\n");
+		}
 		else if (wrote < 0)
 			say("  the configuration: none, and no volume to keep"
 			    " one on\n");

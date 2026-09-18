@@ -1552,3 +1552,78 @@ assert    the page does contain &lt;script&gt;
   testing the console* is the sentence it produced. There are now checks that
   the page carries the form, both of its fields, and a real value under every
   heading rather than a heading over nothing.
+
+### VF-039 -- configuring a machine that cannot replace a file
+
+- **What was recorded, and was true** VF-030 ended: *a configuration that can be
+  written once and never corrected is not a configuration*, and
+  `docs/KERNEL-WANTS.md` has carried it as this seat's sharpest entry since
+  0.25.0. `SYS_CREATE` writes a file whole and refuses a name that exists; there
+  is no unlink, no rename, no truncate; and the only door onto an existing file
+  is the flag combination VF-027 measured as contradicting its own
+  documentation.
+- **What was wrong about it: the gap was in the shape, not in the kernel.** This
+  project had already hit that wall once and found the other side of it.
+  `logfile.h`, 0.22.0: *a log that appends is impossible here; a log that
+  **rotates** is natural, which is how log-structured systems are built on
+  purpose elsewhere and was arrived at here because nothing else was available.*
+  The same answer works for a configuration. It is not edited, it is
+  **superseded**.
+- **So `/System/Config` holds generations.** `POST /api/config` parses a
+  candidate, refuses it with its line and reason if it will not read, and
+  otherwise writes it under the next number; the machine reads the highest it
+  finds at boot.
+- **Three things fall out of that and only one of them was the point:**
+  - every configuration this machine has ever run is still on the volume, which
+    is an audit trail nobody had to build;
+  - a generation is whole or absent, because ReconFS writes a file in one
+    transaction -- there is no half-written configuration for the next boot to
+    read;
+  - and getting it wrong is recoverable, because writing another one is the
+    same operation as writing the first.
+- **Parsed before it is written.** A file the machine cannot read is a file the
+  next boot falls back from, and then it is running its defaults with a
+  generation on the volume saying otherwise. The candidate goes through
+  `config_parse` and through the same name validator the boot path uses, because
+  a generation that parses and then has its name refused at boot is a generation
+  that silently does less than it says.
+- **And applied at the next boot, deliberately.** Applying it live would change
+  the listening port or the site list underneath the connection that asked for
+  the change, and a mistake would take the console with it before anybody could
+  write the correction. Written now, read later, means a person who mistypes a
+  port writes another generation instead of walking to the machine.
+- **The numbering comes from the directory**, which is the mistake `logfile.h`
+  records in full: a machine that started again at one each boot would not
+  clobber anything -- `SYS_CREATE` refuses -- it would **fail every write from
+  its second boot onwards, silently**.
+- **Measured across two boots on one volume**, which is VF-025's shape, because
+  inside a single boot a write that reached the volume and one that did not look
+  identical:
+
+```
+first boot    {"from":"defaults","generation":1,"next":2, ...}
+              a candidate with `prot 80` in it
+                 -> 400, line 2: no such setting (prot), nothing was written
+              a candidate with `name m17` and `clock time.example`
+                 -> 201, {"written":2, ..., "takes_effect":"next boot"}
+              /api/status still reports the old name, which is the point
+
+second boot   {"from":"/System/Config","generation":2,"next":3,
+                "clock":"time.example", ...}
+              /api/status reports "name":"m17"
+              the console said: the configuration: name m17
+```
+
+- **One check was wrong on the first run, and correcting it sharpened the
+  report.** It asserted that a fresh volume is *running* generation 1. It is
+  not: the template is written, not parsed, and the boot that writes it is
+  running its defaults. Those are two true statements and the summary now makes
+  both -- `"generation":1` with `"from":"defaults"` -- because a machine that
+  claimed to have read a file it had only written would be reporting something
+  it did not do.
+- **What is still open, and is still the kernel's.** A configuration that
+  **parses** and is wrong -- a port nothing can reach -- takes effect at the
+  next boot and cannot be undone from the network. Every earlier generation is
+  still on the volume and nothing can select one, because nothing here can read
+  a boot argument. The entry in `docs/KERNEL-WANTS.md` is narrowed rather than
+  closed.

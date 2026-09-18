@@ -322,6 +322,37 @@ def the_configuration():
     ok(b'"from"' in body,
        "and where it came from, so defaults and a refused file are not the "
        "same answer", body[:80])
+    ok(b'"generation"' in body and b'"next"' in body,
+       "and which generation is in force, and what a write would be numbered",
+       body[:96])
+
+    #
+    # A candidate that does not parse.
+    #
+    # Only the refusal is checked here. Writing one would leave a generation on
+    # the volume every time this suite ran, and `scripts/config-round-trip.sh`
+    # is where the write belongs -- it makes its own volume and reboots the
+    # machine, which is the only way to see a configuration take effect.
+    #
+    bad = "name m16\nprot 80\n"
+    request = ("POST /api/config HTTP/1.1\r\nHost: m16\r\n"
+               "Authorization: Bearer %s\r\nContent-Type: text/plain\r\n"
+               "Content-Length: %d\r\nConnection: close\r\n\r\n%s"
+               % (TOKEN, len(bad), bad))
+    status, _, answer = parts(raw(request))
+    ok(status.startswith("HTTP/1.1 400"),
+       "a candidate configuration that does not parse is refused", status)
+    ok(b"line 2" in answer,
+       "naming the line, the same way the boot path would", answer[:80])
+    ok(b"Nothing was written" in answer,
+       "and saying that nothing was written", answer[:80])
+
+    request = ("POST /api/config HTTP/1.1\r\nHost: m16\r\n"
+               "Content-Type: text/plain\r\n"
+               "Content-Length: 9\r\nConnection: close\r\n\r\nname m16\n")
+    status, _, _ = parts(raw(request))
+    ok(status.startswith("HTTP/1.1 401"),
+       "and writing one at all needs the token", status)
 
 
 def the_guard():

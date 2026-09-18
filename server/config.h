@@ -223,4 +223,87 @@ int config_host_ok(const char *host);
  */
 const char *config_template(size_t *len);
 
+/*
+ * --- Configuring a machine that cannot replace a file ---------------------
+ *
+ * `docs/KERNEL-WANTS.md` carries the entry: nothing in user mode can replace or
+ * remove a file. `SYS_CREATE` writes one whole and refuses a name that exists,
+ * there is no unlink, no rename and no truncate, and the only door onto an
+ * existing file is the flag combination VF-027 measured as contradicting its
+ * own documentation. **So a configuration file could be written once and never
+ * corrected**, which is not a configuration.
+ *
+ * That is the same wall `logfile.h` hit, and it found the shape on the other
+ * side of it: *a log that appends is impossible here; a log that **rotates** is
+ * natural.* The same answer works here. A configuration is not edited, it is
+ * **superseded**: each one is written once, whole, under the next number, and
+ * the machine reads the highest it finds.
+ *
+ * What that buys, beyond being possible at all:
+ *
+ *   * **every configuration this machine has ever run is still on the volume**,
+ *     which is an audit trail nobody had to build;
+ *   * a generation is either there or it is not, because ReconFS writes a whole
+ *     file in one transaction -- there is no half-written configuration for the
+ *     next boot to read;
+ *   * and getting it wrong is recoverable, because writing another one is the
+ *     same operation as writing the first.
+ *
+ * **A new generation takes effect at the next boot, and nothing about that is
+ * an accident.** Applying it live would mean a machine whose listening port or
+ * site list changed under the connection that was asking for the change, and a
+ * mistake would take the console with it before anybody could write the
+ * correction. Written, then read on the next boot, means a person who mistypes
+ * a port can simply write another generation.
+ */
+
+/* Where generations live. A directory of its own, so that listing it is
+ * unambiguous -- the log's own numbering had to ignore names that were not
+ * segments, and a directory that holds one kind of thing does not. */
+#define CONFIG_DIR         "/System/Config"
+#define CONFIG_DIGITS      6
+#define CONFIG_NAME_MAX    (CONFIG_DIGITS + 5 + 1)  /* digits + ".conf" + NUL */
+#define CONFIG_MAX_NUMBER  999999UL
+
+/*
+ * The file name for a generation, zero-padded.
+ *
+ * Six digits for the same reason `logfile.h` gives: `10.conf` sorts before
+ * `9.conf` and every reader that lists a directory then gets them out of order,
+ * and nothing about that failure announces itself.
+ *
+ * Returns the length written, or negative when `number` is past
+ * `CONFIG_MAX_NUMBER` or the room is too small.
+ */
+long config_generation_name(unsigned long number, char *out, size_t room);
+
+/*
+ * Is this a generation's name, and which one?
+ *
+ * Public, and for the reason `logfile_is_segment` is: the function that decides
+ * the next number and the function that lists what is there must agree, and two
+ * readers of one naming rule drift. A name this refuses is a name
+ * `config_generation_next` steps over, which would be a configuration nobody
+ * can reach.
+ */
+int config_is_generation(const char *name, size_t len, unsigned long *number);
+
+/*
+ * The highest generation in a directory listing, and the next number to use.
+ *
+ * `names` is what `SYS_LIST` produces: names NUL-terminated and back to back,
+ * `len` bytes in total. Anything that is not a generation is ignored -- a stray
+ * file in the directory must not stop a machine configuring itself.
+ *
+ * `*highest` receives the newest generation present, or 0 when there is none.
+ * The return is the number to write next, which is `*highest + 1`.
+ *
+ * **Taken from the directory rather than from memory**, which is the mistake
+ * `logfile.h` records at length: a server that started again at one each boot
+ * would not clobber anything -- `SYS_CREATE` refuses -- it would fail every
+ * write from the second boot onwards, silently.
+ */
+unsigned long config_generation_next(const char *names, size_t len,
+                                     unsigned long *highest);
+
 #endif
