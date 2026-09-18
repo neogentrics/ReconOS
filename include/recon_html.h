@@ -59,6 +59,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/*
+ * The widest table this resolves columns for.
+ *
+ * A limit on the *grid*, not on what a viewer draws -- `src/recon_web.c` keeps
+ * its own smaller number for how many columns it will lay out, because that is
+ * a question about a window. This one is about how far a `rowspan` can be
+ * tracked across, and it is generous because a page that has more columns than
+ * this is a page whose cells this could not place correctly anyway.
+ */
+#define RECON_HTML_COLUMNS_MAX 64
+
 #include "recon_css.h"
 
 /* What kind of block this is, which is what decides how it is drawn. */
@@ -151,6 +162,41 @@ struct recon_html_run {
      * guessed at.
      */
     short cell_span;
+
+    /*
+     * How many rows this cell covers.
+     *
+     * One unless the page said otherwise, the same way `cell_span` is. What it
+     * is *for* is the field below: a cell covering two rows takes its column
+     * away from the row beneath, and a viewer that did not know would put that
+     * row's first cell where this one already is.
+     *
+     * `rowspan="0"` means "to the end of the row group" in the standard.
+     * There are no row groups here, so it is read as one rather than guessed
+     * at -- the same decision `cell_span` makes about `colspan="0"`.
+     */
+    short cell_rows;
+
+    /*
+     * Which column this cell actually starts in.
+     *
+     * --- Why this is here and not counted by the viewer ---
+     *
+     * Without rowspan, a cell's column is just how many cells came before it
+     * in the row, and every caller could count. With rowspan it is not: a cell
+     * two rows up can still be occupying column one, so the second row's first
+     * cell begins at column two and the counting answer is wrong by however
+     * many columns are covered from above.
+     *
+     * That is a fact about the *document*, not about the window or the font,
+     * and it is the same answer for everything that asks. So it is resolved
+     * once, here, while the rows are being read -- rather than by each pass
+     * over the table keeping its own running grid, which is two things to keep
+     * in step and one of them would drift.
+     *
+     * Zero for a run that does not start a cell, which is most of them.
+     */
+    short cell_column;
 
     /*
      * Which form control this run *is*, or -1 for the overwhelming majority

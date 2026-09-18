@@ -1022,6 +1022,295 @@ static void test_a_cell_can_cover_several_columns(void) {
     recon_html_free(d);
 }
 
+/*
+ * The grid of a table, as the parser resolved it.
+ *
+ * `column[i]` and `rows[i]` for the i'th cell in reading order, which is how
+ * every check below asks its question -- "where did the fourth cell end up"
+ * being the whole of what rowspan changes.
+ */
+struct grid {
+    short column[24];
+    short span[24];
+    short rows[24];
+    int count;
+};
+
+static struct grid read_grid(struct recon_html_document *d) {
+    struct grid g;
+
+    memset(&g, 0, sizeof(g));
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+
+        if (b == NULL || b->kind != RECON_HTML_ROW) {
+            continue;
+        }
+        for (int j = 0; j < b->run_count; j++) {
+            const struct recon_html_run *r =
+                recon_html_run_at(d, b->first_run + j);
+
+            if (r != NULL && r->starts_cell && g.count < 24) {
+                g.column[g.count] = r->cell_column;
+                g.span[g.count] = r->cell_span;
+                g.rows[g.count] = r->cell_rows;
+                g.count++;
+            }
+        }
+    }
+    return g;
+}
+
+static void same_column(const struct grid *g, int cell, int want,
+        const char *what) {
+    check(cell < g->count && g->column[cell] == want, what);
+    if (cell < g->count && g->column[cell] != want) {
+        printf("    cell %d is in column %d, wanted %d\n", cell,
+            g->column[cell], want);
+    }
+}
+
+static void test_a_cell_can_cover_several_rows(void) {
+    printf("rowspan, and the column every later cell is in\n");
+
+    /*
+     * --- The fault this exists to stop ---
+     *
+     * A cell with `rowspan="2"` is still occupying its column in the row
+     * beneath, so that row's first cell begins one column further along. A
+     * viewer that counted cells instead would put it at column zero -- under
+     * the spanning cell -- and every cell in that row one column to the left
+     * of where it belongs.
+     *
+     * That is the same failure `colspan` was added to fix, arrived at from the
+     * other direction: legible, and wrong, which is worse than not drawing it.
+     *
+     *     +-------+-------+-------+
+     *     | Jan   | North |   10  |     row 1: three cells, columns 0 1 2
+     *     |       +-------+-------+
+     *     |       | South |   20  |     row 2: TWO cells, columns 1 and 2
+     *     +-------+-------+-------+
+     *     | Feb   | North |   30  |     row 3: three again, columns 0 1 2
+     */
+    const char *html =
+        "<table>"
+        "<tr><td rowspan=\"2\">Jan</td><td>North</td><td>10</td></tr>"
+        "<tr><td>South</td><td>20</td></tr>"
+        "<tr><td>Feb</td><td>North</td><td>30</td></tr>"
+        "</table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    struct grid g = read_grid(d);
+
+    check(g.count == 8, "eight cells across the three rows");
+    if (g.count == 8) {
+        same_column(&g, 0, 0, "the spanning cell is in column zero");
+        check(g.rows[0] == 2, "and covers two rows");
+        same_column(&g, 1, 1, "the cell beside it is in column one");
+        same_column(&g, 2, 2, "and the next in column two");
+
+        /* The row the span reaches into. */
+        same_column(&g, 3, 1,
+            "the second row's first cell steps over the column above it");
+        same_column(&g, 4, 2, "and the one after it follows");
+
+        /* And the span is spent. */
+        same_column(&g, 5, 0, "the third row starts at column zero again");
+        same_column(&g, 6, 1, "with its second cell beside it");
+        same_column(&g, 7, 2, "and its third after that");
+    }
+
+    recon_html_free(d);
+}
+
+static void test_rowspan_and_colspan_together(void) {
+    printf("a cell that covers rows and columns at once\n");
+
+    /*
+     * Two columns wide and two rows deep, which is where an implementation
+     * that tracked only one of the two comes apart: the row beneath has to
+     * step over *both* of its columns, not one.
+     *
+     *     +---------------+-------+
+     *     |    Quarter    |  Q1   |     row 1: cols 0-1 (spanning), then 2
+     *     |               +-------+
+     *     |               |  Q2   |     row 2: one cell, at column 2
+     *     +-------+-------+-------+
+     *     | Jan   | Feb   |  Q3   |     row 3: 0, 1, 2
+     */
+    const char *html =
+        "<table>"
+        "<tr><td colspan=\"2\" rowspan=\"2\">Quarter</td><td>Q1</td></tr>"
+        "<tr><td>Q2</td></tr>"
+        "<tr><td>Jan</td><td>Feb</td><td>Q3</td></tr>"
+        "</table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    struct grid g = read_grid(d);
+
+    check(g.count == 6, "six cells");
+    if (g.count == 6) {
+        same_column(&g, 0, 0, "the big cell starts at column zero");
+        check(g.span[0] == 2 && g.rows[0] == 2, "two columns and two rows");
+        same_column(&g, 1, 2, "the cell beside it is at column two");
+        same_column(&g, 2, 2,
+            "and the second row's only cell steps over both columns");
+        same_column(&g, 3, 0, "the third row starts over");
+        same_column(&g, 4, 1, "beside");
+        same_column(&g, 5, 2, "and after");
+    }
+
+    recon_html_free(d);
+}
+
+static void test_a_rowspan_that_is_not_a_number(void) {
+    printf("rowspans a page got wrong\n");
+
+    /*
+     * Every one of these is one row, never zero -- the same answer `colspan`
+     * gives, for the same reason. A cell covering zero rows is not a shape
+     * with a meaning; `rowspan="0"` means "to the end of the row group" in the
+     * standard, and there are no row groups here, so it is read as one rather
+     * than guessed at.
+     *
+     * The second row is what makes this a test rather than a reading: if any
+     * of them had been taken as more than one row, its column would be taken
+     * away from the row below and every cell there would move.
+     */
+    const char *html =
+        "<table>"
+        "<tr><td rowspan=\"0\">zero</td><td rowspan=\"banana\">words</td>"
+        "<td rowspan=\"-4\">below</td></tr>"
+        "<tr><td>a</td><td>b</td><td>c</td></tr>"
+        "</table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    struct grid g = read_grid(d);
+
+    check(g.count == 6, "six cells");
+    if (g.count == 6) {
+        check(g.rows[0] == 1, "rowspan=0 is one, not none");
+        check(g.rows[1] == 1, "a rowspan that is not a number is one");
+        check(g.rows[2] == 1, "and a negative one is one");
+
+        same_column(&g, 3, 0,
+            "so the second row starts at column zero, untouched");
+        same_column(&g, 4, 1, "and runs straight across");
+        same_column(&g, 5, 2, "to the end");
+    }
+
+    recon_html_free(d);
+}
+
+static void test_a_span_does_not_leak_into_the_next_table(void) {
+    printf("a rowspan at the bottom of a table\n");
+
+    /*
+     * A `rowspan="5"` in the last row has four rows of cover left over and no
+     * rows to spend it on. If that survived the `</table>`, the next table on
+     * the page would start with its first column occupied by a cell from
+     * somewhere else -- and every heading in it would be one column to the
+     * right.
+     *
+     * The grid is reset at `<table>` rather than only at `</table>`, because a
+     * page whose table never closes is a page this still has to draw.
+     */
+    const char *html =
+        "<table><tr><td rowspan=\"5\">deep</td><td>beside</td></tr></table>"
+        "<table><tr><td>fresh</td><td>next</td></tr></table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    struct grid g = read_grid(d);
+
+    check(g.count == 4, "four cells across the two tables");
+    if (g.count == 4) {
+        same_column(&g, 0, 0, "the deep cell is in column zero");
+        same_column(&g, 1, 1, "with one beside it");
+        same_column(&g, 2, 0,
+            "and the next table starts at column zero, not after the span");
+        same_column(&g, 3, 1, "with its own second cell beside it");
+    }
+
+    recon_html_free(d);
+}
+
+static void test_a_span_that_runs_over_a_covered_column(void) {
+    printf("a cell whose width crosses a column something is already in\n");
+
+    /*
+     * Found by mutation: keeping the *longer* of two covers on a column
+     * changed no check, so the rule was there and unverified. It is reachable
+     * from a page, which is what makes it worth a test rather than a comment.
+     *
+     * A cell takes the first free column and then spans right -- so it can
+     * cross a column that is covered from above, even though it could not
+     * start on one:
+     *
+     *     +-------+-------+
+     *     |   A   |   B   |   B covers column 1 for three rows
+     *     +-------+       |
+     *     |       C       |   C is free at column 0 and spans 0, 1 and 2
+     *     +-------+-------+-------+
+     *     |   D   |       |   E   |   D at 0; E must step over B, at 2
+     *
+     * C is one row deep. If its cover simply replaced B's on column 1, B's two
+     * remaining rows would be thrown away and E would land in column 1 --
+     * inside a cell that is still there. Taking the larger of the two keeps
+     * the row beneath clear of a column something is still in.
+     */
+    const char *html =
+        "<table>"
+        "<tr><td>A</td><td rowspan=\"3\">B</td></tr>"
+        "<tr><td colspan=\"3\">C</td></tr>"
+        "<tr><td>D</td><td>E</td></tr>"
+        "</table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    struct grid g = read_grid(d);
+
+    check(g.count == 5, "five cells");
+    if (g.count == 5) {
+        same_column(&g, 0, 0, "A is in column zero");
+        same_column(&g, 1, 1, "B beside it");
+        same_column(&g, 2, 0, "C starts at column zero, which is free");
+        same_column(&g, 3, 0, "D starts the third row at column zero");
+        same_column(&g, 4, 2,
+            "and E steps over the column B is still in, rather than into it");
+    }
+
+    recon_html_free(d);
+}
+
 static void test_an_empty_cell_still_takes_a_column(void) {
     printf("the blank corner of a two-row header\n");
 
@@ -1659,6 +1948,11 @@ int main(void) {
     test_a_table_becomes_rows_and_cells();
     test_a_cell_is_not_merged_into_the_one_before_it();
     test_a_cell_can_cover_several_columns();
+    test_a_cell_can_cover_several_rows();
+    test_rowspan_and_colspan_together();
+    test_a_rowspan_that_is_not_a_number();
+    test_a_span_does_not_leak_into_the_next_table();
+    test_a_span_that_runs_over_a_covered_column();
     test_an_empty_cell_still_takes_a_column();
     test_a_table_used_for_layout();
     test_where_a_tag_ends();

@@ -404,6 +404,31 @@ struct builder {
      */
     bool cell_next;
     short cell_span_next;
+    short cell_rows_next;
+    short cell_column_next;
+
+    /*
+     * --- The table's grid, while it is being read ---
+     *
+     * `covered[c]` is how many rows column `c` is still occupied for,
+     * *counting the row being built*. So a cell with `rowspan="1"` sets one,
+     * which `row_ended` takes straight back off; a `rowspan="3"` sets three
+     * and blocks the next two rows.
+     *
+     * Counting the current row rather than only the ones after it is what
+     * makes the two operations trivial: a cell takes the first column whose
+     * count is zero, and a row ending decrements every count that is not.
+     * The version that stored "rows remaining after this one" needed the
+     * decrement to skip whatever had just been placed, which is a thing to get
+     * wrong.
+     *
+     * `row_column` is where the next cell of this row would go if nothing were
+     * in the way, and `in_row` stops a `</tr>` followed by a `<tr>` ending the
+     * same row twice.
+     */
+    short covered[RECON_HTML_COLUMNS_MAX];
+    short row_column;
+    bool in_row;
 
     /* The stylesheet, when a caller handed one over. */
     struct recon_css_sheet *sheet;
@@ -569,6 +594,87 @@ static bool add_text(struct builder *b, const char *bytes, size_t length) {
 }
 
 /* Start a run, or extend the last one when nothing about it has changed. */
+/*
+ * Stamp the cell fields onto a run, and take the pending cell off the builder.
+ *
+ * One place rather than three. The three callers had identical copies of the
+ * `starts_cell` and `cell_span` pair, and adding two more fields to each was
+ * the moment that stopped being tolerable -- three copies is how a field ends
+ * up set in two of them.
+ *
+ * `always` is for the one caller that writes a cell whether or not the builder
+ * has one pending: a control is a cell in its own right.
+ */
+static void stamp_cell(struct recon_html_run *run, struct builder *b,
+        bool always) {
+    bool starts = always || b->cell_next;
+
+    run->starts_cell = starts;
+    run->cell_span = starts ?
+        ((b->cell_span_next > 0) ? b->cell_span_next : 1) : 1;
+    run->cell_rows = starts ?
+        ((b->cell_rows_next > 0) ? b->cell_rows_next : 1) : 1;
+    run->cell_column = starts ? b->cell_column_next : 0;
+    b->cell_next = false;
+}
+
+static void grid_reset(struct builder *b) {
+    memset(b->covered, 0, sizeof(b->covered));
+    b->row_column = 0;
+    b->in_row = false;
+}
+
+/*
+ * Where this cell goes, and the columns it takes.
+ *
+ * The first column at or after `row_column` that nothing is already covering.
+ * A cell from two rows up is still covering its column, so this is not the
+ * same as counting the cells that came before -- which is the whole reason
+ * this exists.
+ *
+ * Past the end of the grid, the answer is the last column: a table wider than
+ * `RECON_HTML_COLUMNS_MAX` is one this cannot place correctly anyway, and
+ * saying "the last one" keeps every index in range rather than inventing a
+ * column nothing will draw.
+ */
+static short grid_place(struct builder *b, short span, short rows) {
+    while (b->row_column < RECON_HTML_COLUMNS_MAX &&
+            b->covered[b->row_column] > 0) {
+        b->row_column++;
+    }
+    if (b->row_column >= RECON_HTML_COLUMNS_MAX) {
+        return RECON_HTML_COLUMNS_MAX - 1;
+    }
+
+    short at = b->row_column;
+
+    for (short c = at; c < at + span && c < RECON_HTML_COLUMNS_MAX; c++) {
+        /*
+         * The larger of the two, so a short cell cannot shorten the cover of a
+         * tall one it overlaps. Overlapping cells are a malformed page rather
+         * than a shape with a right answer, and keeping the longer cover means
+         * the rows beneath stay clear of a column something is still in.
+         */
+        if (rows > b->covered[c]) {
+            b->covered[c] = rows;
+        }
+    }
+    b->row_column = (short)(at + span);
+    return at;
+}
+
+static void row_ended(struct builder *b) {
+    if (!b->in_row) {
+        return;
+    }
+    for (int c = 0; c < RECON_HTML_COLUMNS_MAX; c++) {
+        if (b->covered[c] > 0) {
+            b->covered[c]--;
+        }
+    }
+    b->in_row = false;
+}
+
 static void emit(struct builder *b, const char *bytes, size_t length) {
     /*
      * Nothing inside something the page hid.
@@ -663,10 +769,7 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
 
     /* Consumed by being written, so a cell with several runs in it marks
      * only the one it starts at. */
-    run->starts_cell = b->cell_next;
-    run->cell_span = b->cell_next ? (b->cell_span_next > 0
-        ? b->cell_span_next : 1) : 1;
-    b->cell_next = false;
+    stamp_cell(run, b, false);
 }
 
 static void open_block(struct builder *b, enum recon_html_block kind,
@@ -708,10 +811,7 @@ static void emit_empty_cell(struct builder *b) {
     run->style = b->style;
     run->link = -1;
     run->field = -1;
-    run->starts_cell = true;
-    run->cell_span = (b->cell_span_next > 0) ? b->cell_span_next : 1;
-
-    b->cell_next = false;
+    stamp_cell(run, b, true);
 }
 
 static void emit_field(struct builder *b, int field) {
@@ -738,11 +838,7 @@ static void emit_field(struct builder *b, int field) {
     run->style = b->style;
     run->link = -1;
     run->field = field;
-    run->starts_cell = b->cell_next;
-    run->cell_span = b->cell_next ? (b->cell_span_next > 0
-        ? b->cell_span_next : 1) : 1;
-
-    b->cell_next = false;
+    stamp_cell(run, b, false);
     b->at_block_start = false;
     b->pending_space = false;
 }
@@ -806,6 +902,13 @@ static void open_block(struct builder *b, enum recon_html_block kind,
  * reason.
  */
 static void break_line(struct builder *b);
+
+/* --- The table grid -------------------------------------------------------
+ *
+ * See `struct builder` for what `covered` counts. These three are the whole of
+ * it: start a table, place a cell, end a row.
+ */
+
 
 static void close_block(struct builder *b) {
     if (!b->in_block) {
@@ -1644,6 +1747,17 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     named(tag, name_length, "main") ||
                     named(tag, name_length, "table") ||
                     named(tag, name_length, "figure")) {
+                if (named(tag, name_length, "table")) {
+                    /*
+                     * A fresh grid, on the way in and on the way out.
+                     *
+                     * Both, because a page is allowed to be wrong: a table
+                     * that never closes would otherwise leave its rowspans
+                     * covering the columns of the next table on the page, and
+                     * a stray `</table>` would do the same in reverse.
+                     */
+                    grid_reset(&b);
+                }
                 break_block(&b);
                 i = after;
                 continue;
@@ -1683,9 +1797,12 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
              * begins at instead, which is enough to measure a column by.
              */
             if (named(tag, name_length, "tr")) {
+                row_ended(&b);
                 close_block(&b);
                 if (!closing) {
                     open_block(&b, RECON_HTML_ROW, 0);
+                    b.row_column = 0;
+                    b.in_row = true;
                 }
                 i = after;
                 continue;
@@ -1714,6 +1831,31 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                             b.cell_span_next = (short)wide;
                         }
                     }
+
+                    /*
+                     * And how many rows, read the same way and for the same
+                     * reasons: `rowspan="0"` means "to the end of the row
+                     * group", which needs row groups this viewer does not
+                     * have, and `rowspan="banana"` is a page being wrong.
+                     */
+                    b.cell_rows_next = 1;
+                    if (attribute(attrs, attrs_length, "rowspan", span,
+                            sizeof(span))) {
+                        long deep = strtol(span, NULL, 10);
+                        if (deep > 1 && deep < 1000) {
+                            b.cell_rows_next = (short)deep;
+                        }
+                    }
+
+                    /*
+                     * The column is claimed here, at the tag, rather than when
+                     * the run is written -- because a cell may hold several
+                     * runs, or none at all. `<td></td>` is an empty cell and
+                     * it still occupies a column; claiming at the run would
+                     * skip it and shift every cell after it one to the left.
+                     */
+                    b.cell_column_next = grid_place(&b, b.cell_span_next,
+                        b.cell_rows_next);
                     /*
                      * A row holding a `<th>` is a header row, recorded as
                      * level 1 -- the field a row otherwise has no use for.

@@ -9,6 +9,118 @@ way for the two to disagree.
 
 ---
 
+## v0.4.64 — a cell that covers rows
+
+`rowspan`, which was the last of the three things the tables row on the board
+named and the one it called the harder: *"a cell that covers rows has to be
+drawn from a row that has already been laid out, which is a shape this layout
+does not have yet."*
+
+That is true of **drawing** a spanning cell across the rows it covers, and it
+is not the valuable half.
+
+### What rowspan actually costs when it is ignored
+
+A cell with `rowspan="2"` is still occupying its column in the row beneath. So
+that row has one fewer cell than the others, and its first cell begins one
+column further along:
+
+```
++---------+--------+-------+
+| January | North  | 1,040 |   three cells: columns 0, 1, 2
+|         +--------+-------+
+|         | South  | 2,310 |   TWO cells: columns 1 and 2
++---------+--------+-------+
+```
+
+A viewer that counts cells puts "South" at column 0 — underneath January — and
+"2,310" under Region. Every figure in that row is one column left of where it
+belongs. **Legible, and wrong**, which is the same failure `colspan` was added
+to fix two years of versions ago, arrived at from the other direction.
+
+Drawing the spanning cell's text down the rows it covers is the cosmetic half,
+and it is deliberately not done: "January" is written once, at the top, and the
+space beneath it is blank. The photograph below is what that looks like, and it
+looks like a table.
+
+### The grid is resolved once, where the rows are read
+
+Two passes in `src/recon_web.c` walk a table — one to measure the columns, one
+to draw — and both worked out which column they were in by counting cells. With
+rowspan that answer is wrong, and **it would have been wrong in each of them
+separately**: two running grids to keep in step, and the one that drifted would
+draw a table whose headings were over the wrong columns.
+
+So it is not counted in the viewer at all. `recon_html.c` resolves it while the
+rows are being parsed — which is the right place for another reason: *where a
+cell is* is a fact about the document, not about the window or the font, and it
+is the same answer for everything that asks. `recon_html_run` gained
+`cell_column` and `cell_rows`, and both passes read the first.
+
+The bookkeeping is three functions and the whole trick is what the counter
+means. `covered[c]` is how many rows column `c` is occupied for **counting the
+row being built** — so placing a cell takes the first column whose count is
+zero, and ending a row decrements every count that is not. The version that
+stored "rows remaining after this one" needed the decrement to skip whatever
+had just been placed, which is a thing to get wrong.
+
+### And the grid is reset at `<table>`, not only at `</table>`
+
+A `rowspan="5"` in a table's last row has four rows of cover and nowhere to
+spend them. If that survived, the next table on the page would begin with its
+first column occupied by a cell from somewhere else. Both ends, because a page
+whose table never closes is a page this still has to draw.
+
+### One mutation survived, and it was reachable
+
+Eight mutations. Seven died immediately; the one that did not was keeping the
+**larger** of two covers when a cell's width runs over a column something is
+already in.
+
+A cell takes the first *free* column — so it can never start on a covered one —
+but it then spans rightwards, and it can cross one:
+
+```
++-----+-----+
+|  A  |  B  |   B covers column 1 for three rows
++-----+     |
+|     C     |   C is free at column 0 and spans 0, 1, 2
++-----+-----+-----+
+|  D  |     |  E  |   D at 0; E must step over B
+```
+
+If C's one-row cover simply replaced B's three-row one, B's remaining rows
+would be thrown away and E would land *inside* a cell that is still there. The
+rule was written and unverified; the mutation is what said so, and it is a
+shape a real page can have. All eight bite now.
+
+### The photograph, and what it is for
+
+`scripts/table-spans-shot.sh` — a fixture of three tables served over HTTP, the
+real compositor, the real browser. The suite holds the parser to its answer
+with 237 checks, and **a suite over the parser would stay green if either of
+the two drawing passes had been left counting cells.** That is what the picture
+is for.
+
+The fixture is served rather than opened from disk because `src/recon_url.c`
+knows `http` and `https` and nothing else, deliberately — there is no `file:`
+scheme in this browser.
+
+One thing measured rather than assumed on the way: the first version of that
+script ran `firewall allow` first, the control socket answered *"there is no
+rule 127.0.0.1"* — the command takes a direction and a port, not an address —
+and the page loaded regardless. A misleading error printed in front of a fetch
+that was always going to work.
+
+### Three copies became one
+
+The parser had three identical copies of the code stamping `starts_cell` and
+`cell_span` onto a run. Adding two more fields to each was the moment that
+stopped being tolerable: three copies is how a field ends up set in two of
+them. `stamp_cell` is the one place now.
+
+---
+
 ## v0.4.63 — a file only this account can read
 
 `include/recon_keyring.h` has said what does not belong in a keyring since the

@@ -1445,13 +1445,22 @@ static void go_typed(struct web_tab *w) {
  * rather than of any row -- it is the widest that column gets anywhere. So it
  * is measured once, over every row, before the first one is drawn.
  *
- * What this does not do is the rest of table layout. No colspan, no rowspan,
- * no nested tables, no borders, and a cell whose text is wider than its share
- * of the window is left to overlap rather than wrapped inside its column --
- * wrapping inside a cell means a row of variable height, which means
- * measuring the height before placing the row, which is the whole layout
- * problem again one level down. Lining the columns up is most of what a table
- * is for and it is the part that can be had honestly.
+ * This paragraph used to end "no colspan, no rowspan, no nested tables, no
+ * borders, and a cell whose text is wider than its share of the window is left
+ * to overlap rather than wrapped inside its column". Three of those five
+ * stopped being true and the sentence did not, which is the thing a comment
+ * does when nobody reads it back: cells wrap inside their column (v0.4.37),
+ * `colspan` (v0.4.40) and `rowspan` (v0.4.64) are both honoured.
+ *
+ * **What is still not done: nested tables, and borders.** And a spanning
+ * cell's text is drawn once, in the first row it covers, rather than down the
+ * rows beneath -- which is the cosmetic half of rowspan and is not the half
+ * that was making tables wrong.
+ *
+ * Which column a cell is in is *not* worked out here. `recon_html.c` resolves
+ * it while the rows are read, and both passes below read the answer -- because
+ * counting cells stops being right the moment one of them covers rows, and
+ * counting it in two places would have been two grids to keep in step.
  */
 #define COLUMNS_MAX 12
 
@@ -2427,7 +2436,19 @@ static void measure_columns(struct flow *f, int first, int size,
                 /* Bank the column that just ended before starting the next. */
                 bank(out, column, span, used);
 
-                column += (column < 0) ? 1 : span;
+                /*
+                 * Where the cell says it is, not where counting would put it.
+                 *
+                 * `recon_html.c` resolves this while the rows are read, and it
+                 * is not the same as "one more than the last cell": a cell
+                 * with `rowspan` two rows up is still occupying its column, so
+                 * this row's first cell can legitimately begin at column two.
+                 *
+                 * A run that does not start a cell -- text loose in a `<tr>`
+                 * -- has no column of its own and keeps the one the pen is in,
+                 * which is what `column < 0` catches on the first run.
+                 */
+                column = r->starts_cell ? r->cell_column : 0;
                 span = (r->cell_span > 0) ? r->cell_span : 1;
                 used = 0;
 
@@ -2817,10 +2838,21 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
          */
         if (b->kind == RECON_HTML_ROW && run->starts_cell) {
             /*
-             * Past the columns the last cell covered, not just one -- or every
-             * cell after a spanning one is off by however many it spanned.
+             * The column the parser resolved, not a count of the cells so far.
+             *
+             * It used to add the last cell's span, which is right for
+             * `colspan` and cannot be right for `rowspan`: a cell covering two
+             * rows takes its column away from the row beneath, and nothing in
+             * *this* row knows that cell exists. The grid is built once, while
+             * the rows are read -- see `include/recon_html.h`.
+             *
+             * Counting it here as well would have been a second grid to keep
+             * in step with the measuring pass's, and the one that drifted
+             * would have drawn a table whose headings were over the wrong
+             * columns. Which is the fault `colspan` was added to fix, arrived
+             * at from the other direction.
              */
-            cell_index += (cell_index < 0) ? 1 : cell_span;
+            cell_index = run->cell_column;
             cell_span = (run->cell_span > 0) ? run->cell_span : 1;
             cell_pending = true;
         }
