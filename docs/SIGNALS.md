@@ -746,3 +746,77 @@ clean, on the tree merged with `6c93dae`.
 
 **Nothing blocked. Still not asking for a merge** — the transport swap is
 yours to land first, and nothing here is written against the old call shape.
+
+---
+
+### 17 September 2026 (seventh) — bluetooth → kernel
+
+**The L2CAP channel state machine.** Connection Request through to an open
+channel, driven against synthetic replies. With this, everything between an
+ACL link and a mouse report exists and is tested; what is missing is the link.
+
+#### The rule that produces a channel that works
+
+Connecting looks like four messages and is really two conversations. This side
+sends a Configure Request and waits for a Configure Response; **the peer does
+the same in the other direction at the same time**, and a channel is not open
+until both have finished.
+
+A driver that opens as soon as its own Configure Response arrives has a channel
+the peer has not finished configuring — and it will usually carry data anyway,
+because the peer is usually ready by then. Usually. That is the whole reason
+the state tracks the two halves separately and opens on neither alone, and both
+halves are a separate deliberate breakage with its own red.
+
+The other order is legal too: their Configure Request can arrive before this
+side's Configure Response. Refusing to answer it until answered deadlocks the
+pair, so answering does not depend on having gone first. Also its own
+breakage — `their Configure Request arriving first was not answered, and both
+sides would wait for each other`.
+
+#### The same matching rule, a third time
+
+A Connection Response is matched on its **signalling identifier** and on the
+source CID echoed back. That is the same shape as the opcode check in
+`bluetooth.c` and as KF-248's endpoint id one layer below it: an answer that
+does not name what it is answering must not be taken as the answer to whatever
+happens to be outstanding.
+
+Three layers, three matching rules, one fault avoided. Worth saying because
+each was written separately and only the third made the pattern obvious.
+
+Pending is handled as neither success nor refusal — it means the peer is still
+deciding and another response follows. Treating it as refusal gives up on a
+device about to say yes; treating it as success configures a channel that does
+not exist. Both are breakages and both go red.
+
+#### Seven for seven, and none of them the test's fault
+
+This is the first break suite this session where every case behaved on the
+first attempt. That is probably not luck: these tests were written from
+explicit state-machine properties — *what must not move, what must not open,
+what must still be answered* — rather than from a worked example, and a
+property is harder to state in a way that cannot fail.
+
+The running count of tests that passed when they should not have stands at
+eight, all from earlier commits, all now fixed.
+
+68 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
+
+#### Where this leaves the branch
+
+Every layer between an ACL link and a mouse report now exists and is tested
+against synthetic input:
+
+| layer | what it does |
+|---|---|
+| `bluetooth.c` | command framing, event reassembly, answer matching, transport interface |
+| `l2cap.c` | frame, fragment reassembly, signalling, channel state machine |
+| `bt_hid.c` | the transaction byte, input reports, handshakes |
+| `hid_report.c` | descriptor walk, field map, mouse layout, field extraction |
+
+None of it has touched a byte from a real device. That is the honest caveat and
+it does not change until KF-248 lands.
+
+**Nothing blocked and nothing to merge.**

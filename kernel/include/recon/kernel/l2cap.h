@@ -184,6 +184,72 @@ bool l2cap_config_response_parse(const u8 *data, u32 len, u16 *scid,
  * which is not an error -- an absent MTU option means the default. */
 bool l2cap_config_find_mtu(const u8 *opts, u32 len, u16 *mtu);
 
+/* --- a channel, and getting one open --------------------------------------
+ *
+ * Connecting is four messages and a trap.
+ *
+ *     ->  Connection Request      here is the PSM I want
+ *     <-  Connection Response     granted, and here is my channel id
+ *     ->  Configure Request       here is the largest thing I can receive
+ *     <-  Configure Response      accepted
+ *
+ * That is the half of it this side drives. **The other half runs at the same
+ * time in the other direction** -- the peer sends its own Configure Request
+ * and waits for this side's Configure Response -- and a channel is not open
+ * until *both* have finished.
+ *
+ * That is the trap, and it is worth naming because getting it wrong produces a
+ * channel that works. A driver that opens as soon as its own Configure
+ * Response arrives has a channel the peer has not finished configuring; it
+ * will usually still carry data, because the peer is usually ready by then.
+ * Usually.
+ *
+ * So the state below tracks the two directions separately and opens on
+ * neither alone.
+ */
+enum l2cap_channel_state {
+	L2CAP_CH_CLOSED,
+	L2CAP_CH_WAIT_CONNECT,
+	L2CAP_CH_WAIT_CONFIG,
+	L2CAP_CH_OPEN,
+	L2CAP_CH_REFUSED
+};
+
+struct l2cap_channel {
+	enum l2cap_channel_state state;
+
+	u16 psm;
+	u16 scid;		/* this side's channel id */
+	u16 dcid;		/* the peer's, learned from the response */
+
+	/* The two halves of configuration. Both, or it is not open. */
+	bool config_out_done;	/* the peer accepted ours */
+	bool config_in_done;	/* this side answered theirs */
+
+	u16 peer_mtu;		/* what the peer said it can receive */
+	u16 refused_result;	/* why, when the state is REFUSED */
+
+	/* The identifier of the request this side is waiting on. Signalling
+	 * identifiers exist to pair a response with its request, and a
+	 * response carrying a different one belongs to something else. */
+	u8 pending_ident;
+
+	/* Counted rather than silently dropped -- the same reasoning as the
+	 * opcode check in `bluetooth.c`, and the same failure it prevents. */
+	u64 wrong_ident;
+	u64 wrong_channel;
+};
+
+void l2cap_channel_init(struct l2cap_channel *c, u16 psm, u16 scid);
+
+/* Builds the Connection Request that starts it. Returns its length. */
+u32 l2cap_channel_start(struct l2cap_channel *c, u8 *out, u8 ident);
+
+/* Feeds one inbound signalling command in and writes any reply to `out`.
+ * Returns the reply's length, or zero when there is nothing to send. */
+u32 l2cap_channel_input(struct l2cap_channel *c, const u8 *sig, u32 len,
+			u8 *out, u32 outmax);
+
 bool l2cap_self_test(void);
 
 #endif /* RECON_KERNEL_L2CAP_H */

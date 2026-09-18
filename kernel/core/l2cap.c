@@ -321,6 +321,186 @@ bool l2cap_config_find_mtu(const u8 *opts, u32 len, u16 *mtu)
 	return false;
 }
 
+/* --- a channel, and getting one open -------------------------------------- */
+
+void l2cap_channel_init(struct l2cap_channel *c, u16 psm, u16 scid)
+{
+	kmemset(c, 0, sizeof(*c));
+	c->state = L2CAP_CH_CLOSED;
+	c->psm = psm;
+	c->scid = scid;
+}
+
+u32 l2cap_channel_start(struct l2cap_channel *c, u8 *out, u8 ident)
+{
+	c->pending_ident = ident;
+	c->state = L2CAP_CH_WAIT_CONNECT;
+
+	return l2cap_connect_request_build(out, ident, c->psm, c->scid);
+}
+
+/* Both halves done, and only then. */
+static void maybe_open(struct l2cap_channel *c)
+{
+	if (c->state == L2CAP_CH_WAIT_CONFIG &&
+	    c->config_out_done && c->config_in_done)
+		c->state = L2CAP_CH_OPEN;
+}
+
+u32 l2cap_channel_input(struct l2cap_channel *c, const u8 *sig, u32 len,
+			u8 *out, u32 outmax)
+{
+	struct l2cap_signal s;
+	u16 a, b, result;
+
+	if (!l2cap_signal_parse(sig, len, &s))
+		return 0;
+
+	switch (s.code) {
+	case L2CAP_SIG_CONNECT_RESPONSE: {
+		u16 status;
+
+		if (c->state != L2CAP_CH_WAIT_CONNECT)
+			return 0;
+
+		/* Somebody else's answer. The identifier is the only thing
+		 * pairing a response with its request, and taking one that
+		 * does not match means acting on a result for a channel this
+		 * is not. */
+		if (s.id != c->pending_ident) {
+			c->wrong_ident++;
+			return 0;
+		}
+
+		if (!l2cap_connect_response_parse(s.data, s.length, &a, &b,
+						  &result, &status))
+			return 0;
+
+		/* `b` is the source CID echoed back -- this side's. A
+		 * response naming a different one is about another channel. */
+		if (b != c->scid) {
+			c->wrong_channel++;
+			return 0;
+		}
+
+		/* **Pending is not success and not refusal.** It means the
+		 * peer is still deciding -- asking a user, or checking
+		 * security -- and another response follows. A driver that
+		 * treats it as refusal gives up on a device about to say yes;
+		 * one that treats it as success configures a channel that
+		 * does not exist yet. */
+		if (result == L2CAP_CONN_PENDING)
+			return 0;
+
+		if (result != L2CAP_CONN_SUCCESS) {
+			c->state = L2CAP_CH_REFUSED;
+			c->refused_result = result;
+			return 0;
+		}
+
+		c->dcid = a;
+		c->state = L2CAP_CH_WAIT_CONFIG;
+
+		/* Our half of configuration. A fresh identifier, because the
+		 * one above has been answered. */
+		c->pending_ident = (u8)(c->pending_ident + 1);
+
+		if (outmax < 12)
+			return 0;
+
+		return l2cap_config_request_build(out, c->pending_ident,
+						  c->dcid, L2CAP_MTU);
+	}
+
+	case L2CAP_SIG_CONFIG_RESPONSE:
+		if (c->state != L2CAP_CH_WAIT_CONFIG)
+			return 0;
+
+		if (s.id != c->pending_ident) {
+			c->wrong_ident++;
+			return 0;
+		}
+
+		if (!l2cap_config_response_parse(s.data, s.length, &a, &b,
+						 &result))
+			return 0;
+
+		if (a != c->scid) {
+			c->wrong_channel++;
+			return 0;
+		}
+
+		if (result != L2CAP_CONF_SUCCESS)
+			return 0;
+
+		c->config_out_done = true;
+		maybe_open(c);
+		return 0;
+
+	case L2CAP_SIG_CONFIG_REQUEST: {
+		u8 body[6];
+		u16 mtu = 0;
+
+		/* Their half. Answered whenever it arrives -- it may well
+		 * arrive before this side's own Configure Response, and
+		 * refusing it because the state is not what was expected
+		 * deadlocks the pair. */
+		if (c->state != L2CAP_CH_WAIT_CONFIG &&
+		    c->state != L2CAP_CH_OPEN)
+			return 0;
+
+		if (s.length < 4)
+			return 0;
+
+		/* Anything after the destination CID and the flags is the
+		 * option list. An absent MTU option means the default rather
+		 * than an error, so a false here is not a failure. */
+		if (l2cap_config_find_mtu(s.data + 4, s.length - 4u, &mtu))
+			c->peer_mtu = mtu;
+
+		put_le16(body, c->dcid);	/* their channel, from here */
+		put_le16(body + 2, 0);		/* no continuation */
+		put_le16(body + 4, L2CAP_CONF_SUCCESS);
+
+		c->config_in_done = true;
+		maybe_open(c);
+
+		if (outmax < 10)
+			return 0;
+
+		return l2cap_signal_build(out, L2CAP_SIG_CONFIG_RESPONSE,
+					  s.id, body, sizeof(body));
+	}
+
+	case L2CAP_SIG_DISCONNECT_REQUEST: {
+		u8 body[4];
+
+		if (s.length < 4)
+			return 0;
+
+		/* Echoed back as sent: destination then source, from the
+		 * requester's point of view. */
+		body[0] = s.data[0];
+		body[1] = s.data[1];
+		body[2] = s.data[2];
+		body[3] = s.data[3];
+
+		c->state = L2CAP_CH_CLOSED;
+		c->config_out_done = false;
+		c->config_in_done = false;
+
+		if (outmax < 8)
+			return 0;
+
+		return l2cap_signal_build(out, L2CAP_SIG_DISCONNECT_RESPONSE,
+					  s.id, body, sizeof(body));
+	}
+
+	default:
+		return 0;
+	}
+}
+
 /* --- the self-test --------------------------------------------------------
  *
  * Pure functions, synthetic bytes, no link. The cases are chosen the same way
@@ -674,6 +854,244 @@ bool l2cap_self_test(void)
 				ok = false;
 			}
 		}
+	}
+
+	/* --- getting a channel open --------------------------------------
+	 *
+	 * The whole handshake, driven against synthetic replies, checking at
+	 * each step for what must *not* happen as much as what must.
+	 */
+	{
+		struct l2cap_channel ch;
+		u8 tx[32], rx[32];
+		u32 n;
+
+		/* Build a Connection Response with a given identifier, source
+		 * CID and result. Used several times below. */
+		#define CONN_RSP(ident, dcid_, scid_, res)			\
+			do {						\
+				u8 body_[8];				\
+				put_le16(body_, (dcid_));		\
+				put_le16(body_ + 2, (scid_));		\
+				put_le16(body_ + 4, (res));		\
+				put_le16(body_ + 6, 0);			\
+				n = l2cap_signal_build(rx,		\
+					L2CAP_SIG_CONNECT_RESPONSE,	\
+					(ident), body_, sizeof(body_));	\
+			} while (0)
+
+		l2cap_channel_init(&ch, L2CAP_PSM_HID_INTERRUPT, 0x0040);
+		n = l2cap_channel_start(&ch, tx, 0x01);
+
+		if (n != 8 || ch.state != L2CAP_CH_WAIT_CONNECT) {
+			kputs("  l2cap: starting a channel did not produce a "
+			      "Connection Request\n");
+			ok = false;
+		}
+
+		/* Pending: not success, not refusal. Nothing may move. */
+		CONN_RSP(0x01, 0x0041, 0x0040, L2CAP_CONN_PENDING);
+
+		if (l2cap_channel_input(&ch, rx, n, tx, sizeof(tx)) ||
+		    ch.state != L2CAP_CH_WAIT_CONNECT) {
+			kputs("  l2cap: a pending Connection Response moved "
+			      "the channel; pending means the peer is still "
+			      "deciding and another response follows\n");
+			ok = false;
+		}
+
+		/* An answer to a different request. */
+		CONN_RSP(0x7F, 0x0041, 0x0040, L2CAP_CONN_SUCCESS);
+
+		if (l2cap_channel_input(&ch, rx, n, tx, sizeof(tx)) ||
+		    ch.state != L2CAP_CH_WAIT_CONNECT || ch.wrong_ident != 1) {
+			kputs("  l2cap: a Connection Response carrying "
+			      "somebody else's identifier was acted on -- the "
+			      "identifier is the only thing pairing a "
+			      "response with its request\n");
+			ok = false;
+		}
+
+		/* An answer about a different channel. */
+		CONN_RSP(0x01, 0x0041, 0x00FF, L2CAP_CONN_SUCCESS);
+
+		if (l2cap_channel_input(&ch, rx, n, tx, sizeof(tx)) ||
+		    ch.state != L2CAP_CH_WAIT_CONNECT ||
+		    ch.wrong_channel != 1) {
+			kputs("  l2cap: a Connection Response naming another "
+			      "channel was acted on\n");
+			ok = false;
+		}
+
+		/* The real one, which must draw a Configure Request. */
+		CONN_RSP(0x01, 0x0041, 0x0040, L2CAP_CONN_SUCCESS);
+		n = l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
+
+		if (ch.state != L2CAP_CH_WAIT_CONFIG || ch.dcid != 0x0041) {
+			kprintf("  l2cap: after success the channel is in "
+				"state %u with dcid %04x, expected config and "
+				"0041\n", (unsigned)ch.state, ch.dcid);
+			ok = false;
+		}
+
+		if (n != 12 || tx[0] != L2CAP_SIG_CONFIG_REQUEST) {
+			kprintf("  l2cap: the reply to a successful "
+				"Connection Response was %u bytes of code "
+				"%02x, expected a 12-byte Configure Request\n",
+				n, tx[0]);
+			ok = false;
+		}
+
+		/* **The trap.** Their Configure Response is one half. */
+		{
+			u8 body[6];
+
+			put_le16(body, 0x0040);
+			put_le16(body + 2, 0);
+			put_le16(body + 4, L2CAP_CONF_SUCCESS);
+			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_RESPONSE,
+					       tx[1], body, sizeof(body));
+		}
+
+		l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
+
+		if (!ch.config_out_done) {
+			kputs("  l2cap: a successful Configure Response did "
+			      "not finish this side's half\n");
+			ok = false;
+		}
+
+		if (ch.state == L2CAP_CH_OPEN) {
+			kputs("  l2cap: the channel opened on this side's "
+			      "configuration alone -- the peer has not sent "
+			      "its own Configure Request yet, and a channel "
+			      "opened here usually works, which is the "
+			      "problem\n");
+			ok = false;
+		}
+
+		/* Their Configure Request. Answering it is the other half. */
+		{
+			u8 body[8];
+
+			put_le16(body, 0x0040);
+			put_le16(body + 2, 0);
+			body[4] = L2CAP_CONF_OPT_MTU;
+			body[5] = 2;
+			put_le16(body + 6, 512);
+			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
+					       0x20, body, sizeof(body));
+		}
+
+		n = l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
+
+		if (n != 10 || tx[0] != L2CAP_SIG_CONFIG_RESPONSE ||
+		    tx[1] != 0x20) {
+			kprintf("  l2cap: their Configure Request drew %u "
+				"bytes of code %02x id %02x, expected a "
+				"10-byte Configure Response echoing id 20\n",
+				n, tx[0], tx[1]);
+			ok = false;
+		}
+
+		if (ch.peer_mtu != 512) {
+			kprintf("  l2cap: the peer's MTU read as %u, expected "
+				"512\n", ch.peer_mtu);
+			ok = false;
+		}
+
+		if (ch.state != L2CAP_CH_OPEN) {
+			kprintf("  l2cap: both directions are configured and "
+				"the channel is in state %u, not open\n",
+				(unsigned)ch.state);
+			ok = false;
+		}
+
+		/* --- the other order, which is just as legal ---
+		 *
+		 * Their Configure Request may arrive before this side's
+		 * Configure Response. Refusing to answer it until answered
+		 * deadlocks the pair.
+		 */
+		l2cap_channel_init(&ch, L2CAP_PSM_HID_CONTROL, 0x0040);
+		l2cap_channel_start(&ch, tx, 0x01);
+		CONN_RSP(0x01, 0x0041, 0x0040, L2CAP_CONN_SUCCESS);
+		l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
+
+		{
+			u8 body[4];
+
+			put_le16(body, 0x0040);
+			put_le16(body + 2, 0);
+			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
+					       0x21, body, sizeof(body));
+		}
+
+		if (!l2cap_channel_input(&ch, rx, n, tx, sizeof(tx))) {
+			kputs("  l2cap: their Configure Request arriving "
+			      "first was not answered, and both sides would "
+			      "wait for each other\n");
+			ok = false;
+		}
+
+		if (ch.state == L2CAP_CH_OPEN) {
+			kputs("  l2cap: the channel opened on their "
+			      "configuration alone\n");
+			ok = false;
+		}
+
+		/* --- refusal --- */
+		l2cap_channel_init(&ch, L2CAP_PSM_HID_CONTROL, 0x0040);
+		l2cap_channel_start(&ch, tx, 0x05);
+		CONN_RSP(0x05, 0x0000, 0x0040, L2CAP_CONN_REFUSED_PSM);
+
+		if (l2cap_channel_input(&ch, rx, n, tx, sizeof(tx))) {
+			kputs("  l2cap: a refused connection produced a "
+			      "reply\n");
+			ok = false;
+		}
+
+		if (ch.state != L2CAP_CH_REFUSED ||
+		    ch.refused_result != L2CAP_CONN_REFUSED_PSM) {
+			kprintf("  l2cap: a refusal left the channel in state "
+				"%u with result %04x\n", (unsigned)ch.state,
+				ch.refused_result);
+			ok = false;
+		}
+
+		/* --- a disconnect closes it --- */
+		l2cap_channel_init(&ch, L2CAP_PSM_HID_CONTROL, 0x0040);
+		l2cap_channel_start(&ch, tx, 0x01);
+		CONN_RSP(0x01, 0x0041, 0x0040, L2CAP_CONN_SUCCESS);
+		l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
+
+		{
+			u8 body[4];
+
+			put_le16(body, 0x0040);
+			put_le16(body + 2, 0x0041);
+			n = l2cap_signal_build(rx,
+					       L2CAP_SIG_DISCONNECT_REQUEST,
+					       0x30, body, sizeof(body));
+		}
+
+		n = l2cap_channel_input(&ch, rx, n, tx, sizeof(tx));
+
+		if (n != 8 || tx[0] != L2CAP_SIG_DISCONNECT_RESPONSE ||
+		    tx[1] != 0x30) {
+			kprintf("  l2cap: a Disconnection Request drew %u "
+				"bytes of code %02x, expected an 8-byte "
+				"Disconnection Response\n", n, tx[0]);
+			ok = false;
+		}
+
+		if (ch.state != L2CAP_CH_CLOSED) {
+			kputs("  l2cap: a disconnected channel is not "
+			      "closed\n");
+			ok = false;
+		}
+
+		#undef CONN_RSP
 	}
 
 	/* --- a Configure Request carries the MTU we can actually take ----
