@@ -9466,6 +9466,81 @@ boot log.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
 
+> ### A third sighting, 18 September 2026 — and it stops being "intermittent"
+>
+> Reported by the **graphics session**, from their own matrix run, on a branch
+> whose only changes are `intel_modeset.c`, a script, docs and a badge. They
+> took no number because the prefix is this track's, and they were right to
+> report it rather than sit on it.
+>
+> ```
+> a rename survives the power going out       FAILED
+>       proving the checker first:
+>           checksum: caught
+>           unallocated: caught
+>           torn: caught
+>
+>       round 1 (cut at 271ms):
+>           unreadable no valid superblock
+>
+>     6 cuts inside a rename on x86_64: 1 inconsistent.
+> ```
+>
+> **The checker proved itself on all three fault shapes in the same run**, so
+> this is not a broken reader — which is the first thing that would have to be
+> ruled out and was, without being asked.
+>
+> Three sightings, three different cut moments: **1115 ms** (matrix 57),
+> **904 ms** (matrix 70), **271 ms** (theirs). One round of six each time. That
+> is not one unlucky instant; it is a window that exists across the whole write
+> sequence.
+>
+> #### The argument that changes what this entry is
+>
+> All three happened on a **contended machine**. Theirs had four
+> `verify-kernel.sh` processes from the `ReconOS-matrix` worktree running
+> against it — this session's — and its first attempt failed `clock and tick`
+> at **14 Hz against an expected 100**, which is the starvation signature.
+>
+> The easy conclusion is *the harness is flaky under load*. They refused it, and
+> the refusal is the most useful sentence anybody has written about this bug:
+>
+> > **A window that only opens under load is still a window.** A real power cut
+> > does not wait for the machine to be idle. If anything, a starved host is a
+> > better model of a laptop losing power mid-save than an idle one is.
+>
+> That is correct and it inverts the reading. Contention is not an excuse for
+> the failure; **contention is the test condition that finds it.** A filesystem
+> whose crash consistency holds only when nothing else is happening is a
+> filesystem that has not been tested, and this rig has been quietly grading it
+> on the easy case.
+>
+> #### And it explains why two reproduction attempts failed
+>
+> KF-250 records the same caveat from the other side: *the load I reproduced was
+> the wrong load.* Six CPU spinners were run against `install-then-boot-test.sh`
+> and it passed twice; twelve plain boots six at a time found nothing. **Spinning
+> CPUs is not disk contention**, and four concurrent matrices — each formatting
+> and writing disk images — is.
+>
+> So the reproduction to attempt is not "a busy machine" but **"a machine whose
+> disk is busy"**, and the cheapest version of it is to run
+> `rename-crash-test.sh` beside something doing heavy I/O rather than beside
+> something burning CPU.
+>
+> #### One operational fact this surfaced, which is separate and real
+>
+> `RECON_TREE_LOCK` protects a **worktree**, not the machine. Four sessions with
+> four worktrees hold four different locks and run four matrices at once, each
+> starving the others — which is how the graphics session's run came to see
+> 14 Hz. The lock's granularity is wrong for the resource that is actually
+> scarce, and the honest name for what it prevents is "two runs sharing a tree",
+> not "two runs sharing a computer".
+>
+> Their failure images are kept at
+> `/home/neoge/reconos-verify-failures/20260918-054447`.
+
+
 [#496](https://github.com/neogentrics/ReconOS/issues/496)
 
 > **Seen a second time, 17 September 2026, matrix 70** -- and the heading's
