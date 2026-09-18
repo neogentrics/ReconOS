@@ -9563,6 +9563,111 @@ boot log.
 >
 > Their failure images are kept at
 > `/home/neoge/reconos-verify-failures/20260918-054447`.
+>
+> #### The first hunt with the right idea and the wrong instrument
+>
+> 18 September, acting on the reading above: ten rounds of six cuts, run
+> deliberately while the graphics session's matrix held the machine. Every round
+> printed `contended=yes`, taken from `fuser` on the shared lock. All sixty cuts
+> came back clean.
+>
+> **The result is worthless and the reason is the entry.** Load average during
+> those sixty cuts was **1.78 on sixteen cores** -- about eleven per cent. Their
+> run was in a serial phase with one guest, so the lock was held and the machine
+> was idle.
+>
+> **A held lock means a matrix is running. It says nothing about whether the
+> machine is busy**, and an entire experiment was built on the two being the
+> same thing. So that is three failed reproductions on quiet machines, two of
+> them believed to be loaded at the time: six CPU spinners, twelve parallel
+> boots, and a lock file.
+>
+> This bug keeps producing the same fault in the people hunting it -- **a test
+> that reports the condition it wanted rather than the condition it had**, which
+> is the shape of KF-247, KF-250 and KF-259 in a different costume.
+>
+> #### The dose indicator was in the report all along
+>
+> The graphics session's failing run said `clock and tick` was running at
+> **14 Hz against an expected 100**. That is the kernel measuring its own
+> starvation, and it answers exactly the question the lock check was pretending
+> to: *is this machine actually starved?* It went unread twice.
+>
+> **So the condition to reproduce is not "another matrix is running" but "the
+> guest's own tick rate has collapsed"**, and any future attempt should establish
+> that before it starts cutting -- otherwise a clean sweep says nothing except
+> that the load was never built.
+>
+> #### The second hunt, and why this line of attack is closed for now
+>
+> The graphics session read the plan before the data and caught the same error
+> one level up: **14 Hz is a CPU-starvation number, measured inside the guest,
+> and the plan was to apply disk load.** An indicator on one axis and a variable
+> on another -- a mirror of the lock column. They were right, and the reality
+> turned out worse than their prediction in two further ways.
+>
+> **The load generator was CPU, not disk.** Eight `dd if=/dev/urandom ...
+> conv=fsync` writers sat at about 25 per cent CPU each. Generating sixty-four
+> megabytes of randomness is expensive; the write is cheap. So the second hunt
+> was a **CPU** load built by someone who had, minutes earlier, thrown out an
+> experiment for confusing two conditions.
+>
+> **And the instrument that would have caught that does not work here.**
+>
+> ```
+> $ dd if=/dev/zero of=/tmp/probe bs=1M count=200 conv=fsync
+> sectors written during a deliberate 200 MB fsync write: 0
+> ```
+>
+> `/proc/diskstats` does not move for writes in this WSL2 environment. Its
+> counters hold large historical values and do not advance, so *"the disk is
+> zero per cent busy"* is not a measurement of an idle disk -- it is a broken
+> gauge reading zero. Every disk-utilisation figure taken on this machine, by
+> anyone, is worthless until something else is found.
+>
+> #### Four instruments, four failures, in one hour
+>
+> | instrument | what it was believed to say | what it said |
+> |---|---|---|
+> | `fuser` on the shared lock | the machine is busy | a matrix process exists |
+> | `dd if=/dev/urandom` | disk load | CPU load |
+> | `/proc/diskstats` io_ticks | disk utilisation | nothing; it does not advance |
+> | guest tick at 14 Hz | (correct, but) CPU starvation | measured on the wrong axis for this plan |
+>
+> **Every one was caught by measuring rather than by reasoning**, and three of
+> the four were caught only because somebody asked the next question instead of
+> accepting the previous answer. That is the whole method, and this bug keeps
+> finding people who stop one question early -- including, three times in one
+> hour, the person hunting it.
+>
+> #### What is actually established
+>
+> **Nothing about the bug.** Sixty cuts on a quiet machine and an aborted sweep
+> on a CPU-loaded one say only that the condition was never built. The three
+> sightings stand; the four reproduction attempts say nothing about them.
+>
+> #### What the experiment would have to be
+>
+> The graphics session's proposal, and it is the right one because it is the
+> only condition ever observed to produce this:
+>
+> **Run two or three matrices concurrently and sweep the cuts under them.** All
+> three sightings happened with three running. That saturates every axis at once
+> -- CPU, disk, and the I/O *pattern* that matters, which is many small metadata
+> commits with barriers rather than one sequential stream. It also cannot be
+> faked on this host, because the only workload whose disk load can be confirmed
+> is one whose effects are visible in the guests themselves.
+>
+> **Cost: roughly an hour of the machine, and it starves every other session
+> while it runs.** That is a decision about somebody's computer rather than a
+> technical call, so it waits to be asked for rather than being taken.
+>
+> One measured aside: `lsblk` reports `ROTA=1` for every disk here, including
+> the 1 TB. If that is real rather than a virtualisation artefact, seek time is
+> a variable and scattered concurrent commits contend far more sharply than one
+> stream -- which would help explain why several guests doing small commits
+> reproduce this and one process writing hard does not.
+
 
 
 [#496](https://github.com/neogentrics/ReconOS/issues/496)
