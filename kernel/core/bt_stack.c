@@ -194,29 +194,40 @@ u32 bt_stack_acl(struct bt_stack *s, u16 handle, u8 pb, const u8 *payload,
 
 	*moved = false;
 
-	/* Once the mouse is configured, its own path owns the reassembly and
-	 * the reports. Signalling still has to be answered, so this only
-	 * short-circuits when a report actually came out. */
+	if (handle != s->link.handle)
+		return 0;
+
+	/* **Fed exactly once, here, and nowhere else.**
+	 *
+	 * One buffer serves every channel on this link -- signalling, the
+	 * control channel and the reports -- because they are one stream of
+	 * fragments and two reassemblies would disagree about which fragment
+	 * is in flight.
+	 *
+	 * The first version let `bt_mouse_acl` feed it as well, and then the
+	 * guard below was written `state != RUNNING && !feed(...)`. Once
+	 * running, that condition short-circuits before the feed and the
+	 * early return never happens -- so an *incomplete* PDU fell straight
+	 * through to the parsing below, which read `want` bytes out of a
+	 * buffer holding fewer, and acted on whatever the last PDU had left
+	 * there.
+	 *
+	 * There is one feed now, and nothing past it runs until it says the
+	 * PDU is whole. `bt_mouse_pdu` takes the finished buffer. */
+	if (!l2cap_acl_feed(rx, handle, pb, payload, len))
+		return 0;
+
+	if (!l2cap_header_parse(rx->buf, rx->want, &hdr))
+		return 0;
+
+	/* Reports, once there is a mouse to decode them. */
 	if (s->state == BT_ST_RUNNING) {
-		if (bt_mouse_acl(&s->mouse, handle, pb, payload, len, state)) {
+		if (bt_mouse_pdu(&s->mouse, rx->buf, rx->want, state)) {
 			*moved = true;
 			s->reports++;
 			return 0;
 		}
 	}
-
-	/* Before the mouse exists there is no reassembly of its own, so this
-	 * borrows the same one -- it is the same link and the same buffer,
-	 * and two would disagree about a fragment in flight. */
-	if (handle != s->link.handle)
-		return 0;
-
-	if (s->state != BT_ST_RUNNING &&
-	    !l2cap_acl_feed(rx, handle, pb, payload, len))
-		return 0;
-
-	if (!l2cap_header_parse(rx->buf, rx->want, &hdr))
-		return 0;
 
 	/* The control channel, carrying the answer to SET_PROTOCOL. */
 	if (hdr.cid == BT_CID_CONTROL && s->state == BT_ST_SETTING_PROTOCOL) {
@@ -691,6 +702,81 @@ bool bt_stack_self_test(void)
 					"boot protocol the state is %u, "
 					"expected running\n",
 					(unsigned)s.state);
+				ok = false;
+			}
+		}
+
+		/* --- an incomplete PDU must not be acted on --------------
+		 *
+		 * Running, with one buffer serving every channel. A
+		 * signalling PDU arriving in pieces must do nothing until the
+		 * last piece lands -- the first version parsed the partial
+		 * buffer, because the feed that would have said "not yet" was
+		 * skipped once the state reached running.
+		 *
+		 * **Choosing a PDU that makes it visible took a second
+		 * attempt.** A short one does not: with six of eight bytes,
+		 * the two length bytes of the signalling header are stale
+		 * rubbish, `l2cap_signal_parse` refuses it, and the fault
+		 * hides behind an accident.
+		 *
+		 * A *Configure Request* is sixteen bytes, and eight of them
+		 * carry a complete and self-consistent signalling header. The
+		 * partial parse then succeeds and reads its channel id out of
+		 * bytes that have not arrived -- which are the previous PDU's,
+		 * still in the buffer. Sending the same request twice makes
+		 * those bytes the right channel id, so a stack reading early
+		 * answers a request it has not finished receiving.
+		 */
+		{
+			u8 cfg[4];
+			u32 clen, whole;
+			u64 before_wrong = s.control.wrong_channel;
+
+			put_le16(cfg, BT_CID_CONTROL);
+			put_le16(cfg + 2, 0);
+			clen = l2cap_signal_build(pdu + L2CAP_HEADER,
+						  L2CAP_SIG_CONFIG_REQUEST,
+						  0x60, cfg, sizeof(cfg));
+			l2cap_header_build(pdu, L2CAP_CID_SIGNALLING,
+					   (u16)clen);
+			whole = L2CAP_HEADER + clen;
+
+			/* Once in full, so the buffer holds these bytes. */
+			bt_stack_acl(&s, 0x000C, ACL_PB_START_FLUSHABLE, pdu,
+				     whole, out, sizeof(out), &moved, &ms);
+
+			/* Now the same thing, half of it. */
+			n = bt_stack_acl(&s, 0x000C, ACL_PB_START_FLUSHABLE,
+					 pdu, whole / 2, out, sizeof(out),
+					 &moved, &ms);
+
+			if (n) {
+				kprintf("  btstack: a half-arrived Configure "
+					"Request drew a %u-byte reply -- its "
+					"channel id came from the previous "
+					"PDU's bytes, which are still in the "
+					"buffer\n", n);
+				ok = false;
+			}
+
+			if (s.control.wrong_channel != before_wrong) {
+				kputs("  btstack: a half-arrived PDU was "
+				      "handed to a channel, which judged it "
+				      "on bytes that had not arrived\n");
+				ok = false;
+			}
+
+			/* And the rest of it completes normally. */
+			n = bt_stack_acl(&s, 0x000C, ACL_PB_CONTINUATION,
+					 pdu + whole / 2, whole - whole / 2,
+					 out, sizeof(out), &moved, &ms);
+
+			if (!n || out[4] != L2CAP_SIG_CONFIG_RESPONSE) {
+				kprintf("  btstack: the completed Configure "
+					"Request drew %u bytes of code %02x, "
+					"expected a Configure Response\n", n,
+					n > 4 ? out[4] : 0);
 				ok = false;
 			}
 		}

@@ -1492,3 +1492,67 @@ leaves something known rather than assumed.
 
 73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean.
+
+---
+
+### 18 September 2026 (fifth) — bluetooth → kernel
+
+**Fifth audit: two users of one buffer. It found a PDU being acted on before
+it had all arrived.**
+
+`bt_stack.c` shares one reassembly buffer across every channel on the link --
+signalling, control, and the reports -- because they are one stream of
+fragments and two reassemblies would disagree about which fragment is in
+flight. That much is right.
+
+What was wrong is that **two pieces of code fed it.** `bt_mouse_acl` fed it,
+and so did the stack, and the stack's guard was written:
+
+```c
+if (s->state != BT_ST_RUNNING && !l2cap_acl_feed(rx, ...))
+        return 0;
+```
+
+Once running, that condition short-circuits **before the feed**, so the early
+return never happens. An incomplete PDU fell straight through to the parsing
+below, which read `want` bytes out of a buffer holding fewer — and acted on
+whatever the previous PDU had left there.
+
+Restructured so there is one feed, at the top, and nothing past it runs until
+that feed says the PDU is whole. `bt_mouse_pdu` now takes a finished buffer
+and `bt_mouse_acl` is a feed plus that, so exactly one place decides whether a
+PDU is complete.
+
+#### The first test for it could not see it, and why is the interesting part
+
+The obvious test — half a **Disconnection Request** — passes either way. It is
+eight bytes; six of them leave the signalling header's two length bytes stale,
+`l2cap_signal_parse` refuses the result, and the fault hides behind an
+accident of which bytes happened to be rubbish.
+
+A **Configure Request** is sixteen, and its first eight carry a complete,
+self-consistent signalling header. The partial parse then *succeeds* and reads
+its channel id out of bytes that have not arrived. Sending the same request
+twice makes those bytes the previous copy's — the right channel id — so a
+stack that reads early answers a request it has not finished receiving.
+
+It now fails with `a half-arrived Configure Request drew a 14-byte reply`.
+
+That is the tenth test on this branch that passed when it should not have. It
+is also the first one caught by checking rather than by a later accident: the
+test was written, it went green against known-broken code, and that was
+treated as a result rather than as success.
+
+#### Six audits
+
+| rule | places | wrong |
+|---|---|---|
+| a message is matched to what it answers | 9 | 2 |
+| a caller's buffer is written | 11 | 1 |
+| a `kmemcpy` length is variable | 11 | 1, and it panics |
+| **one buffer, two writers** | 1 | **1** |
+| an answer that arrives early is not the answer | 4 | 0 |
+| an unsigned length is subtracted | 7 | 0 |
+
+73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.

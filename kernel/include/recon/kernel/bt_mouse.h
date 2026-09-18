@@ -83,6 +83,20 @@ bool bt_mouse_configure(struct bt_mouse *m, const u8 *descriptor, u32 len,
 bool bt_mouse_acl(struct bt_mouse *m, u16 handle, u8 pb, const u8 *payload,
 		  u32 len, struct hid_mouse_state *out);
 
+/* The same, given a PDU that is **already whole**.
+ *
+ * Split out because a caller that owns the reassembly itself must not have
+ * this one feed it a second time. `bt_stack.c` does own it: it shares one
+ * buffer across the signalling channel and the reports, and having both this
+ * and the stack call `l2cap_acl_feed` meant the stack could then act on a
+ * PDU that had not finished arriving -- the feed said "not yet", the mouse
+ * returned false for that reason, and the stack read the buffer anyway.
+ *
+ * `bt_mouse_acl` is now this plus a feed, so there is one place that decides
+ * whether a PDU is complete. */
+bool bt_mouse_pdu(struct bt_mouse *m, const u8 *pdu, u32 len,
+		  struct hid_mouse_state *out);
+
 /* Posts a decoded report as input events. Buttons are asked of the input
  * layer rather than remembered here, for the reason `usb_hid.c` gives: two
  * mice must not be able to disagree about whether a button is down. */

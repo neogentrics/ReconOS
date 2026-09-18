@@ -53,10 +53,6 @@ bool bt_mouse_configure(struct bt_mouse *m, const u8 *descriptor, u32 len,
 bool bt_mouse_acl(struct bt_mouse *m, u16 handle, u8 pb, const u8 *payload,
 		  u32 len, struct hid_mouse_state *out)
 {
-	struct l2cap_header hdr;
-	struct bt_hid_message msg;
-	struct bt_hid_report rep;
-
 	if (!m->ready)
 		return false;
 
@@ -72,8 +68,21 @@ bool bt_mouse_acl(struct bt_mouse *m, u16 handle, u8 pb, const u8 *payload,
 	if (!l2cap_acl_feed(&m->rx, handle, pb, payload, len))
 		return false;
 
+	return bt_mouse_pdu(m, m->rx.buf, m->rx.want, out);
+}
+
+bool bt_mouse_pdu(struct bt_mouse *m, const u8 *pdu, u32 len,
+		  struct hid_mouse_state *out)
+{
+	struct l2cap_header hdr;
+	struct bt_hid_message msg;
+	struct bt_hid_report rep;
+
+	if (!m->ready)
+		return false;
+
 	/* A whole PDU. Its first four bytes are the L2CAP header. */
-	if (!l2cap_header_parse(m->rx.buf, m->rx.want, &hdr))
+	if (!l2cap_header_parse(pdu, len, &hdr))
 		return false;
 
 	/* Signalling, or the control channel, or another device's stream on
@@ -86,7 +95,7 @@ bool bt_mouse_acl(struct bt_mouse *m, u16 handle, u8 pb, const u8 *payload,
 	/* Past the header is the HIDP message. `hdr.length` rather than
 	 * `want` because the length excludes the header and using the wrong
 	 * one here is an off-by-four that still decodes. */
-	if (!bt_hid_parse(m->rx.buf + L2CAP_HEADER, hdr.length, &msg)) {
+	if (!bt_hid_parse(pdu + L2CAP_HEADER, hdr.length, &msg)) {
 		m->malformed++;
 		return false;
 	}
