@@ -138,6 +138,7 @@ bool recon_package_read_manifest(const char *package, struct manifest *out) {
      * wrong. */
     bool too_many_places = false;
     bool too_many_settings = false;
+    bool too_many_needs = false;
 
     char *saveptr = NULL;
     for (char *line = strtok_r(text, "\n", &saveptr);
@@ -178,6 +179,34 @@ bool recon_package_read_manifest(const char *package, struct manifest *out) {
             snprintf(out->module, sizeof(out->module), "%s", value);
         } else if (strcasecmp(line, "icon") == 0) {
             snprintf(out->icon, sizeof(out->icon), "%s", value);
+        } else if (strcasecmp(line, "needs") == 0) {
+            /*
+             * `needs = Name` or `needs = Name 1.2`, and a version is a
+             * minimum. Refused rather than trimmed when there are too many,
+             * for the reason `place` gives below: a dependency silently
+             * dropped is a package that installs and does not work.
+             */
+            if (out->needs_count >= NEEDS_MAX) {
+                too_many_needs = true;
+                continue;
+            }
+
+            struct needs *n = &out->needs[out->needs_count];
+
+            if (!split_two(value, n->name, sizeof(n->name),
+                    n->version, sizeof(n->version))) {
+                /*
+                 * One word: a name with no version, which is the ordinary
+                 * case and means any version will do. `split_two` says no
+                 * because there is nothing after the space, and that is the
+                 * answer rather than a failure.
+                 */
+                snprintf(n->name, sizeof(n->name), "%s", value);
+                n->version[0] = '\0';
+            }
+            if (n->name[0] != '\0') {
+                out->needs_count++;
+            }
         } else if (strcasecmp(line, "place") == 0) {
             /*
              * Refused rather than trimmed.
@@ -233,6 +262,11 @@ bool recon_package_read_manifest(const char *package, struct manifest *out) {
     if (too_many_settings) {
         recon_package_set_error("'%s' wants to set more than %d settings",
             out->info.name, SETTINGS_MAX);
+        return false;
+    }
+    if (too_many_needs) {
+        recon_package_set_error("'%s' needs more than %d other packages",
+            out->info.name, NEEDS_MAX);
         return false;
     }
 

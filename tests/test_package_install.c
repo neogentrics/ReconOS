@@ -616,6 +616,202 @@ static void test_upgrade_takes_only_something_newer(void) {
  * the load. This forces the load to fail at exactly that point and checks that
  * what was there before is back.
  */
+/* --- Needing another package ---------------------------------------------
+ *
+ * The board's `pkg-sign-dep` row, whose other half landed with signing in
+ * v0.4.13. Everything here is a refusal, and refusals are the ones that get
+ * quietly relaxed later -- so each of them is checked with something that
+ * would pass if it had been.
+ */
+
+/* A package under a second name, so two can exist at once. */
+#define PKG2 "/Temp/Ledger.rpk"
+
+static void make_second(const char *manifest) {
+    recon_fs_remove_tree("/", PKG2);
+    recon_fs_mkdir("/", PKG2);
+    write_file(PKG2 "/package.txt", manifest);
+    write_file(PKG2 "/ledger.png", "an icon");
+    write_file(PKG2 "/ledger-paper.png", "a wallpaper");
+}
+
+static bool sign_second(void) {
+    if (recon_package_sign(PKG2)) {
+        return true;
+    }
+    printf("    could not sign: %s\n", recon_package_last_error());
+    return false;
+}
+
+/* A message is allowed to change; what it must keep doing is name both
+ * packages, because "a dependency is missing" sends somebody looking and
+ * "Ledger needs Notes" does not. */
+static void says(const char *phrase) {
+    const char *got = recon_package_last_error();
+
+    check(got != NULL && strstr(got, phrase) != NULL, phrase);
+    if (got != NULL && strstr(got, phrase) == NULL) {
+        printf("    said instead: %s\n", got);
+    }
+}
+
+static void clean_up_second(void) {
+    recon_package_uninstall("Ledger");
+    recon_fs_remove("/", "/System/Icons/ledger.png");
+    recon_fs_remove("/", WALLS "/ledger-paper.png");
+    recon_fs_remove_tree("/", PKG2);
+}
+
+static void test_a_package_that_needs_one_that_is_not_there(void) {
+    printf("a package needing something that is not installed\n");
+
+    make_second(
+        "name = Ledger\n"
+        "version = 1.0\n"
+        "publisher = Somebody\n"
+        "description = Keeps accounts\n"
+        "icon = ledger.png\n"
+        "place = ledger-paper.png " WALLS "\n"
+        "needs = Notes\n");
+    check(sign_second(), "it signs");
+
+    check(!recon_package_install(PKG2), "it will not install");
+    says("'Ledger' needs 'Notes', which is not installed");
+    check(!recon_package_installed("Ledger"), "and is not installed");
+
+    /*
+     * Nothing placed. Checked because the order is the whole point: a package
+     * refused *after* its files went down has left a program on the machine
+     * that does not work, and somebody has to find out why.
+     */
+    check(!recon_fs_exists("/", WALLS "/ledger-paper.png"),
+        "AND NOTHING WAS PLACED -- the check is before the files, not after");
+
+    /* Now the thing it needs, and then it goes in. */
+    make_package(CONTENT, false);
+    sign_it_or_say_so();
+    check(recon_package_install(PKG), "what it needs installs");
+    check(recon_package_install(PKG2), "and now so does it");
+    check(recon_package_installed("Ledger"), "both are installed");
+
+    clean_up_second();
+    clean_up();
+}
+
+static void test_a_version_that_is_not_new_enough(void) {
+    printf("needing a version newer than the one installed\n");
+
+    make_package(CONTENT, false);          /* Notes 1.0 */
+    sign_it_or_say_so();
+    check(recon_package_install(PKG), "Notes 1.0 installs");
+
+    make_second(
+        "name = Ledger\n"
+        "version = 1.0\n"
+        "publisher = Somebody\n"
+        "description = Keeps accounts\n"
+        "icon = ledger.png\n"
+        "place = ledger-paper.png " WALLS "\n"
+        "needs = Notes 2.0\n");
+    check(sign_second(), "a package needing Notes 2.0 signs");
+    check(!recon_package_install(PKG2), "and will not install against 1.0");
+    says("needs 'Notes' 2.0 or newer, and 1.0 is installed");
+
+    /* The same version is enough: it is a minimum, not a floor above. */
+    make_second(
+        "name = Ledger\n"
+        "version = 1.0\n"
+        "publisher = Somebody\n"
+        "description = Keeps accounts\n"
+        "icon = ledger.png\n"
+        "place = ledger-paper.png " WALLS "\n"
+        "needs = Notes 1.0\n");
+    check(sign_second(), "one needing exactly what is there signs");
+    check(recon_package_install(PKG2),
+        "and installs, because a version is a minimum rather than a match");
+
+    clean_up_second();
+    clean_up();
+}
+
+static void test_what_something_needs_cannot_be_removed(void) {
+    printf("removing something another package needs\n");
+
+    make_package(CONTENT, false);
+    sign_it_or_say_so();
+    check(recon_package_install(PKG), "Notes installs");
+
+    make_second(
+        "name = Ledger\n"
+        "version = 1.0\n"
+        "publisher = Somebody\n"
+        "description = Keeps accounts\n"
+        "icon = ledger.png\n"
+        "place = ledger-paper.png " WALLS "\n"
+        "needs = Notes\n");
+    check(sign_second() && recon_package_install(PKG2),
+        "and Ledger, which needs it");
+
+    char who[4][RECON_PACKAGE_NAME_MAX];
+
+    check(recon_package_needed_by("Notes", who, 4) == 1,
+        "one package needs Notes");
+    check(strcmp(who[0], "Ledger") == 0, "and it can be named");
+
+    check(!recon_package_uninstall("Notes"), "so Notes cannot be removed");
+    says("'Notes' cannot be removed: 'Ledger' needs it");
+    check(recon_package_installed("Notes"), "and is still there");
+    check(recon_fs_exists("/", WALLS "/paper.png"),
+        "with everything it placed");
+
+    /*
+     * The order that works, and the only one: take away the thing that needs
+     * it first. There is no way to say "anyway", which is the same ruling as
+     * installing an unsigned package.
+     */
+    check(recon_package_uninstall("Ledger"), "the one that needs it goes");
+    check(recon_package_needed_by("Notes", who, 4) == 0,
+        "and now nothing needs Notes");
+    check(recon_package_uninstall("Notes"), "so it can go too");
+
+    clean_up_second();
+    clean_up();
+}
+
+static void test_a_receipt_line_cannot_be_forged_by_a_filename(void) {
+    printf("a placed file named like a dependency\n");
+
+    make_package(CONTENT, false);
+    sign_it_or_say_so();
+    check(recon_package_install(PKG), "Notes installs");
+
+    /*
+     * A receipt's file list comes after `files:`, and the reader stops there.
+     * Without that, a package could place a file called `needs = Notes` and
+     * the line would read as a dependency -- which is somebody able to stop
+     * another package being removed by choosing a filename.
+     *
+     * Written by hand because no manifest can place a file with that name
+     * today; the point is that the *reader* would be wrong if it did not stop.
+     */
+    write_file(RECEIPTS "/Forged.txt",
+        "name = Forged\n"
+        "version = 1.0\n"
+        "publisher = Somebody\n"
+        "description = A receipt with a line after the files marker\n"
+        "files:\n"
+        "needs = Notes\n");
+
+    char who[4][RECON_PACKAGE_NAME_MAX];
+
+    check(recon_package_needed_by("Notes", who, 4) == 0,
+        "a line after `files:` is a file, not a dependency");
+    check(recon_package_uninstall("Notes"), "so Notes can still be removed");
+
+    recon_fs_remove("/", RECEIPTS "/Forged.txt");
+    clean_up();
+}
+
 /* --- What a receipt says a file should be -------------------------------
  *
  * The receipt used to record paths and nothing else, and that was the hole:
@@ -906,6 +1102,10 @@ int main(void) {
     test_it_says_whether_a_file_is_still_what_was_installed();
     test_a_receipt_from_before_digests_still_works();
     test_a_path_with_a_space_in_it_is_read_whole();
+    test_a_package_that_needs_one_that_is_not_there();
+    test_a_version_that_is_not_new_enough();
+    test_what_something_needs_cannot_be_removed();
+    test_a_receipt_line_cannot_be_forged_by_a_filename();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

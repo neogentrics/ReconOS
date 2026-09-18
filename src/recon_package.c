@@ -95,14 +95,45 @@ static bool write_receipt(const struct manifest *manifest,
         "name = %s\n"
         "version = %s\n"
         "publisher = %s\n"
-        "description = %s\n"
-        "files:\n",
+        "description = %s\n",
         manifest->info.name, manifest->info.version,
         manifest->info.publisher, manifest->info.description);
     if (n < 0) {
         return false;
     }
     used = (size_t)n;
+
+    /*
+     * What it needs, before the file list.
+     *
+     * Written here because by the time anybody uninstalls this, the manifest
+     * is gone -- it lived in a folder the installer read once and never owned.
+     * The receipt is the only thing left that knows, and "what needs this" is
+     * a question asked of every installed package at removal time.
+     *
+     * `needs = <name>` or `needs = <name> <version>`, which is the manifest's
+     * own spelling. One format rather than two is worth more than the three
+     * bytes a tighter one would save: somebody reading a receipt should be
+     * reading something they recognise.
+     */
+    for (int i = 0; i < manifest->needs_count && used < sizeof(text); i++) {
+        const struct needs *need = &manifest->needs[i];
+
+        n = snprintf(text + used, sizeof(text) - used,
+            need->version[0] != '\0' ? "needs = %s %s\n" : "needs = %s\n",
+            need->name, need->version);
+        if (n < 0 || (size_t)n >= sizeof(text) - used) {
+            recon_package_set_error("the receipt is too full to write");
+            return false;
+        }
+        used += (size_t)n;
+    }
+
+    n = snprintf(text + used, sizeof(text) - used, "files:\n");
+    if (n < 0) {
+        return false;
+    }
+    used += (size_t)n;
 
     /*
      * Each file as `<64 hex>  <path>`.
@@ -360,6 +391,74 @@ bool recon_package_install(const char *path) {
     if (recon_package_installed(manifest.info.name)) {
         recon_package_set_error("'%s' is already installed", manifest.info.name);
         return false;
+    }
+
+    /*
+     * --- What it needs, before anything is placed ---
+     *
+     * Checked here rather than after the files go down, and the order is the
+     * point: a package that installs and then fails to run has left a program
+     * on the machine that does not work, and somebody has to find out why. A
+     * package refused before it places anything has cost nothing.
+     *
+     * The version is a **minimum**. There is no way to ask for an exact
+     * version or a range, which is deliberate -- see include/recon_package.h.
+     *
+     * Nothing is fetched. This says what is missing and stops; the person
+     * installs that first. A resolver would need somewhere to fetch from, and
+     * ReconOS has no such place yet.
+     */
+    for (int i = 0; i < manifest.needs_count; i++) {
+        const struct needs *need = &manifest.needs[i];
+
+        if (!recon_package_installed(need->name)) {
+            recon_package_set_error("'%s' needs '%s', which is not installed",
+                manifest.info.name, need->name);
+            return false;
+        }
+        if (need->version[0] == '\0') {
+            continue;
+        }
+
+        struct recon_package_info have;
+        bool known = false;
+        int packages = recon_package_count();
+
+        for (int p = 0; p < packages && !known; p++) {
+            if (recon_package_at(p, &have) &&
+                    strcasecmp(have.name, need->name) == 0) {
+                known = true;
+            }
+        }
+        if (!known) {
+            recon_package_set_error("'%s' needs '%s' and it cannot be read",
+                manifest.info.name, need->name);
+            return false;
+        }
+
+        bool unparseable = false;
+        int order = recon_version_compare_text(have.version, need->version,
+            &unparseable);
+
+        if (unparseable) {
+            /*
+             * One of the two is not a version this can compare. Refused
+             * rather than assumed good: "probably new enough" is not a
+             * property to install somebody's software on, and it is the same
+             * ruling the upgrade path makes about two versions it cannot
+             * order.
+             */
+            recon_package_set_error("'%s' needs '%s' %s, and '%s' is not a "
+                "version this can compare it to", manifest.info.name,
+                need->name, need->version, have.version);
+            return false;
+        }
+        if (order < 0) {
+            recon_package_set_error("'%s' needs '%s' %s or newer, and %s is "
+                "installed", manifest.info.name, need->name, need->version,
+                have.version);
+            return false;
+        }
     }
 
     char placed[PLACED_MAX][RECON_PATH_MAX];
@@ -785,6 +884,42 @@ bool recon_package_uninstall(const char *name) {
         return false;
     }
 
+    /*
+     * --- And this is the half the rule earns its keep in ---
+     *
+     * A missing dependency at install time is a package that never arrives,
+     * which somebody notices at once. A dependency removed from underneath a
+     * working program is a program that stops working *later*, for a reason
+     * nobody connects to what they just did.
+     *
+     * Named rather than counted. "Something needs this" sends somebody
+     * looking; "Ledger needs this" is the answer.
+     *
+     * There is no way past it, for the reason there is no way to install an
+     * unsigned package. What somebody who really wants it gone does is remove
+     * the thing that needs it first -- which is the order that leaves a
+     * working machine at every step.
+     */
+    char who[4][RECON_PACKAGE_NAME_MAX];
+    int needs_it = recon_package_needed_by(name, who, 4);
+
+    if (needs_it == 1) {
+        recon_package_set_error("'%s' cannot be removed: '%s' needs it",
+            name, who[0]);
+        return false;
+    }
+    if (needs_it == 2) {
+        recon_package_set_error("'%s' cannot be removed: '%s' and '%s' need it",
+            name, who[0], who[1]);
+        return false;
+    }
+    if (needs_it > 2) {
+        recon_package_set_error("'%s' cannot be removed: '%s', '%s' and %d "
+            "other%s need it", name, who[0], who[1], needs_it - 2,
+            needs_it - 2 == 1 ? "" : "s");
+        return false;
+    }
+
     char placed[PLACED_MAX][RECON_PATH_MAX];
     int count = 0;
     char wrote[SETTINGS_MAX][128];
@@ -954,6 +1089,119 @@ enum recon_package_vouch recon_package_vouches_for(const char *reconos_path,
     }
 
     return RECON_VOUCH_UNKNOWN;
+}
+
+/*
+ * The `needs` lines of one receipt.
+ *
+ * Its own reader rather than another pair of out-parameters on `read_receipt`,
+ * which already has five. This wants none of what that one returns -- not the
+ * file list, not the digests, not the settings -- and a function that takes
+ * seven things so that two callers can each ignore five of them is a function
+ * nobody can read the call site of.
+ */
+static int receipt_needs(const char *name,
+        struct needs out[NEEDS_MAX]) {
+    char path[RECON_PATH_MAX];
+
+    receipt_path(name, path, sizeof(path));
+
+    size_t size = 0;
+    char *text = recon_fs_read("/", path, &size);
+
+    if (text == NULL) {
+        return 0;
+    }
+
+    int found = 0;
+    char *saveptr = NULL;
+
+    for (char *line = strtok_r(text, "\n", &saveptr);
+            line != NULL && found < NEEDS_MAX;
+            line = strtok_r(NULL, "\n", &saveptr)) {
+        recon_package_trim(line);
+
+        /*
+         * Only before `files:`. A placed path could say anything, and a file
+         * called `needs = something` would otherwise be read as a dependency
+         * -- which is somebody able to stop a package being removed by
+         * choosing a filename.
+         */
+        if (strcmp(line, "files:") == 0 || strcmp(line, "settings:") == 0) {
+            break;
+        }
+
+        char *equals = strchr(line, '=');
+
+        if (equals == NULL) {
+            continue;
+        }
+        *equals = '\0';
+        recon_package_trim(line);
+
+        if (strcasecmp(line, "needs") != 0) {
+            continue;
+        }
+
+        char *value = equals + 1;
+
+        while (*value == ' ') {
+            value++;
+        }
+
+        memset(&out[found], 0, sizeof(out[found]));
+
+        char *space = strchr(value, ' ');
+
+        if (space != NULL) {
+            *space = '\0';
+            snprintf(out[found].version, sizeof(out[found].version), "%s",
+                space + 1);
+            recon_package_trim(out[found].version);
+        }
+        snprintf(out[found].name, sizeof(out[found].name), "%s", value);
+
+        if (out[found].name[0] != '\0') {
+            found++;
+        }
+    }
+
+    free(text);
+    return found;
+}
+
+int recon_package_needed_by(const char *name,
+        char who[][RECON_PACKAGE_NAME_MAX], int max) {
+    if (name == NULL || *name == '\0' || who == NULL || max <= 0) {
+        return 0;
+    }
+
+    int found = 0;
+    int packages = recon_package_count();
+
+    for (int i = 0; i < packages && found < max; i++) {
+        struct recon_package_info info;
+
+        if (!recon_package_at(i, &info)) {
+            continue;
+        }
+        /* A package does not hold itself up. */
+        if (strcasecmp(info.name, name) == 0) {
+            continue;
+        }
+
+        struct needs needs[NEEDS_MAX];
+        int count = receipt_needs(info.name, needs);
+
+        for (int n = 0; n < count; n++) {
+            if (strcasecmp(needs[n].name, name) == 0) {
+                snprintf(who[found], RECON_PACKAGE_NAME_MAX, "%s", info.name);
+                found++;
+                break;
+            }
+        }
+    }
+    return found;
 }
 
 int recon_package_count(void) {

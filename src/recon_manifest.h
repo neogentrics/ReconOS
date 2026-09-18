@@ -47,6 +47,15 @@ struct setting {
  * business, and putting it in the public struct would invite somebody to act
  * on a path relative to a folder that may no longer be there.
  */
+/*
+ * How many other packages one may need.
+ *
+ * Small on purpose. A package needing more than eight others is a package that
+ * has not been broken up, and the limit being low is what makes somebody ask
+ * that question rather than discover it at install time on a machine.
+ */
+#define NEEDS_MAX 8
+
 struct manifest {
     struct recon_package_info info;
     char module[RECON_NAME_MAX];
@@ -57,6 +66,20 @@ struct manifest {
 
     struct setting settings[SETTINGS_MAX];
     int setting_count;
+
+    /*
+     * What this package cannot work without.
+     *
+     * `version` is empty when the manifest named none, which means any
+     * version will do. It is a *minimum*, never an exact match -- see
+     * include/recon_package.h for why a package that refuses a later version
+     * of what it needs is describing a fault somewhere else.
+     */
+    struct needs {
+        char name[RECON_NAME_MAX];
+        char version[32];
+    } needs[NEEDS_MAX];
+    int needs_count;
 };
 
 /*

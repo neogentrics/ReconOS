@@ -9,6 +9,79 @@ way for the two to disagree.
 
 ---
 
+## v0.4.72 — a package may need another one
+
+The board's `pkg-sign-dep` row, whose other half landed with signing in
+v0.4.13 and which has ended on the same sentence since: *"what is still
+missing is a package saying it needs another one."*
+
+```
+needs = Ink
+needs = Ink 2.0
+```
+
+### The removal half is the one that matters
+
+A missing dependency at install time is a package that never arrives, and
+somebody notices at once. **A dependency removed from underneath a working
+program is a program that stops working later**, for a reason nobody connects
+to what they just did.
+
+So `recon_package_uninstall` refuses, and names which: *"'Notes' cannot be
+removed: 'Ledger' needs it."* Named rather than counted — "something needs
+this" sends somebody looking, and the answer was already in hand.
+
+There is no way past it, for the reason there is no way to install an unsigned
+package. What somebody who really wants it gone does is remove the thing that
+needs it first, which is the order that leaves a working machine at every step.
+
+### Three decisions worth stating
+
+**A version is a minimum, never a match.** There is no way to ask for a range
+or an exact version. A package that refuses to work with a *later* version of
+what it needs is describing a fault in one of the two, and the honest place to
+fix it is there rather than in a dependency grammar.
+
+**Names, not files.** What is checked is that a package of that name is
+installed — a question the receipts already answer. Nothing looks inside the
+other package or at what it placed: a dependency on a file is a dependency on
+somebody else's internals, and the first reorganisation breaks it.
+
+**There is no resolver, and that is not a gap that got left.** Nothing fetches
+what is missing and nothing works out an install order. A resolver needs
+somewhere to fetch from and ReconOS has no such place — building it first would
+be building the half that cannot work yet.
+
+### The receipt carries it, because the manifest will not be there
+
+By the time anybody uninstalls, the manifest is long gone: it lived in a folder
+the installer read once and never owned. So the receipt records the `needs`
+lines in the manifest's own spelling — one format rather than two, because
+somebody reading a receipt should be reading something they recognise.
+
+And the reader stops at `files:`. Without that, a package could place a file
+called `needs = Notes` and the line would read as a dependency — which is
+somebody able to stop another package being removed by choosing a filename.
+There is a test for it, written by hand because no manifest can place such a
+file today; the point is that the reader would be wrong if it did not stop.
+
+### A check of mine that passed for the wrong reason
+
+The first fixture gave the second package an icon and nothing else. A package
+with no module and nothing to place is refused — `test_a_package_must_bring_
+something`, an existing rule — so the install failed, the dependency checks
+went green, and **they were green for a rule that has nothing to do with
+dependencies**.
+
+The tell was the next test, where the same fixture failed to *sign*. Had the
+dependency checks been the only ones written, this would have shipped as a
+suite proving something it never touched.
+
+The refusal's wording is checked now as well as the refusal: both packages
+named, in both directions.
+
+---
+
 ## v0.4.71 — installing a skin somebody else wrote
 
 `recon_theme.c` from **64.9% to 79.4%** of 993 lines. Nineteen functions

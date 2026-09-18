@@ -1,43 +1,73 @@
-68 of 68, and the port is out of accidents. What does not build with no
-Linux underneath is seventeen sources and 12,090 lines, and every one of them
-is the compositor, a wayland half of a seam, a third-party library, or a file
-left off on purpose.
+recon_theme.c from 64.9% to 79.4% of 993 lines. Nineteen functions
+nothing had ever run are ten, and 244 untouched lines are 58.
 
-### The blocker was not in our code
+### What the measurement had to survive first
 
-scripts/port-blockers.sh reported sys/mman.h against src/recon_codec.c,
-857 lines, zero markers. The include is not in that file. It is in
-third_party/minimp3_ex.h, inside #ifndef MINIMP3_NO_STDIO.
+The first run of the instrument said 49 of 66 functions, 596 lines. It was
+wrong, and finding out why is the part worth keeping: it ran three *drawing*
+suites — titlebar, widget, desktop-frame — because those are what link the
+theme. tests/test_theme.c exists and is the suite that actually exercises it,
+and it was not in the list.
 
-minimp3 ships a second half that takes a path: it opens the file itself,
-maps it with mmap, and decodes out of the mapping. Convenient, and wrong
-here for a reason that has nothing to do with the port.
+Measured against the right one: 19 functions, 244 lines. A number from an
+instrument pointed at the wrong thing is a number, and it nearly cost a suite
+written for code that was already tested.
 
-Every file in this system arrives through recon_fs — which is what keeps
-a path inside the ReconOS root, refuses one that climbs out of it, and is the
-only thing that knows where the volume actually is. A library opening its own
-files reaches around all of that, and it would do it with the host's open on
-a host path, which on ReconOS is not a path at all.
+### The gap was one thing
 
-Nothing ever called it. recon_codec.c uses mp3dec_ex_open_buf and its three
-companions, every one of which takes bytes somebody else has already read. So
-#define MINIMP3_NO_STDIO costs nothing, closes a door that was standing open,
-and takes 857 lines with it.
+Not scattered. recon_theme_install and the inspect_theme_file under it —
+75 lines, and the header makes four specific promises about them, every one
+silent when it breaks:
 
-That it was also a port blocker is the smaller half. A vendored library able to
-open files behind the filesystem layer is a thing to find whether or not it
-stops a compiler.
+- read and parsed *before* it is copied, so a file that is not a skin is
+  refused rather than left in the folder for the next start to trip over
+- a name already taken is refused, because a file cannot shadow a built-in —
+  copying one in under an existing name puts a file in place the system then
+  ignores, and somebody would have installed a skin, seen it listed, and be
+  looking at the built-in with no way to tell
+- administrator only
+- nothing left behind on failure
 
-### And a paragraph that has now been wrong twice
+Every refusal in the new tests is followed by asking whether a file appeared. A
+version that copied first and validated after would pass a test that only
+checked the return value.
 
-scripts/check-userland.sh opens with an explanation of what is left. It named
-malloc as the blocker for two days after malloc worked, was corrected, and has
-since gone stale again: its middle group — *vendored headers, eight files* —
-has been empty since v0.4.48.
+And the other half: the setters the Control Panel's Appearance page calls —
+set_role, set_gradient, set_metric, describe — none of which had run.
+What makes them worth checking is not that they return true. It is that the
+value comes back, and back again after the skins are read from disk, which
+is what a restart is. A setter that changed only what was in memory would pass
+everything else.
 
-The file carries the rule it broke: *the list is what is measured; the
-paragraph explaining it was not.* So the paragraph says less now, points at
-port-blockers.sh, and ends by saying that a paragraph wrong twice about the
-same thing is one to stop trusting.
+### Four of my own expectations were wrong, and three were instructive
+
+- Midnight is a built-in. My "a skin installs" fixture took its name, so
+  the install was refused for exactly the right reason and the test I wrote to
+  prove installing works proved the *shadow rule* instead. The Midnight case
+  now sits where it belongs, in the shadow test, as a second built-in.
+- write_file wrote nothing and said nothing. /Temp existed;
+  /Temp/from-somebody did not. A fixture nobody wrote is indistinguishable
+  from one that was, and the failure surfaced three steps later as "installing
+  a skin does not work". It is loud now.
+- Calling install twice. Once in the check and once in a diagnostic
+  beside it — so the second was refused for the name the first had taken.
+- 0xFFEDE7F0, not 0xEDE7F0. The parser gives a file's RRGGBB an
+  opaque alpha, which is right: a skin file has no way to say *transparent
+  text*, and a colour with a zero alpha byte draws as nothing. The check
+  expected the six digits it had typed and reported that installing a skin
+  loses its colours.
+
+The last is the one to keep. Every one of those was a test being wrong about
+code that was right — which is the failure mode a suite written after the
+fact has, and the reason each of them is written down beside the check rather
+than quietly corrected.
+
+### And the backslash trap, for the third time today
+
+A heredoc eats a backslash level, so "...\n" in a script becomes a real
+newline inside a C string literal. The build then fails, the run uses the
+previous binary, and the failure looks like the code rather than the edit. It
+is in my notes and it caught me anyway; the fix, again, is to write the script
+with a tool that does not.
 
 ---

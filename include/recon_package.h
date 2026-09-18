@@ -36,9 +36,10 @@
  *     icon        = notes.png
  *     place       = paper.png /System/Wallpapers
  *     setting     = notes/wrap on
+ *     needs       = Ink 2.0
  *
- * `module` and `icon` name files inside the package. `place` and `setting` may
- * each appear as often as needed. Everything else is description.
+ * `module` and `icon` name files inside the package. `place`, `setting` and
+ * `needs` may each appear as often as needed. Everything else is description.
  *
  * --- Placing a file ---
  *
@@ -65,6 +66,48 @@
  * rule the icon has always followed and for the same reason: uninstalling a
  * package must not take away something that belonged to somebody else.
  *
+ * --- Needing another package ---
+ *
+ *     needs = <name>
+ *     needs = <name> <version>
+ *
+ * A package that cannot work without another one says so, and install refuses
+ * rather than placing files for a program that will not run. With a version,
+ * the installed one must be **that version or newer** -- there is no way to
+ * ask for a range or for an exact version, and that is deliberate: a package
+ * that refuses to work with a later version of what it needs is describing a
+ * fault in one of the two, and the honest place to fix it is there.
+ *
+ * **Names, not files.** What is checked is that a package of that name is
+ * installed, which is a question the receipts already answer. Nothing looks
+ * inside the other package or at what it placed -- a dependency on a file
+ * would be a dependency on somebody else's internals, and the first
+ * reorganisation would break it.
+ *
+ * --- And removal is the half that matters ---
+ *
+ * **Uninstalling a package something else needs is refused**, and it names
+ * which. That is the direction the rule earns its keep in: a missing
+ * dependency at install time is a package that never gets installed, which
+ * somebody notices immediately. A dependency removed from underneath a working
+ * program is a program that stops working later, for a reason nobody connects
+ * to what they just did.
+ *
+ * There is no way to say "anyway", for the reason there is no way to install
+ * an unsigned package: a check that can be turned off is a check that is off
+ * on the day it matters. What somebody who really wants it gone does is remove
+ * the thing that needs it first, which is the order that leaves a working
+ * machine at every step.
+ *
+ * --- What this is not ---
+ *
+ * There is no resolver. Nothing goes and fetches what is missing, and nothing
+ * works out an order to install four packages in. Install refuses and says
+ * what is missing; the person installs that first. A system that resolved
+ * dependencies would need somewhere to fetch them from, and ReconOS has no
+ * such place -- building the resolver first would be building the half that
+ * cannot work yet.
+ *
  * --- Setting a default ---
  *
  *     setting = <key> <value>
@@ -83,6 +126,11 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+
+/* As long as a package's name may be, which is what `recon_package_info`
+ * holds it in. Named here so a caller can size an array of them without
+ * repeating the number. */
+#define RECON_PACKAGE_NAME_MAX 64
 
 /*
  * Where a package may place a file.
@@ -117,6 +165,19 @@ struct recon_package_info {
 /* Read a package's manifest without installing it, so a caller can say what
  * it is about to do. False with recon_package_last_error() set. */
 bool recon_package_read(const char *path, struct recon_package_info *out);
+
+/*
+ * What is installed that needs `name`, in the order the receipts were found.
+ *
+ * For the two things that have to say it: `recon_package_uninstall`, which
+ * refuses, and anything putting that refusal in front of somebody -- which
+ * wants to name them rather than say "something".
+ *
+ * Returns how many were written, up to `max`. Zero means nothing needs it and
+ * it can go.
+ */
+int recon_package_needed_by(const char *name,
+    char who[][RECON_PACKAGE_NAME_MAX], int max);
 
 /*
  * Install the package at `path`.
