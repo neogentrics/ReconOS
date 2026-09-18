@@ -165,6 +165,28 @@ def main():
               "the tree, so it stays unchecked -- the suite count beside it "
               "is not" % m.group(2))
 
+    # --- the same number, written out in prose --------------------------
+    #
+    # **The badge was checked and the sentence ten lines below it was not**,
+    # so the README carried "45 suites" in one place and "34 suites" in the
+    # other. 34 is the exact number this file's own comment says the badge
+    # drifted *from*: the badge was fixed, the prose was not, and nothing
+    # looked because only the badge had a checker.
+    #
+    # A derivable number is derivable wherever it appears. Checking it in one
+    # spelling and not another is the same fault as not checking it, with the
+    # added cost that the checked one makes the unchecked one look vouched for.
+    for pm in re.finditer(r"(\d+) suites", readme):
+        suites = suite_count()
+        if suites is None or int(pm.group(1)) == suites:
+            continue
+
+        problems.append("the README says %s suites in prose, CMakeLists "
+                        "registers %d" % (pm.group(1), suites))
+
+    fixed = re.sub(r"\b\d+( suites)", r"%d\g<1>" % (suite_count() or 0), fixed) \
+        if suite_count() is not None else fixed
+
     if fix and fixed != readme:
         io.open(os.path.join(ROOT, "README.md"), "w", encoding="utf-8",
                 newline="").write(fixed)

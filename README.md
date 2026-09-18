@@ -7,7 +7,7 @@ somebody else's.**
 [![release](https://img.shields.io/badge/latest_release-v0.4.37-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.37)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-45_suites,_1971_checks-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-358-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-359-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -72,7 +72,7 @@ written down as it was hit rather than guessed at in advance.
 | **Skins** | thirteen, in four groups: the standard set, three for colour vision, two for reading, and your own. Glass comes in six colours, Metallic in eight metals, Beacon in blue or olive |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
 | **Finds things** | the Start menu's box searches programs, settings, the account's folders, the files in them, and the help — ordered by how sure the answer is |
-| **Tests** | 34 suites, 1,971 checks and 10,788 malformed inputs, no display needed |
+| **Tests** | 45 suites, 1,971 checks and 10,788 malformed inputs, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in

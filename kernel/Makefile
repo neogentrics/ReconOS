@@ -315,7 +315,27 @@
 # the wrong one, because **the tree that gets pushed has to be the tree the
 # matrix ran on.** A green matrix for a tree nobody is pushing is not evidence
 # about the tree they are.
-VERSION := 0.4.3
+#
+# **0.4.4 on 18 September 2026: NW-014, and it is the third run this rule has
+# cost today.**
+#
+# The README stated the test-suite count twice. The badge said 45 and the
+# sentence eleven rows below it said 34 — which is the exact number
+# `check-readme-badges.py`'s own comment says the badge had already drifted
+# *from*. The badge was fixed and given a checker; the prose was not, because
+# the checker only ever read the badge.
+#
+# **Three matrix runs have now been killed today to keep this line honest**,
+# at twenty-three, six and fifteen minutes. That is roughly three quarters of
+# an hour of machine time spent on the principle rather than on the code, and
+# it is worth writing down because the temptation grows each time: after the
+# second one, "this change is only in `scripts/`" starts to sound like a
+# reason rather than the excuse KF-200 already ruled it was.
+#
+# The price is affordable and the alternative is not. A version that lags the
+# tree is a version nobody can use to ask *which* tree, and the whole point of
+# raising it per fix is that somebody later can.
+VERSION := 0.4.4
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

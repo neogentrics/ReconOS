@@ -537,6 +537,53 @@ turned out to be true.
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
 
+### NW-014 — The suite count was checked in the badge and not in the sentence below it
+
+[#542](https://github.com/neogentrics/ReconOS/issues/542)
+
+- **Found in** `README.md` and `scripts/check-readme-badges.py`, on 18 September
+  2026, by the network session, while looking up which figure in the README the
+  matrix would need to refresh.
+- **Was** the README stated the test-suite count **twice**: once in the tests
+  badge and once in the feature table eleven rows down. The badge said **45**
+  and the sentence said **34**.
+
+  45 is right — `add_test(` in `CMakeLists.txt`, counted, which is what
+  `suite_count()` does.
+- **34 is not an arbitrary wrong number. It is the exact value this fault had
+  already been fixed from.** `check-readme-badges.py` carries a comment saying
+  the badge *"drifted 34 to 45 behind a note that excused looking"*, and that
+  the desktop session split the derivable half from the underivable half and
+  was right to. They fixed the badge and added the checker for it. The prose
+  kept the old number, because the checker only ever read the badge.
+
+  So this is the residue of a good fix rather than a new mistake: the fixed
+  copy and the unfixed copy sat eleven rows apart for as long as nobody read
+  both at once.
+- **What it cost.** The README is the most-read file in the project and it
+  disagreed with itself by eleven suites. Worse than that, **the checked number
+  makes the unchecked one look vouched for.** A reader who knows the badges are
+  script-maintained has no reason to doubt a figure sitting in the same
+  document saying the same thing.
+- **Found by** reading the README for a different reason entirely — which is
+  the only way it could have been found, because nothing in the tree compares
+  the two.
+- **Fixed by** correcting the sentence to 45, and by making the checker read
+  every `N suites` in the file rather than only the one inside the badge URL.
+  A derivable number is derivable wherever it appears; checking it in one
+  spelling and not another is the same fault as not checking it at all, with
+  the added cost above.
+- **Proved by breaking it.** Setting the sentence back to 34 makes the script
+  report *"the README says 34 suites in prose, CMakeLists registers 45"* and
+  exit 1; `--fix` rewrites it and the next run exits 0. Both directions, because
+  a checker added in response to a checker that did not fire is worth nothing
+  on the strength of its own passing.
+- **The general shape, since this is the fourth entry in this branch with it.**
+  NW-009, NW-011, NW-012 and this one are all a tool that was trusted about
+  something it never actually looked at. Here the giveaway was in the source
+  the whole time: the comment explaining *why* the suite count is checkable was
+  written directly above a function that checked exactly one occurrence of it.
+
 ### NW-013 — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
 
 [#541](https://github.com/neogentrics/ReconOS/issues/541)
