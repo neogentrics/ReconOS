@@ -1317,6 +1317,52 @@ static const struct http_route ROUTES[] = {
 	  (void *)&SITE_FILES, 0 },
 };
 
+/*
+ * The site this machine serves, whole, in one place.
+ *
+ * **Named, at file scope, and not assembled field by field in `main`.** It was
+ * the other way until 0.24.0: a `struct http_site` on the stack with ten
+ * assignments after it. That shape is wrong for exactly one reason, and the
+ * reason arrived the moment `serve.h` gained a field -- the assignments set the
+ * fields somebody remembered, and everything else kept whatever the stack
+ * happened to hold. `host` and `next` landed in that gap: the server dispatched
+ * on a name read out of uninitialised memory and answered correctly on the boot
+ * it was measured on, which is the worst possible outcome of the two.
+ *
+ * A designated initializer zero-fills everything it does not mention, by the
+ * language rather than by anybody being careful, and it does it again for every
+ * field added after this line is written.
+ *
+ * `host` is deliberately absent, which means NULL, which means **this site
+ * claims every name it is asked about**. That is what this server did before
+ * virtual hosts existed and it is what a machine with one site should do -- a
+ * console that starts refusing the name somebody reaches it by, after an
+ * upgrade nobody asked for, is a worse outcome than the fault. `next` is absent
+ * for the same reason: there is nothing after it.
+ */
+static const struct http_site SITE = {
+	.routes = ROUTES,
+	.route_count = sizeof(ROUTES) / sizeof(ROUTES[0]),
+	.ctx = &FACTS,
+	.server_name = "ReconOS",
+	.log = note_request,
+	.log_ctx = &LOGBOOK,
+	.bytes_sent = &FACTS.bytes_out,
+
+	/*
+	 * What this system does while waiting for bytes that have not arrived.
+	 *
+	 * Without it, every request over about 2880 bytes stalled and was never
+	 * answered -- not because of a size limit, but because a single process
+	 * asking for bytes in a tight loop leaves nothing running that could
+	 * deliver them. See `serve.h` and VF-013.
+	 */
+	.idle = recon_yield,
+	.now_ms = clock_ms,
+	.allow = may_write,
+	.allow_ctx = &GUARD
+};
+
 /* --- the web server, as a service ------------------------------------------ */
 
 struct web_service {
@@ -2036,7 +2082,6 @@ int main(void)
 	struct recon_screen screen;
 	struct recon_canvas canvas;
 	struct recon_first_boot facts;
-	struct http_site site;
 	char kernel_line[96];
 	char processors_line[64];
 	char memory_line[96];
@@ -2122,26 +2167,6 @@ int main(void)
 		say(line);
 	}
 
-	site.routes = ROUTES;
-	site.route_count = sizeof(ROUTES) / sizeof(ROUTES[0]);
-	site.ctx = &FACTS;
-	site.server_name = "ReconOS";
-	site.bytes_sent = &FACTS.bytes_out;
-	site.log = note_request;
-	site.log_ctx = &LOGBOOK;
-
-	/*
-	 * What this system does while waiting for bytes that have not arrived.
-	 *
-	 * Without it, every request over about 2880 bytes stalled and was never
-	 * answered -- not because of a size limit, but because a single process
-	 * asking for bytes in a tight loop leaves nothing running that could
-	 * deliver them. See `serve.h` and VF-013.
-	 */
-	site.idle = recon_yield;
-	site.now_ms = clock_ms;
-	site.allow = may_write;
-	site.allow_ctx = &GUARD;
 
 	RESOLVER.server = 0x0A000203u;	/* 10.0.2.3 -- see the declaration */
 	RESOLVER.port = 53;
@@ -2187,7 +2212,7 @@ int main(void)
 	/* --- the services ------------------------------------------------------ */
 
 	WEB.listener = -1;
-	WEB.site = &site;
+	WEB.site = &SITE;
 
 	/* The second service. The supervisor was built for more than one and
 	 * has never held more than one; adding this changed nothing in the

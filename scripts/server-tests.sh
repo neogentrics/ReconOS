@@ -108,6 +108,27 @@ else
 	echo "literals: python3 not found, check skipped" >&2
 fi
 
+#
+# And is every `struct http_site` built with a designated initializer?
+#
+# Not a style check. A site assembled field by field sets what somebody
+# remembered and leaves the rest holding whatever the stack contained -- and
+# the field this file's own `http_site` gained most recently is the *host name
+# the server dispatches on*. The init program shipped that way for one version
+# and answered every request correctly on the boot it was measured on, which is
+# the worst way for a fault like this to behave. VF-029.
+#
+# Here rather than in a suite because no suite can see the init program's
+# stack: this is a shape in the source, and the only thing that can check a
+# shape is something that reads the source.
+#
+if command -v python3 >/dev/null 2>&1; then
+	if ! python3 "$here/check-site-init.py"; then
+		echo "refusing to run the suites against a site that will not be fully initialised" >&2
+		exit 2
+	fi
+fi
+
 printf '%s\n' "--- server suites ---"
 
 for entry in $(printf '%s\n' "$targets" | tr ' ' '\001'); do

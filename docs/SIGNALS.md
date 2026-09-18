@@ -333,9 +333,34 @@ simply not the machine that has it.
 
 ---
 
+## One for everybody: a struct that grows, filled in field by field
+
+Not a request, and nothing here is blocked on it. It cost this seat a version
+and it is the sort of thing every one of these branches has somewhere.
+
+`struct http_site` is configuration and it grows -- eight fields added over
+twenty-four versions, each with a comment saying why. The init program built one
+as `struct http_site site;` on the stack and then assigned the fields by hand.
+When 0.24.0 added `host` and `next`, the assignments did not, so **the server
+dispatched on a host name read out of uninitialised memory** and answered every
+request correctly on the boot it was measured on, because the stack happened to
+hold zero there.
+
+The same mistake was in three test files at the same time, as positional
+initializers, where the compiler refused each one the moment the struct grew.
+Loud in the tests, silent in the program: same mistake, and only one of them
+announced itself.
+
+What actually fixes it is the shape rather than the two fields -- a designated
+initializer zero-fills everything it does not mention, by the language, for
+every field added after the line is written. `scripts/check-site-init.py` now
+refuses the old shape and runs with the suites. VF-029.
+
+---
+
 ## Status of this branch
 
-**server 0.24.0**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
+**server 0.24.1**, merged from `origin/kernel` at 95fd008 (kernel 0.2.48), plus
 the two socket fixes above. **826 checks across nineteen suites**, green. Both
 roles build.
 

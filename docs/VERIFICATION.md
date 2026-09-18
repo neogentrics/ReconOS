@@ -852,3 +852,64 @@ a name this machine was never given           HTTP/1.1 200 OK
   dispatch changed nothing for a server that has one site. The chain itself is
   proved over a real socket in the host suite, against `serve.c` unmodified --
   which is the same standard every other property of this server is held to.
+
+### VF-029 -- the server dispatched on a host name it had never been given
+
+- **What was claimed, by the version that shipped it** 0.24.0's note says a
+  site with no `host` claims every name, and that this is what a single-site
+  machine does. True of `serve.c`. **Not true of the machine**, because the
+  init program never gave that field a value at all.
+- **The shape.** `server_init.c` declared `struct http_site site;` on the stack
+  in `main` and then assigned ten fields one at a time. `host` and `next` --
+  added to the struct that same version -- were not among them, so the server
+  walked a chain of sites starting from whatever the stack held.
+- **Measured, on the machine**, with the previous shape instrumented to print
+  the two fields immediately before the first assignment:
+
+```
+  site before assignment: host=0 next=0
+```
+
+  Zero on that boot, and on the boots the 0.24.0 verification was done on,
+  which is why every one of them passed. That is the fault's whole danger: it
+  is not that the server misbehaved, it is that **it behaved correctly for a
+  reason nobody chose.**
+- **What "indeterminate" means here**, shown on a host rather than asserted --
+  the same shape, in a frame that other work has already used:
+
+```c
+static void dirty(void)  { const char *junk[8]; ... }
+static void configure(void) { struct site s; s.routes = ...; print(s.host); }
+```
+
+```
+(dirtied 0x5b63691d7008)
+host=0x5b63691d7008 next=0x5b63691d7008
+```
+
+  `host` holding a pointer to a string the previous call left behind. On the
+  machine that is a server comparing `Host:` against text from somewhere else
+  in its own memory, and answering **421** to every request the moment it does
+  not match -- a console that has stopped answering to its own address, with no
+  fault anywhere a reader would look.
+- **The fix is the shape, not the two fields.** The site is now a file-scope
+  `static const struct http_site SITE = { ... }` with designated initializers.
+  Everything it does not mention is zero by the language, and stays zero for
+  every field added after the line was written. Assigning the two missing
+  fields would have fixed this instance and left the next one.
+- **And the same shape was in the three test files**, where it was harmless:
+  the compiler refuses a positional initializer with the wrong number of
+  members, so each new field broke the build instead of the server. They are
+  designated now too -- the point is that the loud version and the silent
+  version were the same mistake, and only one of them announced itself.
+- **`scripts/check-site-init.py` runs with every suite** and refuses a
+  `struct http_site` declared without an initializer. Watched failing: the old
+  declaration put back gives
+
+```
+server/init/server_init.c:2094: `site` is declared and then assigned field by field
+```
+
+  No suite can see the init program's stack, so the check has to read the
+  source. It is narrow on purpose -- it is about one struct that is known to
+  grow, not a general rule about uninitialised variables.
