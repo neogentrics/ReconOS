@@ -256,6 +256,34 @@ bool socket_connect(struct socket *s, ipv4_addr addr, u16 port)
 	s->remote_ip = addr;
 	s->remote_port = port;
 
+	/* **The local address, before anything is summed over it.**
+	 *
+	 * `socket_bind(s, IPV4_ANY, 0)` above leaves `local_ip` as 0.0.0.0,
+	 * which is right for a listener and wrong for the pseudo-header of an
+	 * outbound segment: TCP's checksum covers the source address, the IP
+	 * layer writes the device's real address into the header on the way
+	 * out, and the two then disagree. **Every SYN this machine has ever
+	 * sent carried a wrong checksum** and was dropped by the peer without
+	 * so much as a RST.
+	 *
+	 * Found by the server session with a packet capture rather than by
+	 * reading this code, and the evidence is what makes it certain: the IP
+	 * checksum was correct, the TCP one wrong, and wrong **by the same
+	 * 0x0C0F on every packet** -- which is 0x0A00 + 0x020F, the two halves
+	 * of 10.0.2.15, this machine's own address, missing from the sum.
+	 *
+	 * Inbound was always fine because an accepted connection takes its
+	 * local address from the packet that arrived. That is why this survived
+	 * a working TCP stack and a passing self-test suite: nothing that
+	 * listens can see it. */
+	if (s->local_ip == IPV4_ANY) {
+		ipv4_addr next_hop = 0;
+		struct net_device *dev = netdev_route(addr, &next_hop);
+
+		if (dev && dev->ip != IPV4_ANY)
+			s->local_ip = dev->ip;
+	}
+
 	if (s->type == SOCK_STREAM) {
 		s->conn = tcp_open(s->local_ip, s->local_port, addr, port);
 
@@ -290,7 +318,28 @@ bool socket_connect(struct socket *s, ipv4_addr addr, u16 port)
  */
 enum socket_progress socket_connect_progress(struct socket *s)
 {
-	if (!s || s->type != SOCK_STREAM || s->conn < 0)
+	if (!s)
+		return SOCKET_PROGRESS_FAILED;
+
+	/* **A datagram has no handshake, so a connected one is finished.**
+	 *
+	 * This condition used to be folded into the failure test above --
+	 * `!s || s->type != SOCK_STREAM || s->conn < 0` -- which made every
+	 * datagram socket report as having lost. KF-244 introduced that while
+	 * fixing the opposite fault for streams, and it took `SYS_CONNECT` away
+	 * from the only shape of UDP a program can use.
+	 *
+	 * *This socket cannot be asked* and *this socket was asked and failed*
+	 * are different facts, and one line said both. Found by the server
+	 * session on their DNS resolver, which went `resolved:false` on the
+	 * first boot after the merge and came back with three controls holding
+	 * it steady -- inbound TCP still answering, DHCP still completing, and
+	 * the same address on both boots. */
+	if (s->type != SOCK_STREAM)
+		return s->connected ? SOCKET_PROGRESS_DONE
+				    : SOCKET_PROGRESS_FAILED;
+
+	if (s->conn < 0)
 		return SOCKET_PROGRESS_FAILED;
 
 	switch (tcp_state_of(s->conn)) {

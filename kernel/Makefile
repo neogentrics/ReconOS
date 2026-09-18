@@ -206,7 +206,7 @@
 # check -- rows 1.1 to 1.9 of the blueprint audit all built. No such gate was
 # ever written for 0.3.0, so this bump rests on the rule above rather than on a
 # checklist, and saying so is the honest version of stamping it.
-VERSION := 0.3.1
+VERSION := 0.4.0
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
