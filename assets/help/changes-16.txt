@@ -1,80 +1,65 @@
-A program that reads its theme off the disk, fills a screen, frames a window,
-writes text in it and makes a directory now links against ReconOS and nothing
-else — 146,768 bytes, and the only symbol it cannot resolve is stat.
-With stat stubbed it links with zero undefined symbols, which is how we know
-stat is the last thing missing rather than the first.
+userland/desktop/ is the program that runs from the volume. It asks the
+kernel how the screen is arranged, maps the framebuffer, wraps it in a panel,
+and draws a frame with the desktop's own drawing layer — recon_theme,
+recon_ui, the font loader, the text rasteriser. Then it stays up.
 
-src/recon_fs.c is the 57th source to compile with no Linux under it, and it
-is the one the whole port was waiting on.
+It is the other half of the split agreed with the kernel session: the
+built-in stays screen.c, the copy on the volume becomes the desktop. The
+obvious alternative is wrong in a way that is easy to miss — growing the
+built-in program into the desktop would put forty-odd sources inside the
+.incbin'd fallback, making the program that exists for *"the volume is
+unreadable"* the one with the most code in it.
 
-### What was actually in the way, which was not what the file said
+It links. scripts/link-desktop.sh builds it against every desktop source
+that compiles freestanding, the ReconOS C library and nothing else: with stat
+supplied it is 152,336 bytes with zero undefined symbols, and without it,
+stat is the one thing missing. The probe measures the real program now
+rather than a stand-in — which it earned in its first run, by refusing to
+compile main.c over two field names that had been written from memory.
 
-docs/KERNEL-WANTS.md described this as eleven symbols over thirty-one call
-sites. Handing the file to the freestanding compiler rather than reading about
-it turned up four things, and two of them were already written:
+It is written before it can run, deliberately. docs/KERNEL-WANTS.md records
+what happened the last time: *"Nothing in userland/ was rebuilt for it —
+mem_recon.c had been sending that exact call since the allocator was written,
+so the day the kernel accepted it, malloc worked."*
 
-| gap | what was really wrong |
-|---|---|
-| strerror | implemented in libc/errno.c, declared in no header — all 43 desktop call sites were reaching it by implicit declaration |
-| realpath | implemented in libc/posix.c, declared in no header |
-| rename | no system call; now declared-and-not-defined, the treatment sys/stat.h already gives stat |
-| O_NOFOLLOW | not defined |
+### The drawing is a separate file, and that is the point
 
-O_NOFOLLOW is defined as POSIX's real bit and not as 0, which compiles
-identically today and is the whole point: ReconOS has no symbolic links, so 0
-would work — and would silently disarm every caller asking for that protection
-on the day links arrive, with nothing in any source changed to notice.
+shell_frame.c takes a panel and some facts and makes no system call, so the
+whole picture renders on the host in a millisecond. 46 checks hold what a
+suite can hold and a person cannot see — that every pixel is written (a
+band left undrawn is the boot loader's text showing through), that the padding
+at the end of every row is untouched at five different pitches, that the window
+stops above the task bar, and that it draws at 640x480 through 3840x2160.
 
-### And one fault underneath, of the quietest kind
+### And then it was looked at, which found two things the 46 could not
 
-realpath(path, NULL) returned EFAULT. It compiles, it links, it has no
-undefined behaviour, and the function returns cleanly — it just refuses.
+Every line of text was one ascent too high. recon_ui.h says plainly that
+recon_draw_text takes *"the baseline at y"*, and this was handing it a top
+edge — so the window's title floated in the wallpaper above its own title
+bar, and "Start" sat above the task bar. Forty checks had just passed,
+because not one of them asked where a glyph was. The first rendering showed it
+in a second. BG-174's lesson in a new place.
 
-recon_fs.c's stays_inside passes NULL, reads NULL as *"not there yet"*,
-steps up to the parent and asks again, and ends at the root returning false
-— which means *"this path is outside the filesystem"*. So on ReconOS every
-write, every mkdir and every open in the desktop would have been refused,
-each with a sensible message, and nothing anywhere pointing at this function.
+And the Start label was centred on the bar rather than on its button, which
+is inset — so it sat in the button's top half. Close enough to look
+deliberate, wrong enough to look unfinished.
 
-The caller was right: NULL is POSIX, and the comment beside that call already
-explains why it passes NULL rather than a buffer — the host's version demands
-PATH_MAX, a smaller buffer is undefined rather than truncated, and an optimised
-glibc aborts the process over it, which it once did.
+### Three attempts at the check that would have caught them
 
----
+Worth writing down, because two of the three were checks that could not
+fail:
 
-### The correction: stat is the wall after all
-
-v0.4.52 said it was not, and that was wrong. How it went wrong is the part
-worth keeping.
-
-An earlier linker probe came back with three unresolved symbols —
-recon_fs_write, recon_fs_append, recon_fs_mkdir. Those three were read as
-*what a desktop needs from recon_fs.c*, a call graph was walked from them, no
-stat was found, and the conclusion went into the change log, the board, the
-kernel session's inbox and this file.
-
-Every step of that was sound and the premise was not. Those were the
-symbols one particular link happened to leave unresolved, not the entry points
-a desktop uses. recon_theme.c and recon_fonts.c between them call
-twelve — read, write, append, list, exists, remove, copy,
-mkdir, join, resolve, unique_name, last_error — and several reach
-stat. A correct walk from a false premise is a confident wrong answer.
-
-The fix is not "check harder". A linker answers this question directly and a
-call-graph walk answers it by inference, so the walk belongs downstream,
-explaining an answer rather than producing one. scripts/link-desktop.sh is
-that linker, and it said stat in one line.
-
-scripts/fs-reachable.py survives as the explanation of *which* paths reach
-stat, and it takes its entry points on the command line now, because
-hard-coding three of them is how it gave the wrong answer.
-
-Two flags matter, to this and to any real ReconOS link.
--ffunction-sections with --gc-sections: a linker pulls a whole object out
-of an archive, so without them a program that draws would also need rename,
-unlink, chmod and the rest of a file manager. With them it needs what it
-uses — and the difference is measured rather than assumed, because the probe
-runs both ways.
+1. Compare the task bar's pixels against the row above. In the default theme
+   RECON_THEME_BAR and RECON_THEME_WINDOW_FRAME are the same colour —
+   ffc2bfc8 both — so two assertions passed whatever the code did and the
+   third failed for the same reason.
+2. Count pixels exactly equal to TITLE_TEXT outside the title bar. Found
+   them, in the body text: glyphs are anti-aliased, so dark text on white
+   produces every grey between, and that ink is a pale grey. The colours are
+   distinct; the blends are not.
+3. Ask the opposite question. The strip above the window is nothing but
+   wallpaper — anything there escaped, whatever colour it ended up. No blend
+   can confuse it, and putting the baseline fault back fails it immediately,
+   which is how we know it holds.
 
 ---

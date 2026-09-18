@@ -1,57 +1,127 @@
-64 of 85 sources build with no libc under them, up from 62. Twenty are
-left, holding 23,478 lines — and eight of those twenty are the wayland halves
-of seams, which are supposed to be there.
+Nothing checked what the running system loaded. A package's signature is
+verified when it is *installed*: it covers a digest for every file, so install
+proves where the files came from at that moment — and then stops proving
+anything. The digests were thrown away. The receipt recorded paths and nothing
+else, so nothing on the disk said what a module's contents should be, and
+recon_modules_load called dlopen on whatever was at the path.
 
-### 629 lines held by one constant
+The signing machinery was all built. This is the version that spends it.
 
-src/recon_clock.c asks for a non-blocking datagram socket to send an SNTP
-question on, which is the ordinary way to write that, and this library had no
-name for SOCK_NONBLOCK. socket() also refused any type with a flag on it,
-because a type with a flag is not a type it recognised.
+### The check that was in the wrong place
 
-Both flags are defined now, with Linux's values, and socket() strips them
-before it checks the type. What each means here is worth saying:
+src/recon_modules.c did have a refusal after the load: a module declares the
+ABI it was built against, and one that does not match is turned away. That
+reads like a gate and is not one, for a reason that is easy to state and was
+easy to miss:
 
-- SOCK_NONBLOCK is granted, and is also the only thing on offer. Nothing
-  on this kernel blocks — accept answers EAGAIN when nobody is waiting, and
-  so does a read with nothing to read. A caller *not* asking for it gets it
-  anyway, which is the difference from Linux the header already spells out.
-  Refusing the flag would be worse than granting it: the program that asks is
-  the one written for this behaviour.
-- SOCK_CLOEXEC is accepted and does nothing, because there is no exec
-  for a descriptor to survive into. Accepted rather than refused so a program
-  written the careful way still runs.
+dlopen runs a module's initialisers. Every constructor in the file, and
+every constructor in everything it links, runs inside the call. By the time
+the ABI check refuses the module, code from that file has already executed.
 
-Neither is defined as zero, which would compile identically today and be a
-trap the day either becomes real: every caller asking for the protection would
-silently stop asking. O_NOFOLLOW got the same treatment in v0.4.53 and for
-the same reason.
+So the bytes are now weighed before the file is opened, and the version
+number of that decision is the whole point of this release.
 
-### And two functions nothing called
+### A receipt says what each file should be
 
-recon_appwin_node and recon_desktop_node existed to hand a scene node to
-recon_shell.c, which was their only caller. The shell asks about panels since
-v0.4.59, so nothing anywhere named either of them.
+Receipt file lines are now <64 hex>  <path>. Digest first, at a fixed width,
+so a path with a space in it still parses — a reader that split on whitespace
+would take /System/Wallpapers/my paper.png as /System/Wallpapers/my and
+vouch for nothing, which from the outside is indistinguishable from a file
+nobody installed.
 
-v0.4.57 had given recon_appwin_node a file of its own — twenty-five lines,
-with a note saying *"if it grew, the seam would be in the wrong place"*. It did
-not grow. It turned out not to be needed at all, which is the better
-outcome and the one worth recording: the seam did not relocate the compositor
-dependency, it removed it. That file is gone.
+A line that is not that shape is read as a bare path, which is every receipt
+written before this. Read, not refused: an old receipt still has to be able
+to uninstall its package, and refusing to parse one would strand the files it
+names. What an old receipt cannot do is vouch for anything, and that is the
+loader's business to say — it says it by naming the package and telling
+somebody to install it again, rather than reporting a fault in a file that does
+not have one.
 
-src/recon_desktop.c — 1,287 lines about icons, selection rectangles and
-renaming — went with the include, once two more questions moved onto
-recon_server_facts.h: which layer the wallpaper sits in, and how light or
-dark it is at a point. That file is seven functions now, and all seven are the
-same shape: something a program wants to know, asked without naming a
-compositor to ask it of.
+### Five answers, not two
 
-### The same blunt-replace mistake, twice in two days
+recon_package_vouches_for() answers matches, changed, no digest,
+missing, or nothing installed it — because those want five different
+sentences in front of somebody, and a bool would have flattened "this file has
+been swapped" into the same reply as "no package claims this file".
 
-server->shell replaced without an anchor around it hit desktop->server->shell
-and turned a member access into a call on a member that does not exist. The
-identical fault hit recon_taskmgr.c in v0.4.58. Both were caught by the
-compiler immediately, which is the only reason it is a footnote rather than an
-entry — a replacement with no anchor around it hits things nobody looked at.
+Four of the five refuse, and there is no way to say *anyway*. That is the rule
+this project has carried since packages were signed: a check that can be turned
+off is a check that is off on the day it matters.
+
+The comparison is a plain strcmp rather than a constant-time one, which is a
+decision rather than an oversight. Both sides are public — the receipt is a
+file anybody holding the disk can read, and the digest of a file is computable
+by anybody holding it. There is no secret here for a timing difference to leak.
+recon_equal_constant_time stays where it belongs, in the keyring.
+
+VT-E006, *a program is not what was installed*, is what a refusal raises.
+
+### The first real module in this repository
+
+There was not one. src/recon_modules.c is 1,514 lines whose entire job is to
+take somebody else's shared object and run it inside ReconOS, and nothing in
+the tree had ever handed it one. Every test of the install path stood the
+loader in with three functions that returned a bool.
+
+What kept it out was not its size. Compiled on its own, the linker asks for
+eighteen symbols and sixteen are ordinary ReconOS sources. The other two are
+_wlr_log and recon_appwin_destroy — one log call and one destructor,
+holding fifteen hundred lines out of every suite in the tree. This is the fifth
+time this month a very small thing has turned out to be holding a very large
+one, and scripts/port-blockers.sh exists because of the fourth.
+
+So tests/example_module.c is a real module, built twice, and
+tests/test_modules.c is a suite that loads it.
+
+### How the suite proves a gate is a gate
+
+The module has a __attribute__((constructor)) that writes a marker file. That
+turns *was this file opened?* into something observable from outside the
+process, which it otherwise is not — and it is the only question that separates
+a gate from a complaint.
+
+It is built twice because the tamper test needs a swap that is competent: a
+valid, loadable shared object that exports the right symbol and declares the
+right ABI, and is simply not the file the receipt vouches for. Replacing a
+module with rubbish would pass with no gate at all, since dlopen refuses
+rubbish unaided.
+
+Two mutations, to find out whether the suite can fail:
+
+| mutation | checks that died |
+| --- | --- |
+| the gate never refuses anything | 10 |
+| the gate moved to *behind* dlopen | 2 |
+
+The second is the interesting number. Moving the gate three lines down still
+refuses the swapped module, with the same message, and eight of the ten checks
+stay green. The two that die are both *"and nothing in it ran"* — which is
+exactly the claim, and the only two checks in the file that could have caught
+it.
+
+### A pointer that was the wrong type and said so
+
+Unrelated, and found by the compiler while the above was being built:
+recon_net_loop() is declared to return struct recon_loop * and was
+returning its struct wl_event_loop * directly. They are the same pointer — the
+wayland half of the loop seam casts rather than wraps — so nothing misbehaved,
+but the cast was being written by a file that should not know it is a cast.
+
+recon_loop_from_wl now lives in include/recon_loop_wl.h and is inline, for
+a reason worth recording: two test binaries compile src/recon_net.c against
+the plain half of the seam on purpose, so that checking how an SNTP reply
+is read does not need a compositor linked. Out of line, the cast would be a
+symbol those binaries cannot resolve without linking a second definition of
+recon_timer_create. Inline, there is no symbol and the cast is still written
+once.
+
+src/recon_net.c still holds a compositor's loop, and converting it needs the
+seam to grow writability and a way to change what a watch is waiting for.
+That is a decision, and it is not this one.
+
+### The numbers
+
+57 suites, up from 56. 43 of 45 error codes have a site that raises
+them; the two that do not are documented exceptions.
 
 ---

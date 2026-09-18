@@ -241,6 +241,49 @@ int recon_loop_tick(struct recon_loop *loop, uint64_t now_ms) {
     return count;
 }
 
+int recon_loop_watch_count(const struct recon_loop *loop) {
+    if (loop == NULL) {
+        return 0;
+    }
+
+    int count = 0;
+
+    for (int i = 0; i < WATCHES_MAX; i++) {
+        if (loop->watches[i].live) {
+            count++;
+        }
+    }
+    return count;
+}
+
+bool recon_loop_watch_at(const struct recon_loop *loop, int index,
+        int *fd, unsigned *events) {
+    if (loop == NULL || index < 0) {
+        return false;
+    }
+
+    int seen = 0;
+
+    for (int i = 0; i < WATCHES_MAX; i++) {
+        const struct recon_watch *w = &loop->watches[i];
+
+        if (!w->live) {
+            continue;
+        }
+        if (seen == index) {
+            if (fd != NULL) {
+                *fd = w->fd;
+            }
+            if (events != NULL) {
+                *events = w->events;
+            }
+            return true;
+        }
+        seen++;
+    }
+    return false;
+}
+
 void recon_loop_ready(struct recon_loop *loop, int fd, unsigned events) {
     if (loop == NULL || fd < 0 || events == 0) {
         return;

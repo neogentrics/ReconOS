@@ -22,6 +22,16 @@
 #include <string.h>
 
 #include "recon_fs.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+#include "recon_loop.h"
 #include "recon_net.h"
 #include "recon_registry.h"
 
@@ -280,6 +290,617 @@ static void test_streams_need_permission(void) {
     check(true, "closing nothing is harmless");
 }
 
+/* --- A server to talk to, and a hand to turn the loop -------------------
+ *
+ * Eighteen functions of `src/recon_net.c` had never run, 268 lines between
+ * them, the largest being `stream_event` at 106 -- the state machine for a
+ * socket becoming readable or writable. Everything below exists to reach it.
+ *
+ * --- Why there is a real socket in here ---
+ *
+ * The alternative was a fake: hand recon_net a descriptor of our own and
+ * pretend. But what is being tested is precisely what it does with the
+ * *states a real socket goes through* -- a connect that is still in flight, a
+ * peer that closes mid-read, a send that cannot take everything at once. A
+ * fake that produced those would be a second implementation of the thing
+ * under test, and the first one to disagree would be the one nobody checked.
+ *
+ * A listener on 127.0.0.1 costs a few lines and is the real thing.
+ *
+ * --- And why the test turns the loop by hand ---
+ *
+ * `include/recon_loop.h` says there is no `poll` in the interface on purpose:
+ * ReconOS has no such call, and whoever owns the loop knows how it finds out.
+ * **This test is that owner.** It asks the loop what it is waiting on, polls
+ * exactly that, and hands the answers back -- which is the same three steps
+ * `userland/` will take on the real machine, so the path being exercised is
+ * the path that will run.
+ */
+
+struct server {
+    int listener;
+    int port;
+    int accepted;          /* the connection this test's end holds, or -1 */
+};
+
+static bool server_start(struct server *sv) {
+    sv->accepted = -1;
+    sv->listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (sv->listener < 0) {
+        return false;
+    }
+
+    int on = 1;
+    setsockopt(sv->listener, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;                       /* the system picks one */
+
+    if (bind(sv->listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+            listen(sv->listener, 4) != 0) {
+        close(sv->listener);
+        sv->listener = -1;
+        return false;
+    }
+
+    socklen_t length = sizeof(addr);
+    if (getsockname(sv->listener, (struct sockaddr *)&addr, &length) != 0) {
+        close(sv->listener);
+        sv->listener = -1;
+        return false;
+    }
+    sv->port = ntohs(addr.sin_port);
+    return true;
+}
+
+static void server_stop(struct server *sv) {
+    if (sv->accepted >= 0) {
+        close(sv->accepted);
+        sv->accepted = -1;
+    }
+    if (sv->listener >= 0) {
+        close(sv->listener);
+        sv->listener = -1;
+    }
+}
+
+/* Take the connection, if one is waiting. Not an error when none is: the
+ * connect may not have reached the listener yet, and the pump below calls
+ * this repeatedly rather than once at a moment it guessed. */
+static void server_accept(struct server *sv) {
+    if (sv->listener < 0 || sv->accepted >= 0) {
+        return;
+    }
+
+    struct pollfd p = { .fd = sv->listener, .events = POLLIN };
+
+    if (poll(&p, 1, 0) == 1 && (p.revents & POLLIN) != 0) {
+        sv->accepted = accept(sv->listener, NULL, NULL);
+    }
+}
+
+static uint64_t now_ms(void) {
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000u + (uint64_t)(tv.tv_usec / 1000);
+}
+
+/*
+ * Turn the loop for up to `ms`, or until `done` says to stop.
+ *
+ * The three steps an owner takes, and no more: ask the loop what it waits on,
+ * wait on exactly that, hand back what happened. Timers are ticked with the
+ * real clock because recon_net arms real ones.
+ */
+static void pump(struct recon_loop *loop, struct server *sv, int ms,
+        bool (*done)(void *), void *user) {
+    uint64_t until = now_ms() + (uint64_t)ms;
+
+    while (now_ms() < until) {
+        server_accept(sv);
+
+        if (done != NULL && done(user)) {
+            return;
+        }
+
+        struct pollfd set[8];
+        int fds[8];
+        int count = recon_loop_watch_count(loop);
+
+        if (count > 8) {
+            count = 8;
+        }
+
+        int n = 0;
+        for (int i = 0; i < count; i++) {
+            unsigned want = 0;
+
+            if (!recon_loop_watch_at(loop, i, &fds[n], &want)) {
+                continue;
+            }
+            set[n].fd = fds[n];
+            set[n].events = 0;
+            if ((want & RECON_WATCH_READABLE) != 0) {
+                set[n].events |= POLLIN;
+            }
+            if ((want & RECON_WATCH_WRITABLE) != 0) {
+                set[n].events |= POLLOUT;
+            }
+            set[n].revents = 0;
+            n++;
+        }
+
+        /* A short wait rather than none: a spin would make this test the
+         * busiest thing on the machine, and a long one would make a timer
+         * that was due fire late enough to change what is being measured. */
+        if (n > 0) {
+            poll(set, (nfds_t)n, 5);
+        } else {
+            struct timespec rest = { 0, 5 * 1000 * 1000 };
+
+            nanosleep(&rest, NULL);
+        }
+
+        for (int i = 0; i < n; i++) {
+            unsigned events = 0;
+
+            if ((set[i].revents & POLLIN) != 0) {
+                events |= RECON_WATCH_READABLE;
+            }
+            if ((set[i].revents & POLLOUT) != 0) {
+                events |= RECON_WATCH_WRITABLE;
+            }
+            if ((set[i].revents & POLLHUP) != 0) {
+                events |= RECON_WATCH_HANGUP;
+            }
+            if ((set[i].revents & POLLERR) != 0) {
+                events |= RECON_WATCH_ERROR;
+            }
+            if (events != 0) {
+                recon_loop_ready(loop, set[i].fd, events);
+            }
+        }
+
+        recon_loop_tick(loop, now_ms());
+    }
+}
+
+
+/* --- What the handlers saw --------------------------------------------- */
+
+struct seen {
+    int opened;
+    int secured;
+    int closed;
+    enum recon_net_result reason;
+    char text[512];
+    size_t length;
+};
+
+static void saw_opened(void *user, struct recon_net_stream *stream) {
+    (void)stream;
+    ((struct seen *)user)->opened++;
+}
+
+static void saw_secured(void *user, struct recon_net_stream *stream) {
+    (void)stream;
+    ((struct seen *)user)->secured++;
+}
+
+static void saw_received(void *user, struct recon_net_stream *stream,
+        const char *bytes, size_t length) {
+    struct seen *s = user;
+
+    (void)stream;
+    if (s->length + length < sizeof(s->text)) {
+        memcpy(s->text + s->length, bytes, length);
+        s->length += length;
+        s->text[s->length] = '\0';
+    }
+}
+
+static void saw_closed(void *user, struct recon_net_stream *stream,
+        enum recon_net_result reason) {
+    struct seen *s = user;
+
+    (void)stream;
+    s->closed++;
+    s->reason = reason;
+}
+
+static const struct recon_net_stream_handlers HANDLERS = {
+    .opened = saw_opened,
+    .secured = saw_secured,
+    .received = saw_received,
+    .closed = saw_closed,
+};
+
+static bool is_open(void *user) {
+    return ((struct seen *)user)->opened > 0;
+}
+
+static bool has_text(void *user) {
+    return ((struct seen *)user)->length > 0;
+}
+
+static bool is_closed(void *user) {
+    return ((struct seen *)user)->closed > 0;
+}
+
+
+/* --- The tests ---------------------------------------------------------- */
+
+static void test_a_connection_opens_and_carries_bytes(void) {
+    printf("a stream connects, sends and receives\n");
+
+    struct recon_loop *loop = recon_loop_create();
+    struct server sv;
+    struct seen seen;
+
+    memset(&seen, 0, sizeof(seen));
+    check(loop != NULL && server_start(&sv), "a listener is up");
+    if (loop == NULL) {
+        return;
+    }
+
+    recon_net_init(loop);
+
+    /*
+     * Allowed first, because it is not by default and that is the firewall
+     * working: `recon_net_stream_open` asks before it opens anything, and an
+     * application nobody has said yes to does not get a socket. The first run
+     * of these tests failed on exactly that, which is the check earning its
+     * place rather than getting in the way.
+     */
+    recon_net_set_allowed("tests", true);
+
+    struct recon_net_stream *stream = recon_net_stream_open("tests",
+        "127.0.0.1", sv.port, &HANDLERS, &seen);
+
+    check(stream != NULL, "the stream opens");
+    if (stream == NULL) {
+        printf("    (%s)\n", recon_net_last_error());
+        server_stop(&sv);
+        recon_net_finish();
+        recon_loop_destroy(loop);
+        return;
+    }
+
+    /*
+     * Nothing has happened yet, and the header says so: "it returns
+     * immediately with a stream that is not connected yet". Checked, because
+     * a version that connected synchronously would pass every check below and
+     * block the desktop for as long as a far end took to answer.
+     */
+    check(seen.opened == 0, "and nothing has happened yet");
+
+    pump(loop, &sv, 2000, is_open, &seen);
+    check(seen.opened == 1, "the connect finishes and `opened` is called");
+    check(sv.accepted >= 0, "and the far end has the connection");
+
+    check(recon_net_stream_send_text(stream, "hello from the desktop\n"),
+        "it takes something to send");
+    pump(loop, &sv, 500, NULL, NULL);
+
+    char got[64] = "";
+    ssize_t n = sv.accepted >= 0 ? recv(sv.accepted, got, sizeof(got) - 1,
+        MSG_DONTWAIT) : -1;
+
+    check(n > 0 && strncmp(got, "hello from the desktop", 22) == 0,
+        "and the far end receives it");
+
+    /* And the other direction, which is `stream_event`'s readable half. */
+    if (sv.accepted >= 0) {
+        send(sv.accepted, "and back again\n", 15, 0);
+    }
+    pump(loop, &sv, 1000, has_text, &seen);
+    check(seen.length == 15 && strncmp(seen.text, "and back again", 14) == 0,
+        "what the far end sends arrives at `received`");
+
+    size_t sent = 0;
+    size_t received = 0;
+    int age = -1;
+
+    check(recon_net_stream_stats(stream, &sent, &received, &age),
+        "the stream can say how much it has carried");
+    check(sent >= 23 && received == 15, "and the numbers are what went by");
+    check(age >= 0, "and how long it has been open");
+
+    recon_net_stream_close(stream);
+    server_stop(&sv);
+    recon_net_finish();
+    recon_loop_destroy(loop);
+}
+
+static void test_a_far_end_that_goes_away(void) {
+    printf("the far end closes while the stream is open\n");
+
+    struct recon_loop *loop = recon_loop_create();
+    struct server sv;
+    struct seen seen;
+
+    memset(&seen, 0, sizeof(seen));
+    check(loop != NULL && server_start(&sv), "a listener is up");
+    if (loop == NULL) {
+        return;
+    }
+    recon_net_init(loop);
+
+    /*
+     * Allowed first, because it is not by default and that is the firewall
+     * working: `recon_net_stream_open` asks before it opens anything, and an
+     * application nobody has said yes to does not get a socket. The first run
+     * of these tests failed on exactly that, which is the check earning its
+     * place rather than getting in the way.
+     */
+    recon_net_set_allowed("tests", true);
+
+    struct recon_net_stream *stream = recon_net_stream_open("tests",
+        "127.0.0.1", sv.port, &HANDLERS, &seen);
+
+    check(stream != NULL, "the stream opens");
+    if (stream == NULL) {
+        server_stop(&sv);
+        recon_net_finish();
+        recon_loop_destroy(loop);
+        return;
+    }
+
+    pump(loop, &sv, 2000, is_open, &seen);
+    check(seen.opened == 1, "and connects");
+
+    /*
+     * The far end goes without saying anything. This is the path that used to
+     * be unreachable: a hangup arrives on the descriptor, and until v0.4.68
+     * the seam reported every event as "readable" -- so the only way to learn
+     * this had happened was to read and get nothing, which is also what a
+     * quiet connection looks like.
+     */
+    if (sv.accepted >= 0) {
+        close(sv.accepted);
+        sv.accepted = -1;
+    }
+
+    pump(loop, &sv, 2000, is_closed, &seen);
+    check(seen.closed == 1, "`closed` is called once");
+    check(seen.opened == 1, "and `opened` is not called again");
+
+    server_stop(&sv);
+    recon_net_finish();
+    recon_loop_destroy(loop);
+}
+
+static void test_nothing_listening(void) {
+    printf("a port with nothing behind it\n");
+
+    struct recon_loop *loop = recon_loop_create();
+    struct server sv;
+    struct seen seen;
+
+    memset(&seen, 0, sizeof(seen));
+    check(loop != NULL && server_start(&sv), "a listener is up");
+    if (loop == NULL) {
+        return;
+    }
+
+    /*
+     * The port is real and then the listener is shut, so the number is one
+     * nothing is on rather than one picked out of the air -- a port chosen by
+     * hand is a port something else on the machine may be using, and the
+     * failure then is a test that talks to somebody else's program.
+     */
+    int port = sv.port;
+
+    server_stop(&sv);
+    recon_net_init(loop);
+
+    /*
+     * Allowed first, because it is not by default and that is the firewall
+     * working: `recon_net_stream_open` asks before it opens anything, and an
+     * application nobody has said yes to does not get a socket. The first run
+     * of these tests failed on exactly that, which is the check earning its
+     * place rather than getting in the way.
+     */
+    recon_net_set_allowed("tests", true);
+
+    struct recon_net_stream *stream = recon_net_stream_open("tests",
+        "127.0.0.1", port, &HANDLERS, &seen);
+
+    if (stream != NULL) {
+        pump(loop, &sv, 2000, is_closed, &seen);
+        check(seen.closed == 1, "the refusal arrives as `closed`");
+        check(seen.opened == 0, "and `opened` never was");
+        check(seen.reason == RECON_NET_UNREACHABLE,
+            "with a reason saying it was refused rather than slow");
+    } else {
+        /* Refused before it ever reached the loop, which is also correct and
+         * is what a system that checks reachability first would do. */
+        check(true, "it was refused outright");
+    }
+
+    recon_net_finish();
+    recon_loop_destroy(loop);
+}
+
+/* What a probe was told. */
+struct probed {
+    int calls;
+    enum recon_net_result result;
+    int elapsed_ms;
+};
+
+static void saw_probe(void *user, enum recon_net_result result,
+        int elapsed_ms) {
+    struct probed *p = user;
+
+    p->calls++;
+    p->result = result;
+    p->elapsed_ms = elapsed_ms;
+}
+
+static bool probe_answered(void *user) {
+    return ((struct probed *)user)->calls > 0;
+}
+
+static void test_a_probe_reaches_something_and_says_how_long(void) {
+    printf("asking whether something is reachable\n");
+
+    struct recon_loop *loop = recon_loop_create();
+    struct server sv;
+    struct probed p;
+
+    memset(&p, 0, sizeof(p));
+    check(loop != NULL && server_start(&sv), "a listener is up");
+    if (loop == NULL) {
+        return;
+    }
+    recon_net_init(loop);
+
+    check(recon_net_probe("127.0.0.1", sv.port, 2000, saw_probe, &p),
+        "a probe starts");
+    check(recon_net_probe_count() == 1, "and is outstanding");
+
+    pump(loop, &sv, 3000, probe_answered, &p);
+
+    check(p.calls == 1, "it answers once");
+    check(p.result == RECON_NET_OK, "and the listener was reachable");
+
+    /*
+     * The elapsed time, and why it is checked at all: the header says it is
+     * *the useful half* of a reachability test, because "yes, in 8ms" and
+     * "yes, in 1900ms" mean different things. A probe that answered OK with
+     * nothing in that field would look right and be half a result.
+     */
+    check(p.elapsed_ms >= 0 && p.elapsed_ms < 3000,
+        "with how long it took");
+    check(recon_net_probe_count() == 0, "and nothing is outstanding after");
+
+    char host[64] = "";
+    enum recon_net_result result = RECON_NET_NO_NETWORK;
+    int elapsed = -1;
+
+    check(recon_net_last_probe(host, sizeof(host), &result, &elapsed),
+        "the last probe can be read back");
+    /*
+     * `host:port`, not the host alone. The first version of this check
+     * expected the host and was wrong: two probes to one machine on different
+     * ports are different probes, and an answer that named only the machine
+     * could not tell them apart. The header did not say which, and says so
+     * now.
+     */
+    char expected[64];
+
+    snprintf(expected, sizeof(expected), "127.0.0.1:%d", sv.port);
+    check(strcmp(host, expected) == 0, "naming what was probed, with the port");
+    check(result == RECON_NET_OK, "with the answer it got");
+
+    server_stop(&sv);
+    recon_net_finish();
+    recon_loop_destroy(loop);
+}
+
+static void test_a_peer_that_accepts_and_says_nothing(void) {
+    printf("a far end that takes the connection and never answers\n");
+
+    struct recon_loop *loop = recon_loop_create();
+    struct server sv;
+    struct seen seen;
+
+    memset(&seen, 0, sizeof(seen));
+    check(loop != NULL && server_start(&sv), "a listener is up");
+    if (loop == NULL) {
+        return;
+    }
+    recon_net_init(loop);
+    recon_net_set_allowed("tests", true);
+
+    struct recon_net_stream *stream = recon_net_stream_open("tests",
+        "127.0.0.1", sv.port, &HANDLERS, &seen);
+
+    check(stream != NULL, "the stream opens");
+    if (stream == NULL) {
+        server_stop(&sv);
+        recon_net_finish();
+        recon_loop_destroy(loop);
+        return;
+    }
+
+    pump(loop, &sv, 2000, is_open, &seen);
+    check(seen.opened == 1, "and connects");
+
+    /*
+     * --- Why this is not a test of the eight-second timeout ---
+     *
+     * `STREAM_CONNECT_MS` is eight seconds, and a suite that waited for it
+     * would add eight seconds to every run of `ctest` to watch a clock. What
+     * is checked instead is the half that is cheap and is what a caller
+     * actually depends on: **a connection nobody is speaking on stays open
+     * and is not closed by mistake.**
+     *
+     * That is the failure worth catching. A stream torn down because the far
+     * end was thinking is a request that failed for no reason, and it looks
+     * exactly like a network fault from the outside. A timeout that fires
+     * late is a slow answer; one that fires early is a wrong one.
+     */
+    pump(loop, &sv, 700, NULL, NULL);
+    check(seen.closed == 0, "a quiet connection is left alone");
+    check(recon_net_stream_count() == 1, "and is still counted as open");
+
+    size_t sent = 0;
+    size_t received = 0;
+    int age = -1;
+
+    check(recon_net_stream_stats(stream, &sent, &received, &age),
+        "its figures can still be read");
+    check(received == 0, "nothing arrived");
+    check(age >= 500, "and it has been open a while");
+
+    recon_net_stream_close(stream);
+    check(recon_net_stream_count() == 0, "closing it takes it off the list");
+
+    server_stop(&sv);
+    recon_net_finish();
+    recon_loop_destroy(loop);
+}
+
+static void test_the_things_that_answer_without_a_network(void) {
+    printf("what can be asked with nothing connected\n");
+
+    struct recon_loop *loop = recon_loop_create();
+
+    check(loop != NULL, "a loop");
+    if (loop == NULL) {
+        return;
+    }
+    recon_net_init(loop);
+
+    check(recon_net_loop() == loop,
+        "the loop it was started with is the loop it hands back");
+    check(recon_net_machine_name() != NULL &&
+        recon_net_machine_name()[0] != '\0',
+        "the machine has a name");
+    check(recon_net_nameserver_count() >= 0,
+        "and says how many nameservers it knows of");
+    check(recon_net_last_error() != NULL, "there is always an error to read");
+    check(recon_net_stream_count() == 0, "and no streams are open");
+
+    /*
+     * `recon_net_finish` twice. The second is the interesting one: a shutdown
+     * that only works once is a shutdown that faults when something goes wrong
+     * on the way to it and the caller tries again.
+     */
+    recon_net_finish();
+    recon_net_finish();
+    check(recon_net_stream_count() == 0, "and finishing twice is safe");
+    check(recon_net_loop() == NULL, "with the loop let go");
+
+    recon_loop_destroy(loop);
+}
+
 int main(void) {
     /*
      * A throwaway root, because the permission rule lives in the registry and
@@ -312,6 +933,13 @@ int main(void) {
     test_permission();
     test_noting();
     test_streams_need_permission();
+
+    test_a_connection_opens_and_carries_bytes();
+    test_a_far_end_that_goes_away();
+    test_nothing_listening();
+    test_a_probe_reaches_something_and_says_how_long();
+    test_a_peer_that_accepts_and_says_nothing();
+    test_the_things_that_answer_without_a_network();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

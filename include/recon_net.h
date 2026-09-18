@@ -197,6 +197,11 @@ int recon_net_probe_count(void);
  * whatever wants it -- the next command, a Control Panel page redrawing --
  * reads it here.
  *
+ * `host` comes back as **`host:port`**, not the host alone: two probes to one
+ * machine on different ports are different probes, and an answer that named
+ * only the machine could not tell them apart. Said here because it was not,
+ * and a test written from this paragraph expected the other thing.
+ *
  * False when nothing has been asked yet. Any of the out parameters may be
  * NULL.
  */

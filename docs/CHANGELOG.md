@@ -9,6 +9,71 @@ way for the two to disagree.
 
 ---
 
+## v0.4.69 — the network stack, driven by a real socket
+
+`recon_net.c` from **30.73% to 65.92%**, and the eighteen functions nothing had
+ever run are five. What is left is TLS and two three-line timeout callbacks.
+
+### The loop had half an interface
+
+`include/recon_loop.h` says there is no `poll` in it on purpose, and that
+whoever owns the loop knows how it finds out. That was **half an interface**:
+it told an owner to go and find out and never said *what about*. A loop keeps
+the list of descriptors and what each is waiting for, and with no way to read
+it back an owner has to keep a second copy — which is a second thing to keep in
+step, and the one that drifts is the one deciding whether a socket gets polled.
+
+`recon_loop_watch_count` and `recon_loop_watch_at`. Ask the loop, build a poll
+set, hand the answers back. That is what the test does and it is what
+`userland/` will do on ReconOS with whatever call it ends up having — so the
+path being exercised is the path that will run.
+
+Under a compositor both answer **zero**, and that is the answer rather than a
+gap: the compositor owns the waiting, and an owner asking what to wait on there
+is one about to poll what is already polled.
+
+### A real socket, not a fake one
+
+A listener on 127.0.0.1. The alternative was handing `recon_net` a descriptor
+of our own and pretending — but what is being tested is precisely what it does
+with **the states a real socket goes through**: a connect still in flight, a
+peer that closes mid-read, a send that cannot take everything at once. A fake
+producing those would be a second implementation of the thing under test, and
+the first one to disagree would be the one nobody checked.
+
+Five tests: a connection that opens and carries bytes both ways, a far end that
+goes away, a port with nothing behind it, a probe that answers with how long it
+took, and a peer that accepts and then says nothing.
+
+**The hangup one is the path v0.4.68 made reachable.** Until then the seam
+reported every event as "readable", so the only way to learn a peer had gone
+was to read and get nothing — which is also what a quiet connection looks like.
+
+### Two things the tests found
+
+**The firewall refused them**, and that is the firewall working:
+`recon_net_stream_open` asks before it opens anything, and an application
+nobody has said yes to does not get a socket. The first run failed on exactly
+that.
+
+**And `recon_net_last_probe` records `host:port`, not the host.** My check
+expected the host and was wrong — two probes to one machine on different ports
+are different probes, and an answer naming only the machine could not tell them
+apart. The header did not say which, and a test written from that paragraph
+expected the other thing. It says so now.
+
+### What is not tested, and why not the obvious way
+
+`STREAM_CONNECT_MS` is eight seconds. A suite that waited for it would add
+eight seconds to every `ctest` run to watch a clock. What is checked instead is
+the half that is cheap and is what a caller actually depends on: **a connection
+nobody is speaking on stays open and is not closed by mistake.** A stream torn
+down because the far end was thinking is a request that failed for no reason,
+and from outside it looks exactly like a network fault. A timeout firing late
+is a slow answer; one firing early is a wrong one.
+
+---
+
 ## v0.4.68 — the network stack stops holding a compositor
 
 v0.4.62 left this written down and undone:

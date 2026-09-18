@@ -188,6 +188,34 @@ int recon_loop_tick(struct recon_loop *loop, uint64_t now_ms);
 void recon_loop_ready(struct recon_loop *loop, int fd, unsigned events);
 
 /*
+ * --- What this loop is waiting on, so an owner can find out ---
+ *
+ * The header above says "whoever owns the loop knows how it finds out", and
+ * that was half an interface: it told an owner to go and find out, and never
+ * said **what about**. A loop keeps the list of descriptors and what each one
+ * is waiting for, and without a way to read it back an owner has to keep a
+ * second copy of the same list -- which is a second thing to keep in step, and
+ * the one that drifts is the one that decides whether a socket is polled.
+ *
+ * So: ask the loop. Build a poll set from it, wait, and hand the answers back
+ * through `recon_loop_ready`. That is the whole of what an owner does, and it
+ * is what `userland/` will do on ReconOS with whatever call it ends up having.
+ *
+ * Under a compositor both of these answer **zero**, and that is not a gap: the
+ * compositor owns the waiting and polls its own descriptors. An owner asking
+ * this of a wayland loop is an owner about to poll something already being
+ * polled, and the honest answer to "what should I wait on" is "nothing, I have
+ * it".
+ *
+ * The order is not promised and a watch may move between calls, so the pair is
+ * read in one pass rather than held across one.
+ */
+int recon_loop_watch_count(const struct recon_loop *loop);
+
+bool recon_loop_watch_at(const struct recon_loop *loop, int index,
+    int *fd, unsigned *events);
+
+/*
  * How long until the next timer comes due, in milliseconds, or **-1 when
  * nothing is armed**.
  *

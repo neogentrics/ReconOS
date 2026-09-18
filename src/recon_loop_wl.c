@@ -252,6 +252,25 @@ int recon_loop_tick(struct recon_loop *loop, uint64_t now_ms) {
     return 0;
 }
 
+/*
+ * Nothing, and that is the answer rather than a gap. See the header: the
+ * compositor owns the waiting and polls its own descriptors, so an owner
+ * asking what to wait on here is one about to poll what is already polled.
+ */
+int recon_loop_watch_count(const struct recon_loop *loop) {
+    (void)loop;
+    return 0;
+}
+
+bool recon_loop_watch_at(const struct recon_loop *loop, int index,
+        int *fd, unsigned *events) {
+    (void)loop;
+    (void)index;
+    (void)fd;
+    (void)events;
+    return false;
+}
+
 void recon_loop_ready(struct recon_loop *loop, int fd, unsigned events) {
     (void)loop;
     (void)fd;
