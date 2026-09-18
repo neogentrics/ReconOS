@@ -131,7 +131,7 @@ AREA = {
     # label already means on the desktop side.
     'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
     'GX-004': 'display', 'GX-005': 'display', 'GX-006': 'display',
-    'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display', 'GX-010': 'display', 'GX-011': 'display',
+    'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display', 'GX-010': 'display', 'GX-011': 'display', 'GX-012': 'storage',
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',

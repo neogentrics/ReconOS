@@ -286,7 +286,33 @@ static enum block_status run(struct virtio_blk *b, u32 type, u64 sector,
 	for (;;) {
 		u16 done;
 
-		if (collect_or_wait(b, &done))
+		/* **This request's own completion, not the next one to arrive.**
+		 * (GX-012, and the same fault as GX-011 in virtio_gpu.c.)
+		 *
+		 * This broke out on whatever the device finished first. That is
+		 * correct for as long as exactly one request is ever in flight,
+		 * which is what this driver assumes -- and the timeout above
+		 * breaks the assumption by design: it abandons a request
+		 * *without collecting it*, deliberately, because the device
+		 * still owns the descriptors. When the device finishes that one
+		 * later, its completion is sitting in the used ring, and from
+		 * then on every request returns on its predecessor's answer.
+		 * The driver never recovers; it cycles one behind for the life
+		 * of the machine.
+		 *
+		 * On a display that meant a frame that did not appear. Here it
+		 * means `*b->status` is read for a request the device has not
+		 * finished -- a read reporting BLOCK_OK with the buffer not yet
+		 * filled, which is the shape of fault that corrupts a
+		 * filesystem rather than annoying somebody.
+		 *
+		 * Collecting somebody else's completion is not ignored: the
+		 * chain is released by `collect_or_wait`, which is the first
+		 * moment those descriptors are provably safe to reclaim,
+		 * because the completion is the device saying it has finished
+		 * with them. So the leak the timeout comment accepts is given
+		 * back here rather than lost. */
+		if (collect_or_wait(b, &done) && done == head)
 			break;
 
 		if (time_monotonic_ns() > deadline) {

@@ -178,6 +178,102 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ## Fixed
 
+### GX-012 — virtio-blk had GX-011 too, and on a disk it is a read reporting success with the buffer unfilled
+
+- **Found in** kernel 0.2.49, on 17 September 2026, by being asked to go and
+  look. GX-011 was a fault in `virtio_gpu.c` — a driver that submits one request
+  and then breaks out of its wait on whatever the device finishes first. The
+  obvious question was whether the other two virtio drivers share the shape, and
+  the answer is one does and one does not.
+
+- **Was** `run()` in `core/virtio_blk.c`:
+
+  ```c
+  head = virtqueue_submit(&b->q, bufs, lens, wr, n);
+  ...
+  for (;;) {
+          u16 done;
+
+          if (collect_or_wait(b, &done))
+                  break;              /* <- whosever completion that was */
+          ...
+  }
+  ```
+
+  `done` was never compared against `head`. That is correct for exactly as long
+  as one request is ever in flight, which is what the driver assumes — its own
+  comment says so: *"The thread that submitted the request is in run() below
+  with the ring in its hands."*
+
+- **And the driver breaks its own assumption, deliberately.** The timeout path
+  abandons a request **without collecting it**, and says why:
+
+  > *The descriptors are deliberately not released. The device still owns them,
+  > and handing them back to the free list would let a later request reuse
+  > memory the disk may still write into. Leaking three descriptors is the
+  > cheap, correct answer.*
+
+  That reasoning is right about the descriptors and silent about the
+  **completion**. When the device finishes the abandoned request — which it
+  will, because it was only slow, not dead — that completion sits in the used
+  ring, and the next request collects it instead of its own.
+
+- **Demonstrated, not inferred.** The timeout path was simulated exactly:
+  submit, notify, then return `BLOCK_ERR_TIMEOUT` without collecting. One
+  abandoned request, and the driver never recovers:
+
+  ```
+  abandoning head 0 without collecting it, which is what a timeout does
+  collected head 0 having submitted 3
+  collected head 3 having submitted 2
+  collected head 2 having submitted 5
+  collected head 5 having submitted 0
+  collected head 0 having submitted 3      ...and round for ever
+  ```
+
+- **Cost** nothing observed, and the reason matters: no boot in the matrix has
+  ever taken the timeout. The two-second limit exists for a device that has gone
+  slow, and QEMU never does. So this is a fault that is unreachable on every
+  machine the rig owns and reachable on the first real disk that stalls.
+
+  **What it would do there is the part worth stating plainly.** `run()` reads
+  `*b->status` after the loop to decide what happened. Returning on the previous
+  request's completion means reading a status byte the device has not written
+  for *this* request — so a read can report `BLOCK_OK` with the caller's buffer
+  not yet filled. That is not a frame that fails to appear, which is what the
+  same bug did on a display. It is a filesystem being handed stale bytes and
+  told they are good.
+
+- **Fixed in** kernel 0.2.49 on `graphics`. The wait ends only on this
+  request's own head; anything else is skipped and waited past. The stale chain
+  is **released** rather than dropped — `collect_or_wait` already does that, and
+  its completion is the device saying it has finished with those descriptors,
+  which is the first moment reclaiming them is provably safe. So the leak the
+  timeout comment accepts as the price is given back at the first opportunity
+  instead of lost for the life of the machine.
+
+- **Shown to fail before being believed, and shown to recover.** With the
+  simulated timeout still in place and the fix applied, the same boot prints
+  one line and then nothing:
+
+  ```
+  abandoning head 0 without collecting it
+  skipped stale head 0 while waiting for 3
+  ```
+
+  One stale completion consumed, and the driver is correct for the rest of the
+  boot rather than cycling one behind for ever.
+
+- **`virtio_net.c` does not have it, and that is worth recording too.** It never
+  waits for a particular head. Both its rings drain with
+  `while (virtqueue_collect(...))` and look up per-head state — `tx_bufs[head]`,
+  `slot_of(n, head)` — which is the right shape for a queue where completions
+  arrive in their own order and none of them is "mine". The fault is specific to
+  a driver that submits one thing and waits for it, which is why two of the
+  three had it and the asynchronous one never could.
+
+---
+
 ### GX-011 — The virtio-gpu driver waited for *a* completion rather than its own, and had been one behind since it was written
 
 - **Found in** kernel 0.2.49, on 17 September 2026, by a screen that would not

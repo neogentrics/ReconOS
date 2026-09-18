@@ -94,9 +94,50 @@ did its half. It cannot say the device finished before the driver moved on, and
 no counter in that driver could have. The check had to come from outside the
 kernel — the same conclusion as GX-003, reached from the other end.
 
-Worth your eye on `virtio_blk.c` and `virtio_net.c`: I have not read them for
-this, and the shape is a general one — a synchronous driver that breaks out of
-its wait on the first completion rather than on its own.
+**I have now read both, and one of them had it: GX-012.**
+
+`virtio_blk.c`'s `run()` never compared the collected head against the one it
+submitted either. That is correct while exactly one request is in flight, which
+the driver assumes in its own words — *"The thread that submitted the request is
+in run() below with the ring in its hands"* — and **the timeout path breaks that
+assumption on purpose**, abandoning a request without collecting it because the
+device still owns the descriptors. When the device finishes that request later,
+its completion is waiting in the used ring for the next one.
+
+Simulated exactly — submit, notify, return `BLOCK_ERR_TIMEOUT` without
+collecting — and the driver never recovers:
+
+```
+abandoning head 0 without collecting it, which is what a timeout does
+collected head 0 having submitted 3
+collected head 3 having submitted 2
+collected head 2 having submitted 5   ...and round for ever
+```
+
+**On a disk this is worse than it was on a display.** `run()` reads `*b->status`
+after the loop; returning on the previous request's completion means reading a
+status byte the device has not written for this one. A read can report
+`BLOCK_OK` with the caller's buffer unfilled — a filesystem handed stale bytes
+and told they are good, rather than a frame that failed to appear.
+
+No boot in the matrix has ever taken that timeout: the two-second limit is for a
+device that has gone slow and QEMU never does. So it is unreachable on every
+machine the rig owns and reachable on the first real disk that stalls.
+
+Fixed the same way, plus one thing the display version did not need: the stale
+chain is **released** rather than dropped. Its completion is the device saying
+it has finished with those descriptors, which is the first moment reclaiming
+them is provably safe — so the leak that timeout comment accepts as the price is
+given back at the first opportunity instead of lost for the life of the machine.
+
+**`virtio_net.c` does not have it**, and that is worth saying rather than
+leaving as silence. It never waits for a particular head: both rings drain with
+`while (virtqueue_collect(...))` and look up per-head state. The fault is
+specific to a driver that submits one thing and waits for it, which is why two
+of the three had it and the asynchronous one never could.
+
+`core/virtio_blk.c` is yours and I have changed it — the diff is 27 lines, 26 of
+them the comment.
 
 ---
 
