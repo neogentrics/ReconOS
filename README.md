@@ -3,10 +3,10 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.4.73-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
-[![release](https://img.shields.io/badge/latest_release-v0.4.73-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.73)
+[![version](https://img.shields.io/badge/version-0.4.74-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.4.74-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.74)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-58_suites,_4475847_checks-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-58_suites,_4475855_checks-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-327-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
@@ -72,7 +72,7 @@ written down as it was hit rather than guessed at in advance.
 | **Skins** | thirteen, in four groups: the standard set, three for colour vision, two for reading, and your own. Glass comes in six colours, Metallic in eight metals, Beacon in blue or olive |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
 | **Finds things** | the Start menu's box searches programs, settings, the account's folders, the files in them, and the help — ordered by how sure the answer is |
-| **Tests** | 47 suites, counted by running them, no display needed |
+| **Tests** | 58 suites, counted by running them, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -80,21 +80,34 @@ in the Control Panel itself, page by page, and in
 
 ---
 
-## Version history
+## Where it is at, and why
 
-Every version and what it brought, newest first, is
-**[docs/VERSIONS.md](docs/VERSIONS.md)** -- forty-one rows, and the file to edit
-when one lands.
+**v0.4.74.** The number tracks what works, not what is planned, and it is at
+0.4 rather than 1.0 for one reason: **the desktop does not yet run on the
+kernel.** Both halves are real and neither is finished into the other. Until a
+ReconOS kernel can hold a display and a filesystem for a ReconOS desktop, this
+is a desktop on borrowed foundations and says so.
 
-The prose account of each is `docs/CHANGELOG.md` for the desktop and
-`docs/KERNEL-CHANGELOG.md` for the kernel. The number tracks what works, not
-what is planned.
+**What is being worked on right now** is the seam between them --
+[docs/KERNEL-WANTS.md](docs/KERNEL-WANTS.md) is that list, written as each gap
+was hit rather than guessed at in advance, and the top of it today is **an
+address space per process** and **a display the compositor can draw on**.
+
+Every version and what it brought is **[docs/VERSIONS.md](docs/VERSIONS.md)**;
+the prose account of each is `docs/CHANGELOG.md` for the desktop and
+`docs/KERNEL-CHANGELOG.md` for the kernel. They are separate files on purpose
+— a README that carries its own history stops being a description of the
+thing and becomes a record of it.
 
 ## Contents
 
+- [Where it is at, and why](#where-it-is-at-and-why) — the version, and what
+  it is waiting on
+- [What you need](#what-you-need) — to run the desktop, and to run the kernel
+- [What is here, what is not, and what is coming](#what-is-here-what-is-not-and-what-is-coming)
+  — the short answer
 - [What it looks like](#what-it-looks-like) — screenshots of a running system
-- [What works right now](#what-works-right-now) — the summary; the full tour is
-  in **[docs/FEATURES.md](docs/FEATURES.md)**:
+- The full tour of what works is **[docs/FEATURES.md](docs/FEATURES.md)**:
   [starting up](docs/FEATURES.md#starting-up-and-signing-in) ·
   [the desktop](docs/FEATURES.md#the-desktop) ·
   [files](docs/FEATURES.md#files) ·
@@ -110,6 +123,56 @@ what is planned.
 - [The widget layer](docs/WIDGETS.md) — one place that owns what a control looks like
 - [What the roles will be](docs/ROLES.md) — server, firewall, workstation, thin client, NAS
 - [Where this is going](#where-this-is-going)
+
+---
+
+## What you need
+
+### To run the desktop
+
+| | |
+| --- | --- |
+| **Operating system** | Linux. The desktop is a Wayland compositor, so it needs a kernel, not a distribution — any modern one does |
+| **Display** | Direct access to it. Run from a bare TTY (`Ctrl`+`Alt`+`F3`), **not** from inside an existing desktop session |
+| **Graphics** | Any. Without a DRM render node — virtual machines especially — set `WLR_RENDERER_ALLOW_SOFTWARE=1`. With working GPU drivers, drop it |
+| **Libraries** | wlroots 0.17, libwayland, libxkbcommon, wayland-protocols, mbedTLS |
+| **To build** | A C11 compiler, CMake and Ninja. `## Building` below has the one `apt` line |
+| **Without a display** | `WLR_BACKENDS=headless` runs the whole thing with no screen, which is how it is tested and how `scripts/look.sh` drives it |
+
+### To run the kernel
+
+Phase 2 is a separate image and does not need any of the above.
+
+| | |
+| --- | --- |
+| **Architecture** | x86_64 or aarch64 |
+| **Firmware** | Legacy BIOS, UEFI, or device tree — on a bootloader written here; GRUB left the boot path at checkpoint 4 |
+| **Medium** | One USB stick boots both BIOS and UEFI. It installs to, and boots from, a disk of its own |
+| **Storage it can read** | Its own ReconFS, and ext2. **Not** ext4, and **not** legacy IDE — so a BIOS machine with an IDE disk boots and then cannot read it (KF-192) |
+| **USB** | xHCI, with hubs and hot-plug. EHCI is not driven |
+| **Network** | virtio-net only. Real cards are a target, not a claim — see [What hardware it is aimed at](#what-hardware-it-is-aimed-at) |
+| **Memory** | Not measured. It has never been given a floor to find, and a figure nobody has run is not one this file will print |
+
+---
+
+## What is here, what is not, and what is coming
+
+The long answers are [docs/FEATURES.md](docs/FEATURES.md) for what works and
+[docs/ROADMAP.md](docs/ROADMAP.md) for what does not. The short one:
+
+| | |
+| --- | --- |
+| **Works, on Linux, today** | The compositor and window management — snapping, four desktops, Alt+Tab. Real accounts with roles, and a keyring. Twelve applications, including a browser that parses HTML, CSS, tables, forms and cookies, and a media player that decodes MP4. A network: TLS in both directions, mail over IMAP and POP3, a firewall, remote access. Thirteen skins. Packages that are signed, installed and removed. A C library of its own |
+| **Works, on its own kernel, today** | Boot on two architectures under three firmwares, from a bootloader and an installer and a filesystem all written here. Its own memory, page tables, threads, clocks, user mode and system calls. USB and PS/2 input. A network stack. One program — `recon_init` — that reads the machine and draws a screen |
+| **Not here** | The desktop running on that kernel. That is the whole of the gap, and every item below is a piece of it |
+| **Next** | An address space per process, which is what installed applications were decided to need. A display the compositor can draw on. A socket a program outside the kernel can open. A driver for the Realtek r8169 family, because five of those ports sit across three machines in this room |
+| **Later, and named** | The five roles a machine can be set up as — server, firewall, workstation, thin client, NAS — in [docs/ROLES.md](docs/ROLES.md) |
+| **Deliberately not** | EHCI, and WiFi before wired. Both are rulings with reasons, recorded where they were made rather than left as gaps |
+
+Nothing above is a plan presented as a feature. Where this file has been wrong
+it has been wrong in that direction — the kernel's missing list understated
+what was built, twice, six days apart — so the list is read against the tree
+when something lands rather than edited when somebody remembers.
 
 ---
 
@@ -174,15 +237,6 @@ shot before it is left in the frame.
 <td><b>The Midnight skin</b>, with the terminal. The same forty-eight roles, answered darkly.</td>
 </tr>
 </table>
-
-## What works right now
-
-The full tour -- signing in, the desktop, files, settings, applications, the
-network, and how to find out what went wrong -- is **[docs/FEATURES.md](docs/FEATURES.md)**.
-
-It is a long read because it is a list of things that work rather than a
-summary of them, and it was two thirds of this file. What it says has not
-changed.
 
 ## Controls
 

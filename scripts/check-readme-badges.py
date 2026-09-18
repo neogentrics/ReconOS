@@ -170,6 +170,23 @@ def main():
         fixed = re.sub(r"(latest_release-v)[\d.]+(-)", r"\g<1>%s\g<2>" % dv, fixed)
         fixed = re.sub(r"(releases/tag/v)[\d.]+(\))", r"\g<1>%s\g<2>" % dv, fixed)
 
+        # --- and the one written in words ------------------------------
+        #
+        # "Where it is at, and why" opens by saying the version out loud,
+        # because a badge answers *which* and a sentence answers *why it is
+        # that one*. A number in prose drifts the first time somebody ships
+        # without rereading the paragraph -- which is every time -- so it is
+        # checked here rather than left to be noticed.
+        m = re.search(r"^\*\*v([\d.]+)\.\*\*", readme, re.M)
+        if not m:
+            problems.append("no version sentence found; has 'Where it is at' "
+                            "changed shape?")
+        elif m.group(1) != dv:
+            problems.append("the version sentence says v%s, the change log's "
+                            "newest is %s" % (m.group(1), dv))
+        fixed = re.sub(r"^(\*\*v)[\d.]+(\.\*\*)", r"\g<1>%s\g<2>" % dv,
+                       fixed, count=1, flags=re.M)
+
     # --- the suite count from the tree, the check count from a run -----
     #
     # The suite count is `add_test(` counted, which the repository knows. The
