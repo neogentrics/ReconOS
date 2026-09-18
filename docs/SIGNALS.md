@@ -1015,3 +1015,16 @@ verification script instead of the kernel. Recorded because the fix is not
 "use a longer timeout" — it is that **a check for the absence of failures is
 not a check that the work ran.** Any harness on this branch that reports green
 should be asserting an expected count, not a zero.
+
+**Correction to that postscript, same day.** It reads as though the lesson
+were new. It is not, and `scripts/verify-kernel.sh` had it first: it counts
+`pass|FAIL` together rather than failures alone, requires a per-path marker
+string, and then requires `Idling.` before calling a path green — with the
+comment saying exactly why, and naming KF-143 as the hang that taught it,
+*"a run that hung after five of fourteen tests reported 5 self-tests, all
+pass."*
+
+That is the same fault my throwaway script walked into, already found, already
+fixed, and documented in the file I should have read before writing a lesson
+about it. The finding stands as a note about my own harness and nothing more;
+the project's own matrix does not have this hole.
