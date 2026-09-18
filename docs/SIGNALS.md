@@ -16,10 +16,10 @@ git show origin/graphics:docs/SIGNALS.md
 This track merges into **`kernel`**, not `main`: it is kernel code, and the
 kernel session verifies it against the full matrix first.
 
-**`VERSION` in `kernel/Makefile` reads 0.4.3 in this branch.** 0.4.0 is the
+**`VERSION` in `kernel/Makefile` reads 0.4.4 in this branch.** 0.4.0 is the
 kernel session's, taken for the log port, and the merged tree keeps the later
-number as it did at 0.2.38/0.2.39. 0.4.1, 0.4.2 and 0.4.3 are NW-010, NW-011
-and NW-012. NW-013 is open, so it buys nothing.
+number as it did at 0.2.38/0.2.39. 0.4.1 to 0.4.4 are NW-010, NW-011, NW-012 and
+NW-014. NW-013 is open, so it buys nothing.
 
 Setting it here at all is a departure from the rule that the merging session
 owns the number; Joshua set the direction and told this session to apply it.
@@ -293,6 +293,50 @@ is *"writing a file to the medium rather than building a different kernel"*,
 which is true on UEFI and false on BIOS, and it is the sentence somebody will
 act on while standing in front of a server that will not talk to them.
 
+#### NW-013 comes with a reproduction, not just a paragraph
+
+`scripts/cmdline-test.sh` is the experiment above, turned into something
+runnable. It is there because handing over a description and a stack trace is
+the difference between an entry that gets fixed and one that gets read — and
+this entry is open in somebody else's file.
+
+```
+  the kernel command line, through both loaders
+    UEFI carries the command line                            ok
+    BIOS carries the command line                            FAILED -- NW-013
+```
+
+**It refuses to run without OVMF** rather than reporting a result it cannot
+back. Three things in it are measured rather than assumed: the cmdline file is
+read back off the image before either boot; both logs are checked for
+`ReconOS kernel` before the result is believed, because a kernel that never
+started says nothing about command lines and must not be read as one that
+ignored it; and a failing control is reported as a fault in the test rather
+than as evidence about the loader.
+
+Exit 1 when the loaders disagree, 2 when it cannot answer, 0 when they agree.
+The first two were exercised. **The zero path cannot be demonstrated without
+fixing the loader**, and that is said here rather than left to be inferred from
+its absence.
+
+Not wired into `verify-kernel.sh`: it costs two full boots, it tests a loader
+rather than the kernel, and it is a reproduction for an entry that is not mine
+to close. Whether it earns a place in the matrix is the boot track's call once
+it does.
+
+#### One more of yours, and it is small — NW-014
+
+The README stated the test-suite count twice: the badge said 45 and the
+sentence eleven rows down said 34. **34 is the exact number
+`check-readme-badges.py`'s own comment says the badge had already drifted
+*from*.** The badge was fixed and given a checker; the prose was not, because
+the checker only ever read the badge.
+
+Worth one line of your attention only because of the shape, which is the fourth
+time this branch has hit it: **a tool trusted about something it never looked
+at** — NW-009, NW-011, NW-012, NW-014. The checker now reads every `N suites`
+in the file. Broken on purpose both ways before it was believed.
+
 #### And your two-card question answered on the way past
 
 The same experiment booted the stick with **two** e1000s, because the server has
@@ -312,17 +356,17 @@ the list instead. The reason you gave is the one that matters and it is worth
 repeating: if both counts are built from the same list of prefixes, an unknown
 track is invisible to the parser *and* to the thing watching the parser. Taken
 whole, your side of the conflict as you asked. Verified after rather than
-assumed — the badge script now reports 358 bugs across four prefixes and names
-13 `NW`, where before this branch's entries counted as zero.
+assumed — the badge script now reports 359 bugs across four prefixes and names
+14 `NW`, where before this branch's entries counted as zero.
 
-**2. `VERSION` is 0.4.3, and 0.4.0 is yours.** The merged tree takes the later
+**2. `VERSION` is 0.4.4, and 0.4.0 is yours.** The merged tree takes the later
 number, as at 0.2.38/0.2.39, and a log port is plainly a capability rather than
 a fix. Your justification was in the **commit message**, which is the one
 address the paragraph at the top of that block rules out — *a rule kept anywhere
 else is a rule read after the fact*, and a commit message is read later than a
 document, not sooner. It is copied into the Makefile where that paragraph says
 it belongs, attributed to you. The decision is not being second-guessed; only
-its location. 0.4.1, 0.4.2 and 0.4.3 are NW-010, NW-011 and NW-012; NW-013 is
+its location. 0.4.1 to 0.4.4 are NW-010, NW-011, NW-012 and NW-014; NW-013 is
 open and buys nothing.
 
 **3. `docs/SIGNALS.md` conflicts structurally, in both directions, for ever.**
@@ -387,7 +431,7 @@ Realtek silicon.
 `KF-216` and `KF-237` had issues on the tracker — #450 and #496 — and no link in
 their entries, so `--check` reported them unlinked on every run by everybody.
 Titles verified against the tracker character for character before anything was
-written. The register is now **358 links, 0 wrong, 0 unlinked**, which it has
+written. The register is now **359 links, 0 wrong, 0 unlinked**, which it has
 not been before. Nothing else in those entries was touched.
 
 ---
@@ -711,7 +755,7 @@ See the section on the two tests below.
 
 ## Three things you need to do on merge
 
-**1. The version is `0.4.3`, and the 0.4.0 in it is yours rather than mine.**
+**1. The version is `0.4.4`, and the 0.4.0 in it is yours rather than mine.**
 
 This section asked for `0.4.0` once and Joshua refused it, rightly: the Realtek
 had never touched silicon, so *"the kernel can network on real hardware"* — the
@@ -722,10 +766,10 @@ The 0.4.0 in the tree is the **log port's**, taken on your side of the merge for
 a capability this kernel did not have at 0.3.x. The merged tree keeps the later
 number, as at 0.2.38/0.2.39.
 
-**Ten patches, one per fault fixed**, which is the arithmetic this file has
+**Eleven patches, one per fault fixed**, which is the arithmetic this file has
 followed since 0.1.x: NW-001, NW-002, NW-006, NW-007, NW-009, then NW-003 and
 NW-008 once those turned out to be mine rather than yours, and now NW-010,
-NW-011 and NW-012.
+NW-011, NW-012 and NW-014.
 
 **Three entries remain open and none of them buys a patch, because none is
 fixed.** NW-004 and NW-005 are yours and unchanged. NW-013 is the BIOS command
