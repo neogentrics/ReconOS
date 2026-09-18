@@ -9612,18 +9612,59 @@ boot log.
 > was a **CPU** load built by someone who had, minutes earlier, thrown out an
 > experiment for confusing two conditions.
 >
-> **And the instrument that would have caught that does not work here.**
+> **And then I claimed the instrument was broken, which was false.** Retracted
+> in full, because it is the one conclusion here that would have cost somebody
+> else something: it removes a working gauge from everyone who reads this.
+>
+> The claim was that `/proc/diskstats` does not advance for writes under WSL2,
+> from this probe:
 >
 > ```
-> $ dd if=/dev/zero of=/tmp/probe bs=1M count=200 conv=fsync
 > sectors written during a deliberate 200 MB fsync write: 0
 > ```
 >
-> `/proc/diskstats` does not move for writes in this WSL2 environment. Its
-> counters hold large historical values and do not advance, so *"the disk is
-> zero per cent busy"* is not a measurement of an idle disk -- it is a broken
-> gauge reading zero. Every disk-utilisation figure taken on this machine, by
-> anyone, is worthless until something else is found.
+> **It advances perfectly well.** Measured properly, with the whole line printed
+> before and after rather than one field picked in advance:
+>
+> ```
+> $10 sectors_written   788942992 -> 789353000   delta 410008
+> ```
+>
+> 410,008 sectors of 512 bytes is 209.9 MB, which is the 200 MiB that was
+> written. `writes_completed` moved by 207, `ms_writing` by 173, `io_ticks` by
+> 88.
+>
+> **What produced the zero is the part worth keeping.** The awk program never
+> ran. Passed through `wsl.exe` into `bash -c "..."`, the field references were
+> consumed by the outer shells before awk saw them, and what arrived was:
+>
+> ```
+> awk: cmd. line:1: =="sdd"{print 0}
+> awk: cmd. line:1: ^ syntax error
+> ```
+>
+> `$3` became empty and `$10` became `0`. awk exited with a syntax error, the
+> command substitution captured an empty string, `$((b-a))` subtracted two empty
+> strings and produced **0** -- and the error itself went to `/dev/null`, by a
+> redirect I had written into the same line.
+>
+> So the figure was not a measurement of an idle disk. **It was a failed command,
+> silenced by its own author, whose empty output became a plausible number.**
+> That is the shape of KF-247, KF-250 and KF-259, produced by the person who had
+> written all three up the same day.
+>
+> Caught by the graphics session, who were right that the instrument works and
+> wrong about why -- they diagnosed an off-by-three field index, and the actual
+> cause was shell quoting eating the references. **Their conclusion was right and
+> their reasoning was not, which is why it still had to be measured rather than
+> accepted.**
+>
+> Two caveats on the gauge, theirs and worth keeping: `io_ticks` is coarse under
+> a virtual disk -- 88 ms of busy for a write that took far longer in wall clock
+> -- so it is usable as a *relative* dose between rounds and not as an absolute
+> utilisation. And it is the host's view of the virtual disk; what a guest
+> experiences is a layer further down. `sectors_written` is the trustworthy
+> field.
 >
 > #### Four instruments, four failures, in one hour
 >
@@ -9631,7 +9672,7 @@ boot log.
 > |---|---|---|
 > | `fuser` on the shared lock | the machine is busy | a matrix process exists |
 > | `dd if=/dev/urandom` | disk load | CPU load |
-> | `/proc/diskstats` io_ticks | disk utilisation | nothing; it does not advance |
+> | `/proc/diskstats` io_ticks | disk utilisation | it works -- my *reading* of it was a silenced syntax error |
 > | guest tick at 14 Hz | (correct, but) CPU starvation | measured on the wrong axis for this plan |
 >
 > **Every one was caught by measuring rather than by reasoning**, and three of
