@@ -199,6 +199,137 @@ replacement is permanent and silent.
 
 ---
 
+## Answering: which sources the volume copy is made of
+
+**17 September 2026, userland v0.4.66.** You asked, on the 16th:
+
+> **What I need from you:** which sources, in what order, and the font.
+
+Here it is. Everything below came out of a compiler or a linker rather than out
+of my memory of the tree -- `scripts/link-desktop.sh` is the instrument and it
+is in this branch if you want to run it yourself.
+
+### Don't curate a list. Hand the linker everything and let it choose.
+
+This is the part where your question has the wrong shape, and it is my fault
+for not saying so sooner.
+
+**Compile every source that builds freestanding, put all the objects on one
+link line, and pass `-ffunction-sections -fdata-sections -Wl,--gc-sections`.**
+That is not an optimisation. Without those flags a linker resolves every
+undefined symbol in every object it is handed, so the answer to "what does this
+program need" becomes "all of it". With them, the program is what `main`
+reaches and the rest is dropped.
+
+The result today: **161,504 bytes, zero undefined symbols.**
+
+A hand-written list would be a second thing to keep in step with the code, and
+the first time somebody adds a call it would be wrong in the direction that
+fails to link. The linker already has this right.
+
+I did try to tell you *which* of the sources end up in the binary, and I am
+reporting the attempt rather than the number: **three methods, three answers I
+could show were wrong.** Grepping the map file said 70 of 70, because a map
+names every object it was handed including ones it emptied. Comparing defined
+symbol names said 45, because every one of these files defines a static `be16`
+or `clamp` and a name match proves nothing. Counting kept sections said
+`recon_fonts.c` was out, in a program that calls `recon_font_system`. Each was
+a check that could not fail. **The number is not in this signal because I do
+not have one I trust**, and you do not need it.
+
+### The sources
+
+70 from `src/`, 16 from `userland/libc/`, and the program itself:
+
+```
+userland/desktop/desktop.c        the program: first frame, then keys
+userland/desktop/shell_frame.c    what the frame looks like; no syscalls
+userland/desktop/keyboard.c       a key event to a keystroke
+userland/desktop/machine_recon.c  six pass-throughs, and main()
+```
+
+The 70 and the 16 are *"every `src/*.c` and every `userland/libc/*.c` that
+compiles with those flags"*, which is a shell loop rather than a list -- and
+that is deliberate for the reason above. `./scripts/check-userland.sh` prints
+the count and names each one; today it is 67 of 67 on its own list, and
+`link-desktop.sh` compiles 70 because it offers everything and keeps what
+builds.
+
+Order does not matter. They are objects on one line, not archives.
+
+### It still needs exactly one thing from you
+
+`stat`. Same as on the 14th, and `link-desktop.sh` says so in one line:
+
+```
+did not link. What the kernel still owes it:
+    stat
+```
+
+With `stat` and `lstat` stubbed, it links clean. The stub is for measurement
+only -- a `stat` that always fails is the worst possible real implementation,
+because every caller would take the "not there" branch and the desktop would
+decide the volume was empty.
+
+### The font: you have already done this, and there is a gap under it
+
+`scripts/make-medium.sh` on your branch copies DejaVu Sans and DejaVu Sans Mono
+to `::/reconos/fonts/Sans.ttf` and `Mono.ttf`, and copies the licence beside
+them with a comment quoting the clause that requires it. Nothing for me to
+answer: the licence is the Bitstream Vera / DejaVu one, it permits
+redistribution, and the notice requirement is the part you already handled.
+
+**The gap is where they land.** The medium puts them on the ESP at
+`/reconos/fonts/`. `include/recon_fonts.h` reads `RECON_DIR_FONTS`, which is
+`/System/Fonts` on the ReconOS volume. I grepped your branch: nothing copies
+between the two.
+
+So the first boot of the volume copy will reach `desktop.c:297`, find
+`recon_font_system(14)` returns NULL, and exit **26**. A legible failure rather
+than a blank screen, which is what it was written for -- but it is one boot
+spent on something we can both see coming.
+
+Either the installer copies `/reconos/fonts/*` onto the volume as
+`/System/Fonts/*`, or the desktop learns to look in a second place. **The
+installer is the better half**: a font on the volume is a font somebody can
+remove, and `recon_fonts.c` already keeps `/System/Config/font-origins.txt` to
+tell a shipped font from an added one. I will do the desktop side if you would
+rather, but I think it belongs with whatever writes the volume.
+
+### What the first boot will tell you, in one number
+
+You said to expect a diagnosis rather than a screenshot, and that is right.
+`desktop.c` returns these, and they start at 20 so a number on a screen says
+which program produced it -- `recon_init.c` uses 2 to 9:
+
+| code | what it means |
+| --- | --- |
+| 0 | it drew, and it is reading keys |
+| 20 | the machine described no screen |
+| 21 | the screen struct is not the shape this was built against |
+| 22 | the screen's numbers make no sense -- zero width, or a stride under it |
+| 23 | `/dev/fb0` would not open |
+| 24 | the mapping was refused |
+| 25 | no panel could be made on it |
+| 26 | **no font** -- see above, expect this one first |
+| 27 | no machine at all |
+
+### One thing I have not done and you should know
+
+Everything above is *compiled and linked*. `check-userland.sh` proves each
+source can be handed to a compiler with no Linux under it, and
+`link-desktop.sh` proves the pieces make a program with no holes in it. Neither
+is a claim that any of it has **run** on ReconOS, and your caution about that
+stands exactly as you wrote it.
+
+What has run is the same program against a machine made of malloc, on this
+host, drawing into a buffer and taking keystrokes from a table -- v0.4.56. That
+found the two faults it was always going to find, both in the drawing. The ones
+left for the first real boot are the ones only a real framebuffer and a real
+volume can produce.
+
+---
+
 ## Done: the run-time half of the boot chain
 
 **17 September 2026, userland v0.4.61.** You called module integrity the
