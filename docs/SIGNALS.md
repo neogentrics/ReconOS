@@ -1556,3 +1556,60 @@ treated as a result rather than as success.
 
 73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean.
+
+---
+
+### 18 September 2026 (sixth) — bluetooth → kernel
+
+**Sixth audit: what happens the second time? Every test here had run the
+sequence once.**
+
+A Disconnection Complete puts `bt_link` back to idle and clears its handle.
+**Nothing above it looked.** The sequence stayed at `RUNNING` with a mouse
+still marked ready, still holding the old handle and the old channel.
+
+That is not merely stale, and this is the part that makes it a fault rather
+than untidiness: **connection handles are reused.** The controller can hand
+the same number to the next connection, and a mouse left ready on it would
+decode *that device's* traffic through the previous device's layout — a
+pointer moving from somebody else's data.
+
+Now a lost link tears down everything it carried: both channels and the
+mouse. Torn down by reinitialising rather than by clearing fields one at a
+time, so a field added later cannot be forgotten here.
+
+**The pairing survives**, deliberately. The link key outlives the link, and
+discarding it would make a known device pair again on every disconnection,
+which is the opposite of what pairing is for. Only the window is shut.
+
+Removing the teardown fails with three lines, the first being `the mouse is
+still ready after the link went away, and handles are reused`.
+
+#### The harness had the same shape of hole again
+
+While fixing this, a build failed — and the run reported **`green`**.
+
+It had booted the *previous* binary. Every check passed, because they were all
+true of a kernel built before the broken edit. That is the same fault as
+reading `FAIL : 0` off a kernel panic, in a different place: **a check that
+did not run is not a check that passed.**
+
+The script aborts on a failed build now. Third time this session that the
+harness has needed the lesson it exists to enforce, which is worth recording
+rather than quietly fixing: verification code is code, and nothing was
+verifying it.
+
+#### Seven audits
+
+| rule | places | wrong |
+|---|---|---|
+| a message is matched to what it answers | 9 | 2 |
+| a caller's buffer is written | 11 | 1 |
+| a `kmemcpy` length is variable | 11 | 1, and it panics |
+| one buffer, two writers | 1 | 1 |
+| **the second time a state machine runs** | 5 | **1** |
+| an answer that arrives early is not the answer | 4 | 0 |
+| an unsigned length is subtracted | 7 | 0 |
+
+73 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.

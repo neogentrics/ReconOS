@@ -151,6 +151,47 @@ u32 bt_stack_event(struct bt_stack *s, const u8 *ev, u32 len, u8 *out,
 		return 0;
 	}
 
+	/* **The link went away, and nothing above had noticed.**
+	 *
+	 * `bt_link_event` handles a Disconnection Complete by putting the
+	 * link back to idle and forgetting its handle. Nothing here looked
+	 * for that, so the sequence stayed at RUNNING with a mouse still
+	 * marked ready on a handle the controller had reclaimed.
+	 *
+	 * That is not merely stale. **Handles are reused.** The next
+	 * connection can be given the same number, and the mouse -- still
+	 * configured with the previous device's layout and channel -- would
+	 * decode that device's data as though it were the old one's. A
+	 * pointer moving from somebody else's traffic.
+	 *
+	 * Found by asking what happens the *second* time each state machine
+	 * runs; every test here had only ever run one. */
+	if (s->state > BT_ST_CONNECTING && s->state != BT_ST_FAILED &&
+	    s->link.state != BT_LINK_UP) {
+		u8 peer[BT_ADDR_LEN];
+		bool had_peer = s->link.have_peer;
+		struct bt_pairing keep = s->pairing;
+
+		kmemcpy(peer, s->link.peer, BT_ADDR_LEN);
+
+		/* Everything the link carried is gone with it: both channels
+		 * and the mouse. Torn down rather than reset in place, so a
+		 * field added later cannot be forgotten here. */
+		bt_stack_init(s);
+
+		/* The pairing survives, because the link key does. Losing it
+		 * would make a known device pair again on every
+		 * disconnection, which is the opposite of what pairing is
+		 * for. */
+		s->pairing = keep;
+		s->pairing.window_open = false;
+
+		if (had_peer)
+			bt_link_target(&s->link, peer);
+
+		return 0;
+	}
+
 	if (s->link.state == BT_LINK_NEEDS_PAIRING &&
 	    !s->pairing.window_open) {
 		fail(s, "the device wants pairing and none was invited");
@@ -870,6 +911,92 @@ bool bt_stack_self_test(void)
 		if (m != 8) {
 			kprintf("  btstack: with eight bytes offered the "
 				"inquiry came to %u\n", m);
+			ok = false;
+		}
+	}
+
+	/* --- the link goes away, and everything on it must go too --------
+	 *
+	 * Every other test here runs the sequence once. This runs it to
+	 * RUNNING and then takes the link away, which is the case a
+	 * once-through test cannot reach.
+	 *
+	 * What makes it matter rather than merely untidy: **handles are
+	 * reused.** A mouse left ready on a reclaimed handle decodes the
+	 * next connection's data with the previous device's layout.
+	 */
+	{
+		u8 disc[6];
+		u16 old_handle = s.link.handle;
+
+		if (s.state != BT_ST_RUNNING || !s.mouse.ready) {
+			kputs("  btstack: the sequence was not running "
+			      "before the disconnection test\n");
+			ok = false;
+		}
+
+		disc[0] = HCI_EV_DISCONN_COMPLETE;
+		disc[1] = 4;
+		disc[2] = 0x00;			/* the disconnect succeeded */
+		disc[3] = (u8)(old_handle & 0xFF);
+		disc[4] = (u8)(old_handle >> 8);
+		disc[5] = 0x13;			/* remote user ended it */
+
+		bt_stack_event(&s, disc, sizeof(disc), out, sizeof(out));
+
+		if (s.mouse.ready) {
+			kputs("  btstack: the mouse is still ready after the "
+			      "link went away, and handles are reused -- the "
+			      "next device on that handle would be decoded "
+			      "with this one's layout\n");
+			ok = false;
+		}
+
+		if (s.state == BT_ST_RUNNING) {
+			kputs("  btstack: the sequence is still running with "
+			      "no link under it\n");
+			ok = false;
+		}
+
+		if (s.control.state == L2CAP_CH_OPEN ||
+		    s.interrupt.state == L2CAP_CH_OPEN) {
+			kputs("  btstack: a channel survived the link it was "
+			      "carried on\n");
+			ok = false;
+		}
+
+		/* A report on the old handle must now do nothing. */
+		{
+			u8 rep[5];
+			u8 wire[32];
+			u32 blen;
+
+			rep[0] = bt_hid_header(HIDP_TRANS_DATA,
+					       HIDP_REPORT_INPUT);
+			rep[1] = 0x01;
+			rep[2] = 0x7F;
+			rep[3] = 0x7F;
+			rep[4] = 0x00;
+			blen = wrap_pdu(wire, sizeof(wire), BT_CID_INTERRUPT,
+					rep, 5);
+
+			bt_stack_acl(&s, old_handle, ACL_PB_START_FLUSHABLE,
+				     wire, blen, out, sizeof(out), &moved,
+				     &ms);
+
+			if (moved) {
+				kputs("  btstack: traffic on the old handle "
+				      "still moved the pointer\n");
+				ok = false;
+			}
+		}
+
+		/* And the pairing survived, because the link key did --
+		 * losing it would make a known device pair again every time
+		 * it disconnects. */
+		if (!s.pairing.have_target) {
+			kputs("  btstack: the device being paired with was "
+			      "forgotten when the link dropped\n");
 			ok = false;
 		}
 	}
