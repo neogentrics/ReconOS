@@ -536,6 +536,50 @@ turned out to be true.
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
 
+### NW-012 — The issue listing asked for 500 rows and the tracker holds 408
+
+[#539](https://github.com/neogentrics/ReconOS/issues/539)
+
+- **Found in** `scripts/make-issues.py`, on 18 September 2026, by the network
+  session, by re-reading NW-011's own fix and asking what else could make an
+  entry fail to recognise its own issue.
+- **Was** both listings asked `gh` for `--limit 500`. The tracker holds **408**.
+  `gh` lists newest first, so the day it passes 500 the listing silently drops
+  its **oldest** rows — and an entry whose issue is not in the listing is
+  indistinguishable from an entry that has never been filed.
+- **What it would have cost, measured rather than predicted.** Run against a
+  deliberately truncated listing, the script proposes creating **318 issues
+  that already exist** — duplicates for most of the `BG-` and `KF-` register,
+  filed on a public tracker in one run. NW-011 was two.
+- **Neither existing guard fires.** The decode guard asks only whether the
+  listing came back with any recognisable entries in it, and a truncated
+  listing decodes perfectly — in the test it saw 38 issues and was satisfied.
+  NW-011's fix does not help either: it keys on the entry identifier, and a
+  truncated listing does not contain the identifier any more than it contains
+  the title.
+
+  So this is NW-011's fault a third time — an entry not recognised as itself —
+  reached by a different road, and with three hundred times the blast radius.
+  The common shape across all three is a script that treats *absence of
+  evidence* as *evidence of absence* and then writes to a public tracker about
+  it.
+- **Found by** asking what else could produce NW-011's symptom, rather than by
+  the symptom. It has never fired: 408 of 500 is 82% of the way there and the
+  register grows every day across five branches. This is the one entry here
+  that records a fault caught **before** it cost anything.
+- **Fixed by** two changes, of which only the second is a fix. `LIST_LIMIT` is
+  2000, which buys time and will run out again. `refuse_if_truncated` refuses
+  to act on any listing that came back at exactly the limit, because *exactly
+  that many* and *cut off at that many* are the same listing from here — the
+  `>=` is deliberate. Both listings call it: the one that creates issues and
+  the one `--check` reads, since a truncated listing would make `--check`
+  report working links as missing.
+- **Proved by breaking it.** With `LIST_LIMIT` set to 40, both paths refuse and
+  exit 1, naming the limit and what to raise. With the real limit both exit 0
+  and `--check` reports 356 links, 0 wrong, 0 unlinked. A guard that cannot
+  fire is what NW-011 was made of, so this one was made to fire before it was
+  believed.
+
 ### NW-011 — An entry was identified by its title, and a title is prose
 
 [#538](https://github.com/neogentrics/ReconOS/issues/538)

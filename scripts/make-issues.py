@@ -299,13 +299,50 @@ def gh(args):
                           encoding='utf-8', errors='replace')
 
 
+# How many issues to ask for, and the refusal that goes with it -- NW-012.
+#
+# It was a bare `--limit 500` in two places, and the tracker holds 408. `gh`
+# lists newest first, so the day it passes 500 the listing silently loses its
+# *oldest* entries -- and an entry whose issue is not in the listing looks like
+# an entry that has never been filed.
+#
+# **Measured rather than predicted.** Running this against a deliberately
+# truncated listing proposes creating **318 issues that already exist**. The
+# guard below does not fire, because it only asks whether the listing was
+# decoded at all, and a truncated listing decodes perfectly.
+#
+# That is NW-011's fault again -- an entry not recognised as itself -- with a
+# different cause and three hundred times the blast radius. NW-011's fix keys
+# on the identifier and does not help: the identifier is not in the listing
+# either.
+#
+# Two changes, and the refusal is the one that matters. A bigger number buys
+# time and will run out again; refusing to act on a listing that might be
+# truncated does not. Exactly at the limit is indistinguishable from cut off at
+# the limit, so `>=` is deliberate.
+LIST_LIMIT = 2000
+
+
+def refuse_if_truncated(rows, what):
+    if len(rows) < LIST_LIMIT:
+        return
+
+    raise SystemExit(
+        f'{what} came back with {len(rows)} rows, which is the limit this '
+        f'script asked for. It cannot tell a listing that is exactly that '
+        f'long from one cut off at that length, and acting on a cut-off '
+        f'listing files a duplicate for every entry that fell outside it. '
+        f'Raise LIST_LIMIT.')
+
+
 def existing_titles():
     out = gh(['issue', 'list', '--repo', REPO, '--state', 'all',
-              '--limit', '500', '--json', 'title,number,state,labels'])
+              '--limit', str(LIST_LIMIT), '--json', 'title,number,state,labels'])
     if out.returncode != 0:
         raise SystemExit(f'gh issue list failed: {out.stderr.strip()}')
 
     rows = json.loads(out.stdout)
+    refuse_if_truncated(rows, 'The issue list')
 
     """
     Keyed by the entry's identifier, **not by its title** -- NW-011.
@@ -509,12 +546,14 @@ def check_links():
     """
     text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')
     out = gh(['issue', 'list', '--repo', REPO, '--state', 'all',
-              '--limit', '500', '--json', 'number,title'])
+              '--limit', str(LIST_LIMIT), '--json', 'number,title'])
     if out.returncode != 0:
         print('could not list issues: ' + out.stderr.strip()[:160])
         return 2
 
-    titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
+    rows = json.loads(out.stdout)
+    refuse_if_truncated(rows, 'The issue list --check reads')
+    titles = {i['number']: i['title'] for i in rows}
     linked = wrong = missing = 0
 
     for m in re.finditer(ENTRY_ANY + r' .*$', text, re.M):
