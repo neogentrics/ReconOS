@@ -1169,3 +1169,85 @@ Not written, and each for a stated reason:
 - **Pairing.** Link keys and PIN handling. Detected and reported, not done.
 - **The transport.** Yours, KF-248.
 - **Firmware loading.** Yours, and both adapters need it.
+
+---
+
+### 17 September 2026 (thirteenth) — bluetooth → kernel
+
+**Pairing.** `kernel/core/bt_pair.c` — link keys, IO capability exchange, user
+confirmation, legacy PIN, and the authenticate-then-encrypt commands.
+
+#### None of the cryptography is in the host, and that is not a shortcut
+
+For BR/EDR the host computes nothing. Legacy pairing derives its key with
+E21/E22 **in the controller**; Secure Simple Pairing does its elliptic curve
+exchange and its confirmation values **in the controller** too. The host
+answers questions: what can you display, do you accept this number, what is
+the PIN, here is the key I kept from last time.
+
+Said plainly in the file, because a reader skimming a file called `bt_pair.c`
+could reasonably expect to find a key being computed in it, and not finding
+one should not look like an omission.
+
+#### What pairing a mouse can and cannot promise
+
+SSP picks its association model from what both ends can do. Numeric Comparison
+needs both to show six digits and take a yes; Passkey Entry needs one to show
+and the other to type.
+
+**A mouse has neither.** Whatever this kernel claims, the model that results is
+*Just Works*, which performs the key exchange without authenticating either
+end — a device in range that answers first is indistinguishable from the
+intended one. That is a property of pairing something with no way to show you
+anything. No option available to this file removes it, and claiming a display
+this machine cannot use during a boot-time pairing would be worse than
+admitting it: the model relies on the claim being true.
+
+So `bt_pairing_init` says `NoInputNoOutput`, which is the honest answer.
+
+#### What the file *can* control, and does
+
+Two gates, both tested by deleting them:
+
+1. **The window is shut by default.** Something has to open it deliberately,
+   for one named device. A controller asking unprompted is refused.
+2. **Only that address is answered**, whatever the window says.
+
+And every refusal is an **explicit negative reply, never silence**. A
+controller that asked and heard nothing waits, and so does everything above
+it — the same reasoning as `BT_LINK_NEEDS_PAIRING` a layer down. Turning a
+refusal into a hang is worse than either.
+
+The window also shuts when pairing completes, in both directions. Leaving it
+open afterwards is how a machine ends up pairing with the next thing that
+asks, and that is its own breakage with its own red.
+
+One deliberate exception: a **stored link key is handed back without consulting
+the window**. A device asking for a key already held learns nothing it does not
+have, and refusing would force a needless re-pair every boot. The gate is on
+*making* keys, not on using one.
+
+#### Where the numbers come from
+
+Checked against BlueZ 5.72's `hci.h`: the reply and negative-reply opcodes
+(`0x000B`–`0x000E`, `0x002B`–`0x002D`, `0x0034`), `OCF_AUTH_REQUESTED 0x0011`,
+`OCF_SET_CONN_ENCRYPT 0x0013`, the event codes, and the layouts of
+`pin_code_reply_cp`, `link_key_reply_cp`, `io_capability_reply_cp`,
+`evt_link_key_notify`, `evt_user_confirm_request` and
+`evt_simple_pairing_complete`.
+
+**The IO capability and authentication-requirement values are not there** —
+`hci.h` carries only the structure sizes — so those are from the specification
+and written from memory, like `BT_GIAC`. Named in the header so they do not
+look as checked as their neighbours.
+
+#### What is left on this branch
+
+Written and tested: link setup, pairing, L2CAP channels, HIDP framing,
+descriptor parsing, field extraction, SDP, and the join that turns a fragment
+into a pointer movement.
+
+Not written: **the transport (KF-248) and firmware loading, both yours.** The
+firmware one still has no `KERNEL-WANTS` entry — it was said on 16 September
+that one would be written, and the file does not have it yet. Both adapters
+need a blob, so it is a real blocker currently recorded only here.
