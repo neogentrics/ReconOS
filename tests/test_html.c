@@ -1827,6 +1827,130 @@ static void test_a_control_that_names_its_form(void) {
     recon_html_free(d);
 }
 
+static void test_a_form_further_down_the_page(void) {
+    printf("a control naming a form it has not reached yet\n");
+
+    /*
+     * --- The half that was quietly missing ---
+     *
+     * `form=` exists so a page can put a search box in a header and its form
+     * in a footer. The lookup searched the forms met **so far** -- so naming
+     * one already read worked, and naming one further down the page attached
+     * the control to nothing at all.
+     *
+     * Which is the case the attribute is *for*. And the failure is silent: the
+     * box draws, it types, and pressing Send says there is nowhere to send it.
+     *
+     * There were four copies of that lookup. They are one now, and it runs
+     * once the page has been read.
+     */
+    const char *html =
+        "<input name=\"q\" form=\"hunt\">"
+        "<input type=submit value=\"Go\" form=\"hunt\">"
+        "<form id=\"hunt\" action=\"/s\" method=\"get\"></form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(recon_html_form_count(d) == 1, "one form");
+
+    const struct recon_html_field *box = field_named(d, "q");
+
+    check(box != NULL && box->form == 0,
+        "a box above the form it names still belongs to it");
+    check(recon_html_field_count(d) == 2 &&
+        recon_html_field_at(d, 1)->form == 0,
+        "and so does the button beside it");
+
+    recon_html_free(d);
+}
+
+static void test_a_form_name_that_matches_nothing(void) {
+    printf("a control naming a form that is not there\n");
+
+    /*
+     * A mistyped `form=` leaves the control where it already was -- inside the
+     * enclosing form, or in none. Two honest answers were available and this
+     * is the one that makes a wrong name behave like no name at all, rather
+     * than like a control the page forgot to put anywhere.
+     */
+    const char *html =
+        "<form action=\"/a\"><input name=\"inside\" form=\"nosuch\"></form>"
+        "<input name=\"outside\" form=\"nosuch\">";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    const struct recon_html_field *inside = field_named(d, "inside");
+    const struct recon_html_field *outside = field_named(d, "outside");
+
+    check(inside != NULL && inside->form == 0,
+        "a control inside a form keeps that form");
+    check(outside != NULL && outside->form < 0,
+        "and one outside every form stays outside");
+
+    recon_html_free(d);
+}
+
+static void test_whether_a_control_is_drawn_is_recorded(void) {
+    printf("which controls appear on the page\n");
+
+    /*
+     * Three controls, and only one of them is on the page: a `type=hidden` is
+     * never drawn, and a stylesheet can put another out of the way. **Both are
+     * still sent**, which is why they are fields at all and why this is not
+     * the same question as `disabled`.
+     *
+     * It is recorded because anything that would put a message in front of
+     * somebody about a control needs it. A page that marks a hidden field
+     * `required` and gives no way to fill it in is a page nobody could submit,
+     * and working it out afterwards means searching every run for one pointing
+     * at the field -- a question the parser has already answered.
+     */
+    const char *html =
+        "<style>.chrome { display: none }</style>"
+        "<form action=\"/s\">"
+        "<input type=\"hidden\" name=\"token\" value=\"abc\">"
+        "<span class=\"chrome\"><input name=\"tucked\" value=\"xyz\"></span>"
+        "<input name=\"q\">"
+        "</form>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    const struct recon_html_field *token = field_named(d, "token");
+    const struct recon_html_field *tucked = field_named(d, "tucked");
+    const struct recon_html_field *q = field_named(d, "q");
+
+    check(token != NULL && !token->drawn, "a hidden field is not drawn");
+    check(tucked != NULL && !tucked->drawn,
+        "nor is one a stylesheet put out of the way");
+    check(q != NULL && q->drawn, "and an ordinary one is");
+
+    check(token != NULL && strcmp(token->value, "abc") == 0,
+        "the hidden one still holds what it will send");
+    check(tucked != NULL && strcmp(tucked->value, "xyz") == 0,
+        "and so does the tucked-away one");
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
 /*
  * A stylesheet that hides a control hides the control, not only its text.
  *
@@ -1962,6 +2086,9 @@ int main(void) {
     test_options_that_are_never_closed();
     test_a_button_that_needs_script();
     test_a_control_that_names_its_form();
+    test_a_form_further_down_the_page();
+    test_a_form_name_that_matches_nothing();
+    test_whether_a_control_is_drawn_is_recorded();
     test_a_hidden_control_is_not_drawn_but_is_kept();
     test_a_control_does_not_swallow_the_words_beside_it();
     test_nothing_is_refused();

@@ -369,6 +369,24 @@ struct recon_html_field {
 
     bool on;                     /* checked, for a checkbox or a radio */
     bool disabled;
+
+    /*
+     * Whether this control appears on the page at all.
+     *
+     * False for a `type=hidden`, and false for one a stylesheet put out of the
+     * way -- both of which are still *sent*, which is why they are fields at
+     * all and why this is not the same question as `disabled`.
+     *
+     * It is recorded rather than inferred, because the only way to work it out
+     * afterwards is to search every run for one pointing here, and the answer
+     * is a decision the parser has already taken: it has the stylesheet, and
+     * it is the thing that chose not to write the run.
+     *
+     * What wants to know is anything that would put a message in front of
+     * somebody about a control. A page that marks a hidden field `required`
+     * and gives no way to fill it in is a page nobody could ever submit.
+     */
+    bool drawn;
     bool secret;                 /* type=password, drawn as dots */
     bool required;
 

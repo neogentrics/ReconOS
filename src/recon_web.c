@@ -4844,6 +4844,152 @@ static void send_pending(struct web_tab *t) {
  * dialogue between somebody meaning to sign in and somebody's first click on
  * a page they have not read.
  */
+/*
+ * What a control is called, when somebody has to be told about it.
+ *
+ * The placeholder first, because it is the words the person actually saw: a
+ * box labelled "Your email address" is that, not `user_email`. The `name` is
+ * what the server calls it and is the fallback, and a control with neither
+ * gets a phrase rather than an empty pair of quotes.
+ */
+static const char *field_called(const struct recon_html_field *d) {
+    if (d == NULL) {
+        return "a field";
+    }
+    if (d->label[0] != '\0') {
+        return d->label;
+    }
+    if (d->name[0] != '\0') {
+        return d->name;
+    }
+    return "a field";
+}
+
+/*
+ * Whether a control the page marked `required` has been answered.
+ *
+ * Each kind means something different by "answered", and getting that wrong in
+ * either direction is bad in its own way: too strict and a form cannot be sent
+ * at all, too loose and the check is decoration.
+ */
+static bool required_is_answered(struct web_tab *t, int index,
+        const struct recon_html_field *d) {
+    switch (d->kind) {
+    case RECON_HTML_FIELD_TEXT:
+    case RECON_HTML_FIELD_AREA:
+        return t->fields[index].text[0] != '\0';
+
+    case RECON_HTML_FIELD_CHECKBOX:
+        return t->fields[index].on;
+
+    case RECON_HTML_FIELD_FILE:
+        return t->fields[index].file_path[0] != '\0';
+
+    case RECON_HTML_FIELD_CHOICE: {
+        /*
+         * A `<select>` is answered when what is chosen has a value. The
+         * first option of a menu is very often `<option value="">Choose
+         * one</option>`, and that is exactly what `required` is there to
+         * catch -- treating "something is highlighted" as an answer would
+         * make every required menu pass.
+         */
+        int at = d->first_option + t->fields[index].chosen;
+
+        if (t->fields[index].chosen < 0 ||
+                t->fields[index].chosen >= d->option_count) {
+            return false;
+        }
+
+        const struct recon_html_option *o =
+            recon_html_option_at(t->page, at);
+
+        return o != NULL && o->value[0] != '\0';
+    }
+
+    case RECON_HTML_FIELD_RADIO: {
+        /*
+         * A radio is answered when *any* of its group is, and the group is
+         * every radio in this form sharing its name. Asking only about this
+         * one would refuse a form where the person had chosen a different
+         * member of the same set -- which is the normal case and would make
+         * a required radio group impossible to answer.
+         *
+         * A radio with no name is its own group of one, which is a page being
+         * wrong; it is answered when it is on, and nothing has to be special
+         * cased to say so.
+         */
+        for (int i = 0; i < t->field_count; i++) {
+            const struct recon_html_field *o =
+                recon_html_field_at(t->page, i);
+
+            if (o == NULL || o->kind != RECON_HTML_FIELD_RADIO ||
+                    o->form != d->form) {
+                continue;
+            }
+            if (strcmp(o->name, d->name) == 0 && t->fields[i].on) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    default:
+        /*
+         * A button, a hidden field, a reset. `required` on one of those is
+         * the page being wrong and there is nothing to answer, so it does not
+         * hold the form up.
+         */
+        return true;
+    }
+}
+
+/*
+ * The first control this form needs and has not got, or -1.
+ *
+ * --- Why this exists ---
+ *
+ * `required` was read out of the page and **nothing anywhere looked at it
+ * again**. Not a decision that had been taken and written down -- it was found
+ * by listing every member of `struct recon_html_field` and asking which ones
+ * nothing outside the parser mentions. It was the only one with nobody.
+ *
+ * What that cost: somebody leaves a required box empty, presses Send, and the
+ * request goes. The server refuses it and answers with a page saying which
+ * field was missing -- so they are told, eventually, by a round trip, in
+ * whatever words the server chose. A page that said so before anything was
+ * sent had the information all along.
+ *
+ * --- And there is no way past it ---
+ *
+ * The same rule this project applies to every other check: a page that marks
+ * something required and gives no way to fill it in is a page that cannot be
+ * submitted here. That is the page being wrong, and the alternative is sending
+ * a request the server will refuse anyway -- with the failure moved somewhere
+ * nobody can see it.
+ */
+static int first_unanswered_required(struct web_tab *t, int form) {
+    for (int i = 0; i < t->field_count; i++) {
+        const struct recon_html_field *d = recon_html_field_at(t->page, i);
+
+        if (d == NULL || d->form != form || !d->required || d->disabled) {
+            continue;
+        }
+        /*
+         * A control a stylesheet put out of the way cannot be answered and
+         * must not hold the form up -- `display:none` on a required field is
+         * how a page turns one off, and treating it as missing would make
+         * those pages unsendable.
+         */
+        if (!d->drawn) {
+            continue;
+        }
+        if (!required_is_answered(t, i, d)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static void submit_form(struct web_tab *t, int form, int submitter) {
     if (t == NULL || t->page == NULL || t->fields == NULL) {
         return;
@@ -4867,6 +5013,30 @@ static void submit_form(struct web_tab *t, int form, int submitter) {
     struct recon_http_url where;
     if (f == NULL || !form_target(t, f, &where)) {
         set_status(t, true, "This form does not say where to send it.");
+        recon_appwin_refresh(t->win);
+        return;
+    }
+
+    /*
+     * What the page said it needs, before anything is sent.
+     *
+     * After the target check, because a form with nowhere to go cannot be sent
+     * however carefully it is filled in, and telling somebody to fill in a box
+     * that will not help is worse than telling them nothing.
+     *
+     * The caret goes to the field as well as the sentence naming it. A message
+     * that says which box is empty and leaves somebody to find it is half an
+     * answer -- and this viewer already knows where it is.
+     */
+    int missing = first_unanswered_required(t, form);
+
+    if (missing >= 0) {
+        const struct recon_html_field *d = recon_html_field_at(t->page,
+            missing);
+
+        field_focus_at(t, missing);
+        set_status(t, true, "This form needs %s before it can be sent.",
+            field_called(d));
         recon_appwin_refresh(t->win);
         return;
     }

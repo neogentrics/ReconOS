@@ -59,6 +59,16 @@
  */
 #define FORMS_MAX 64
 #define FIELDS_MAX 512
+
+/*
+ * How many controls may name their form by name.
+ *
+ * Far below `FIELDS_MAX` on purpose: `form=` is for the handful of controls a
+ * page puts outside the form they belong to, and a page with hundreds of them
+ * is not a page doing that. Sized to be generous for the real use and small
+ * enough that the table is a few kilobytes rather than a hundred.
+ */
+#define FORM_REFS_MAX 64
 #define OPTIONS_MAX 2048
 
 struct recon_html_document {
@@ -426,6 +436,25 @@ struct builder {
      * in the way, and `in_row` stops a `</tr>` followed by a `<tr>` ending the
      * same row twice.
      */
+    /*
+     * --- Controls that named a form, and the form they named ---
+     *
+     * `form=` on a control says which form it belongs to, and the form it
+     * names is allowed to be **further down the page** -- which is the whole
+     * point of the attribute: a search box in a header whose form is in a
+     * footer.
+     *
+     * So it cannot be resolved where it is read. The four places that read it
+     * each searched the forms met so far, which answers the easy half and
+     * silently attaches the hard half to nothing -- a box that types and does
+     * nothing when Send is pressed.
+     *
+     * Noted here instead, and resolved in one pass once the page has been
+     * read and every form is known.
+     */
+    struct { int field; char wants[64]; } form_wanted[FORM_REFS_MAX];
+    int form_wanted_count;
+
     short covered[RECON_HTML_COLUMNS_MAX];
     short row_column;
     bool in_row;
@@ -831,6 +860,10 @@ static void emit_field(struct builder *b, int field) {
         return;
     }
 
+    /* Written here rather than beside the field, because this is the line that
+     * decides it: everything above returns without a run. */
+    d->fields[field].drawn = true;
+
     struct recon_html_run *run = &d->runs[d->run_count++];
     memset(run, 0, sizeof(*run));
     run->text = d->text + d->text_used;
@@ -1196,6 +1229,67 @@ static bool attribute(const char *attrs, size_t length, const char *want,
     }
     return false;
 }
+
+/*
+ * Remember that this control named a form, whichever form that turns out to be.
+ *
+ * Nothing is looked up here. See `struct builder` for why: the form may not
+ * have been read yet, and a lookup that could only find the ones already met
+ * is a lookup that is wrong in exactly the case the attribute exists for.
+ */
+static void note_form_wanted(struct builder *b, int field,
+        const char *attrs, size_t attrs_length) {
+    char belongs[64] = "";
+
+    if (field < 0 || !attribute(attrs, attrs_length, "form", belongs,
+            sizeof(belongs)) || belongs[0] == '\0') {
+        return;
+    }
+    if (b->form_wanted_count >= FORM_REFS_MAX) {
+        /*
+         * More controls naming forms by name than this holds. The ones past
+         * the limit keep the form they are inside, which is what every one of
+         * them did before this existed -- a smaller answer rather than a wrong
+         * one, and the document says it was cut.
+         */
+        b->d->truncated = true;
+        return;
+    }
+
+    int at = b->form_wanted_count++;
+
+    b->form_wanted[at].field = field;
+    snprintf(b->form_wanted[at].wants, sizeof(b->form_wanted[at].wants),
+        "%s", belongs);
+}
+
+/*
+ * Attach every control that named a form, now that all of them are known.
+ *
+ * A name that matches nothing leaves the control where it was -- inside
+ * whatever form it sits in, or in none. That is a page being wrong, and the
+ * two honest answers are "the enclosing form" and "no form at all"; keeping
+ * what it already had is the first, and it is the one that makes a mistyped
+ * `form=` behave like the attribute not being there.
+ */
+static void resolve_form_refs(struct builder *b) {
+    struct recon_html_document *d = b->d;
+
+    for (int i = 0; i < b->form_wanted_count; i++) {
+        int field = b->form_wanted[i].field;
+
+        if (field < 0 || field >= d->field_count) {
+            continue;
+        }
+        for (int fi = 0; fi < d->form_count; fi++) {
+            if (strcmp(d->forms[fi].name, b->form_wanted[i].wants) == 0) {
+                d->fields[field].form = fi;
+                break;
+            }
+        }
+    }
+}
+
 
 /* --- The pass --- */
 
@@ -2122,16 +2216,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     attribute(attrs, attrs_length, "placeholder", f->label,
                         sizeof(f->label));
 
-                    char belongs[64] = "";
-                    if (attribute(attrs, attrs_length, "form", belongs,
-                            sizeof(belongs)) && belongs[0] != '\0') {
-                        for (int fi = 0; fi < d->form_count; fi++) {
-                            if (strcmp(d->forms[fi].name, belongs) == 0) {
-                                f->form = fi;
-                                break;
-                            }
-                        }
-                    }
+                    note_form_wanted(&b, at_field, attrs, attrs_length);
 
                     f->on = has_attribute(attrs, attrs_length, "checked");
                     f->disabled = has_attribute(attrs, attrs_length,
@@ -2212,16 +2297,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                         attribute(attrs, attrs_length, "value", f->value,
                             sizeof(f->value));
 
-                        char belongs[64] = "";
-                        if (attribute(attrs, attrs_length, "form", belongs,
-                                sizeof(belongs)) && belongs[0] != '\0') {
-                            for (int fi = 0; fi < d->form_count; fi++) {
-                                if (strcmp(d->forms[fi].name, belongs) == 0) {
-                                    f->form = fi;
-                                    break;
-                                }
-                            }
-                        }
+                        note_form_wanted(&b, at_field, attrs, attrs_length);
                         f->disabled = has_attribute(attrs, attrs_length,
                             "disabled");
                         b.button_at = at_field;
@@ -2251,16 +2327,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                         attribute(attrs, attrs_length, "name", f->name,
                             sizeof(f->name));
 
-                        char belongs[64] = "";
-                        if (attribute(attrs, attrs_length, "form", belongs,
-                                sizeof(belongs)) && belongs[0] != '\0') {
-                            for (int fi = 0; fi < d->form_count; fi++) {
-                                if (strcmp(d->forms[fi].name, belongs) == 0) {
-                                    f->form = fi;
-                                    break;
-                                }
-                            }
-                        }
+                        note_form_wanted(&b, at_field, attrs, attrs_length);
                         f->disabled = has_attribute(attrs, attrs_length,
                             "disabled");
                         f->required = has_attribute(attrs, attrs_length,
@@ -2345,16 +2412,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                         attribute(attrs, attrs_length, "placeholder", f->label,
                             sizeof(f->label));
 
-                        char belongs[64] = "";
-                        if (attribute(attrs, attrs_length, "form", belongs,
-                                sizeof(belongs)) && belongs[0] != '\0') {
-                            for (int fi = 0; fi < d->form_count; fi++) {
-                                if (strcmp(d->forms[fi].name, belongs) == 0) {
-                                    f->form = fi;
-                                    break;
-                                }
-                            }
-                        }
+                        note_form_wanted(&b, at_field, attrs, attrs_length);
                         f->disabled = has_attribute(attrs, attrs_length,
                             "disabled");
                         f->required = has_attribute(attrs, attrs_length,
@@ -2570,6 +2628,13 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
     }
 
     close_block(&b);
+
+    /*
+     * Every control that named a form now knows which one, including the ones
+     * that named a form further down the page than they were. See
+     * `note_form_wanted`.
+     */
+    resolve_form_refs(&b);
 
     /*
      * The page's paper, if no `<body>` tag went past to carry it.

@@ -9,6 +9,117 @@ way for the two to disagree.
 
 ---
 
+## v0.4.65 — what a form knows and does not do
+
+The board's *form-gaps* row named two things this viewer still could not do.
+Rather than working from the row, I asked the tree: **for every member of
+`struct recon_html_field` and `struct recon_html_form`, which ones does nothing
+outside the parser ever mention?**
+
+One had nobody at all.
+
+### `required` was read and never looked at again
+
+Every page that marks a box as required has been telling this browser so, and
+the answer was stored and dropped. Somebody leaves it empty, presses Send, the
+request goes — and the server refuses it and answers with a page saying which
+field was missing. So they *are* told, eventually, by a round trip, in whatever
+words the server chose. **The page had said so before anything was sent.**
+
+That was never a decision anybody took. There is no comment anywhere saying
+"not yet"; it is simply an attribute that was parsed because it was there.
+Which is the shape worth remembering: a gap with a note beside it is a gap
+somebody chose, and this one had no note.
+
+### What "answered" means, five times over
+
+Each kind means something different, and getting it wrong in either direction
+has its own cost — too strict and a form cannot be sent at all, too loose and
+the check is decoration:
+
+- **A text box or `<textarea>`**: it holds something.
+- **A checkbox**: it is ticked.
+- **A file control**: a file has been chosen.
+- **A `<select>`**: what is chosen has a **value**. The first option of a menu
+  is very often `<option value="">Choose one</option>`, and that is exactly
+  what `required` is there to catch — treating "something is highlighted" as an
+  answer would make every required menu pass.
+- **A radio**: *any* member of its group is on, the group being every radio in
+  that form sharing its name. Asking only about the one that carries the
+  attribute would refuse a form where somebody had chosen a different member of
+  the same set, which is the ordinary case.
+
+A control the page never draws — a `type=hidden`, or one a stylesheet put out
+of the way — does not hold the form up. `display:none` on a required field is
+how a page turns one off, and treating it as missing would make those pages
+unsendable.
+
+And there is no way past it, which is this project's rule about checks
+generally. A page that marks something required and gives no way to fill it in
+is a page that cannot be submitted here. The alternative is sending a request
+the server refuses anyway, with the failure moved somewhere nobody can see it.
+
+### The caret goes with the sentence
+
+"This form needs Your name before it can be sent" — and the caret is already in
+the box. A message that says which field is empty and leaves somebody to find
+it is half an answer, and this viewer knows where it is.
+
+The name is the **placeholder** first, because that is the words the person
+actually saw: a box labelled "Your email address" is that, not `user_email`.
+The `name` is what the server calls it and is the fallback.
+
+### And a control may now name a form further down the page
+
+`form=` exists so a page can put a search box in a header and its form in a
+footer. The lookup searched the forms met **so far** — so naming one already
+read worked, and naming one further down attached the control to nothing.
+
+Which is the case the attribute is *for*. And the failure is silent: the box
+draws, it types, and Send says there is nowhere to send it.
+
+There were **four identical copies** of that lookup. They are one now, and it
+runs once the page has been read and every form is known. A name matching
+nothing leaves the control where it already was, so a mistyped `form=` behaves
+like the attribute not being there.
+
+### One thing the row got wrong
+
+It also said a value longer than the system's text field "refuses to be edited"
+as though that were a gap. It is a refusal, it was deliberate, and it has said
+so out loud since v0.4.52: *"That field already holds more than N characters, so
+it cannot be edited here. It is still sent exactly as the page wrote it."*
+Cutting it would change what the form sends. The row was describing finished
+work.
+
+### Whether a control is drawn is recorded now
+
+`recon_html_field` gained `drawn`. A hidden control and a stylesheet-hidden one
+are both still *sent*, which is why they are fields at all — so this is not the
+same question as `disabled`, and the only way to work it out afterwards was to
+search every run for one pointing at the field. That is a decision the parser
+has already taken: it has the stylesheet, and it is the thing that chose not to
+write the run.
+
+### What proves it
+
+**250 checks** in `test_html.c`, up from 237.
+
+And two photographs, because the `required` check lives in `src/recon_web.c` and
+no headless suite links the browser. `scripts/form-required-shot.sh` runs a real
+desktop against a real page: Send with the box empty leaves the form where it
+is with the status line naming it, and the same form filled in goes —
+`?name=Joshua&note=&how=friend&terms=on`, the optional note empty and sent
+anyway. One picture would have proved half of it; a check that refused every
+form would pass a photograph of one refusal.
+
+One fixture fault found on the way and worth keeping: the answer page was first
+served with no extension, so it came back as `application/octet-stream` and the
+viewer **showed the source** — correctly, and confusingly. The fixture names it
+`.html` now.
+
+---
+
 ## v0.4.64 — a cell that covers rows
 
 `rowspan`, which was the last of the three things the tables row on the board
