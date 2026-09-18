@@ -279,22 +279,60 @@ them with a comment quoting the clause that requires it. Nothing for me to
 answer: the licence is the Bitstream Vera / DejaVu one, it permits
 redistribution, and the notice requirement is the part you already handled.
 
-**The gap is where they land.** The medium puts them on the ESP at
-`/reconos/fonts/`. `include/recon_fonts.h` reads `RECON_DIR_FONTS`, which is
-`/System/Fonts` on the ReconOS volume. I grepped your branch: nothing copies
-between the two.
+**The gap is where they land**, and this paragraph is a correction of the one
+I published an hour ago. The conclusion held; the mechanism I named under it
+was wrong, and you were about to wire against it.
 
-So the first boot of the volume copy will reach `desktop.c:297`, find
-`recon_font_system(14)` returns NULL, and exit **26**. A legible failure rather
-than a blank screen, which is what it was written for -- but it is one boot
-spent on something we can both see coming.
+**What I said:** the desktop reads fonts through `RECON_DIR_FONTS` in
+`include/recon_fonts.h`. It does not. `recon_fonts.c` is the Control Panel's
+font *manager* -- installing one, listing what is installed, telling a shipped
+font from an added one -- and the desktop never calls it.
 
-Either the installer copies `/reconos/fonts/*` onto the volume as
-`/System/Fonts/*`, or the desktop learns to look in a second place. **The
-installer is the better half**: a font on the volume is a font somebody can
-remove, and `recon_fonts.c` already keeps `/System/Config/font-origins.txt` to
-tell a shipped font from an added one. I will do the desktop side if you would
-rather, but I think it belongs with whatever writes the volume.
+**What actually happens**, from the code rather than from memory:
+`recon_font_system` calls `recon_font_load(NULL, size)`, which walks a
+hardcoded list in `src/recon_ui.c` and opens each with **`fopen`**, not
+`recon_fs`. Three lists, one per face, each beginning:
+
+```
+/System/Fonts/Sans.ttf      FONT_SEARCH_PATHS
+/System/Fonts/Mono.ttf      the fixed-pitch face, for the Terminal
+/System/Fonts/Bold.ttf      the bold face
+```
+
+after which each list has four or five `/usr/share/fonts/...` entries. On
+ReconOS those are four or five failed opens and nothing else -- harmless, and
+worth knowing they are there so a strace-equivalent does not look like a fault.
+
+**So the file the first boot wants is exactly `/System/Fonts/Sans.ttf` on the
+volume, opened with `open`.** The medium puts one at `/reconos/fonts/Sans.ttf`
+on the ESP, and nothing on your branch copies between them -- I grepped it
+again after finding the above, and that part was right.
+
+First boot therefore reaches `desktop.c:297`, `recon_font_system(14)` returns
+NULL, and it exits **26**. A legible failure rather than a blank screen, which
+is what it was written for -- but one boot spent on something we can both see
+coming.
+
+**Two things that follow, and they make this cheaper than I said.**
+
+`Bold.ttf` is *not* needed for the first frame to look right. The frame asks
+for a bold face for its heading, and `face_at` in `recon_ui.c` falls back to
+the system font when there is none -- saying so once, on purpose. Text in the
+wrong weight is cosmetic; a blank rectangle is not. So the medium carrying
+Sans and Mono and no Bold is already the right call.
+
+And the fix is one of two places, both small:
+
+- **the installer copies `/reconos/fonts/Sans.ttf` to `/System/Fonts/Sans.ttf`
+  on the volume** (and Mono beside it). I still think this is the better half:
+  a font on the volume is a font somebody can remove, and `recon_fonts.c`
+  already keeps `/System/Config/font-origins.txt` to tell a shipped one from an
+  added one -- which only means anything if the shipped one is on the volume.
+- **or I add a path to those three lists in `src/recon_ui.c`**, which is three
+  lines and needs nothing from you. Say the word and it is done in a version.
+
+What I would not do is both. Two places that can supply the system font is two
+places to look when it is the wrong one.
 
 ### What the first boot will tell you, in one number
 
