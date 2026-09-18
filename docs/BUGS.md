@@ -345,10 +345,9 @@ Checked against the entries by `python scripts/make-issues.py --check`.
   > column of addresses, and so that a name intel_reg does not know **fails
   > visibly** instead of printing a plausible number from the wrong offset.
 
-  **It does not fail visibly.** The builtin register spec in igt 2.5 knows
-  `TRANS_HTOTAL_A` and does not know `PIPE_SRCSZ_A`, `PIPECONF_A` or any
-  `PLANE_*`, and for a name it does not know `intel_reg read` **exits 0 and
-  prints nothing at all**. `tail -n 1` of nothing is nothing, and `printf`
+  **It does not fail visibly.** `intel_reg read <NAME>` **exits 0 and prints
+  nothing at all** on igt 2.5 — for every name, which is broader and worse than
+  this entry first said. See the correction below. `tail -n 1` of nothing is nothing, and `printf`
   without a newline then ran the next name straight on. Twenty-two consecutive
   failed reads came back looking like this:
 
@@ -394,6 +393,52 @@ Checked against the entries by `python scripts/make-issues.py --check`.
   build that is all twelve of them — which is itself worth having on the record,
   because it means igt's names are not a portable way to ask this question and
   the addresses are.
+
+- **Corrected the same day, and the disproof was in the file this entry cites.**
+
+  This entry first said the cause was a gap in igt's register table: that the
+  builtin spec knows `TRANS_HTOTAL_A` and not `PIPE_SRCSZ_A`, so unknown names
+  came back empty. That explanation was **invented to fit a correct
+  observation**, and it is wrong.
+
+  The `kernel` session checked it on the same machine:
+
+  ```
+  intel_reg read PIPE_SRCSZ_A  ->  rc=0, no output
+  intel_reg read PIPEASRC      ->  rc=0, no output      <- a name it prints itself
+  intel_reg read 0x6001c       ->  rc=0, (0x0006001c): 0x055502ff
+  ```
+
+  `PIPEASRC` is the label `intel_reg dump` uses in its own output. **Reading by
+  name is not a mechanism that works on this build at all**, silently, for every
+  name. Not a missing table entry: a broken path.
+
+  And the evidence against the first explanation was already in this project's
+  own committed dump, one screen below the line it was written from.
+  `docs/hardware/intel-gen9-gateway-registers.txt` contains the output of
+  `intel_reg list`, which includes `TRANS_HTOTAL_A` — and forty lines later
+  contains:
+
+  ```
+  TRANS_HTOTAL_A     NOT KNOWN to this intel_reg
+  ```
+
+  A name the tool lists, reported by this project's own script as not known,
+  in the same file, from the same run. **The label was a diagnosis the script
+  had no evidence for**, and it would have been printed into every future dump
+  as though it were an observation.
+
+  Fixed: the script prints `no value -- name reads return nothing on this
+  build`, which is what it can actually see, and the section says plainly that
+  the mechanism does not work rather than guessing why.
+
+  **The pattern is the thing worth keeping**, because it is the second time in
+  one day the same shape appeared here: a correct observation, an explanation
+  invented to account for it, and the disproof already present in the author's
+  own output. The other was an `awk` field claimed to be static in a pair of
+  numbers where it visibly moved. An explanation offered alongside a true
+  observation borrows its credibility, and is harder for a reader to check than
+  the bare observation would have been.
 
 - **What it was hiding** turned out to be the most valuable thing in the file:
   GX-013. Two runs had already been taken and filed before anybody read the

@@ -228,10 +228,18 @@ if have intel_reg; then
 		fi
 	done
 
-	say "the same registers by name, so the tool states its own addresses"
-	echo "A name this build does not know prints NOT KNOWN rather than nothing."
-	echo "Where it does know one, the address it prints is an independent"
-	echo "statement about the map above -- a disagreement there is a finding."
+	say "the same registers by name, which does not work on igt 2.5"
+	echo "Kept because the result is the finding, not because it is useful."
+	echo
+	echo "On this build **no name read returns anything at all** -- not a name"
+	echo "missing from the register spec, and not a name the tool itself"
+	echo "prints: PIPEASRC, which is the label intel_reg dump uses in its own"
+	echo "output, returns nothing too. Reading by name is not a mechanism that"
+	echo "functions here. Address or nothing."
+	echo
+	echo "If a line below ever does print a value, that is worth knowing: it"
+	echo "would mean a build where names work, and the address it states would"
+	echo "then be an independent check on the map above."
 	echo
 	for r in \
 		TRANS_HTOTAL_A TRANS_HBLANK_A TRANS_HSYNC_A \
@@ -240,7 +248,12 @@ if have intel_reg; then
 		PLANE_SIZE_1_A PLANE_SURF_1_A
 	do
 		value=$(intel_reg read "$r" 2>/dev/null | tr -s ' ' | tail -n 1)
-		printf '%-18s %s\n' "$r" "${value:-NOT KNOWN to this intel_reg}"
+		# **Not "NOT KNOWN", which was a diagnosis this script had no
+		# evidence for** and printed into every dump it produced. The
+		# first version of this line blamed the register spec; the same
+		# run then printed it beside TRANS_HTOTAL_A, which
+		# `intel_reg list` on that very machine does know (GX-015).
+		printf '%-18s %s\n' "$r" "${value:-no value -- name reads return nothing on this build}"
 	done
 else
 	echo "intel_reg not installed, so no register dump."
