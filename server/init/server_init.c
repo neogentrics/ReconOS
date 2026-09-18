@@ -57,6 +57,7 @@
 #include "../include/recon_server.h"
 #include "../service.h"
 #include "../log.h"
+#include "../logfile.h"
 
 /* Return codes, in the workstation's numbering so that a reader of one file
  * recognises them in the other. The server's own start at 70. */
@@ -231,6 +232,18 @@ static struct supervisor SUPERVISOR;
 static struct logbook LOGBOOK;
 
 /*
+ * Write out whatever the ring holds that the volume does not.
+ *
+ * Defined further down with the rest of the log-on-volume code, where its
+ * reasoning belongs. Declared here because the web service's poll is the only
+ * thing that knows a request has been answered, and it runs long before that
+ * part of the file.
+ *
+ * `force` writes a short segment rather than waiting for a full one.
+ */
+static void log_volume_flush(int force);
+
+/*
  * Record one answered request.
  *
  * Called by the server rather than by each handler, so every response is
@@ -255,6 +268,16 @@ static void note_request(void *ctx, const struct http_request *r, int status,
 		         status, bytes);
 
 	log_write(book, (unsigned long)recon_time(), line);
+
+	/*
+	 * And the counter, here rather than in the serving loop.
+	 *
+	 * This runs exactly once per response -- including the ones refused
+	 * before any handler saw them, which are requests the machine answered
+	 * and should be counted as such. It is the same event the log records,
+	 * so the page's figure and the log's length cannot drift apart.
+	 */
+	FACTS.served++;
 }
 
 
@@ -1092,8 +1115,22 @@ static int web_poll(void *ctx)
 
 	if (rc < 0)
 		return -2;		/* the listener itself failed */
-	if (rc > 0)
-		FACTS.served++;
+
+	/*
+	 * **Nothing is counted here.** `http_serve_once` answers "something
+	 * happened", and since the connection pool landed that means one step
+	 * of one connection -- accepting it, reading part of a request,
+	 * answering it. Counting those as requests made `requests_served`
+	 * read about three times the truth on the dashboard and in
+	 * `/api/status` for five versions: eleven requests moved it by
+	 * thirty-three.
+	 *
+	 * The count belongs where a response is finished, which is `note`.
+	 */
+
+	/* Cheap when there is nothing to do: one comparison. See
+	 * `log_volume_flush`. */
+	log_volume_flush(0);
 	return SERVICE_OK;
 }
 
@@ -1110,6 +1147,169 @@ static const struct service WEB_SERVICE = {
 	"web", "serves the console and the volume on port 80",
 	web_start, web_poll, web_stop, &WEB
 };
+
+/* --- the log, on the volume ------------------------------------------------
+ *
+ * The ring in `log.c` is what `GET /api/log` reads and it does not survive a
+ * restart. This writes it out in segments, which is the shape ReconFS leaves
+ * available -- see `server/logfile.h` for why appending is not.
+ */
+
+static struct {
+	unsigned long next;		/* the segment number to write */
+	unsigned long flushed;		/* entries already written out */
+	int ready;			/* the directory was read */
+	unsigned long segments;		/* written this boot */
+	unsigned long refused;		/* flushes that could not be written */
+} LOGVOL;
+
+/*
+ * Find where the last run stopped.
+ *
+ * **The number comes from the directory, not from memory.** `SYS_CREATE`
+ * refuses to overwrite, so a server that began again at zero would not clobber
+ * the previous run's segments -- it would fail to write anything at all, from
+ * the second boot onwards, silently. A log that has stopped looks exactly like
+ * a server with nothing to report.
+ */
+static void log_volume_open(void)
+{
+	static char names[4096];
+	long need;
+
+	LOGVOL.next = 0;
+	LOGVOL.flushed = 0;
+	LOGVOL.ready = 0;
+
+	mkdir(LOGFILE_DIR, 0755);	/* already there is the ordinary case */
+
+	/*
+	 * `SYS_LIST` answers with the size of the whole listing whether or not
+	 * it fitted, so a number larger than what was offered means nothing
+	 * was written. A directory too big for this buffer is therefore not
+	 * read at all rather than read in part -- and a partial listing would
+	 * give a highest number that is not the highest, which is the one
+	 * mistake that makes `SYS_CREATE` refuse every flush afterwards.
+	 */
+	need = (long)recon_call6(SYS_LIST, (u64)(unsigned long)LOGFILE_DIR,
+	                         sizeof(LOGFILE_DIR) - 1,
+	                         (u64)(unsigned long)names, sizeof(names),
+	                         0, 0);
+
+	if (need < 0) {
+		say("  the log: no volume to keep segments on\n");
+		return;
+	}
+	if ((size_t)need > sizeof(names)) {
+		char line[160];
+
+		snprintf(line, sizeof(line),
+		         "  the log: %ld bytes of listing and room for %lu --"
+		         " not read, so nothing is written\n",
+		         need, (unsigned long)sizeof(names));
+		say(line);
+		return;
+	}
+
+	LOGVOL.next = logfile_next(names, (size_t)need);
+	LOGVOL.ready = 1;
+
+	/*
+	 * Said out loud, because it is the one number that proves the log is
+	 * continuing rather than starting again.
+	 *
+	 * A machine that has been restarted five times and reports segment 0
+	 * every time has a log that is not being kept -- and until this line
+	 * existed, that state and a working one looked identical from the
+	 * console, because everything here is silent on success.
+	 */
+	{
+		char line[120];
+
+		snprintf(line, sizeof(line),
+		         "  the log: %s, continuing at segment %06lu\n",
+		         LOGFILE_DIR, LOGVOL.next);
+		say(line);
+	}
+}
+
+/*
+ * Write everything recorded since the last segment.
+ *
+ * Called from the web service's poll, which is the only thing that knows a
+ * request has been answered. Cheap when there is nothing to do: one comparison.
+ */
+static void log_volume_flush(int force)
+{
+	static char body[LOG_ENTRIES_MAX * (LOG_LINE_MAX + 32)];
+	char name[LOGFILE_NAME_MAX];
+	char path[64];
+	char line[200];
+	unsigned long missed = 0;
+	unsigned long have;
+	long n;
+	size_t at, i;
+
+	if (!LOGVOL.ready)
+		return;
+
+	have = LOGBOOK.written - LOGVOL.flushed;
+	if (have == 0)
+		return;
+	if (!force && have < LOGFILE_FLUSH_EVERY)
+		return;
+
+	n = logfile_name(LOGVOL.next, name, sizeof(name));
+	if (n < 0) {
+		/* A million segments. Refused rather than wrapped: a wrapped
+		 * number makes an old segment look new, and the reader with
+		 * the problem is a person months from now. */
+		say("  the log: the segment numbers are used up\n");
+		LOGVOL.ready = 0;
+		return;
+	}
+
+	at = sizeof(LOGFILE_DIR) - 1;
+	for (i = 0; i < at; i++)
+		path[i] = LOGFILE_DIR[i];
+	path[at++] = '/';
+	for (i = 0; name[i]; i++)
+		path[at++] = name[i];
+	path[at] = '\0';
+
+	n = logfile_render(&LOGBOOK, LOGVOL.flushed, body, sizeof(body),
+	                   &missed);
+	if (n < 0) {
+		LOGVOL.refused++;
+		return;
+	}
+
+	if (put_if_absent(path, at, body, (unsigned long)n) < 0) {
+		/*
+		 * Reported rather than retried. `SYS_CREATE` refusing here
+		 * means the number was wrong -- the directory held a segment
+		 * this did not see -- and writing the next one would leave a
+		 * hole nobody could explain.
+		 */
+		snprintf(line, sizeof(line),
+		         "  the log: %s could not be written\n", path);
+		say(line);
+		LOGVOL.refused++;
+		LOGVOL.ready = 0;
+		return;
+	}
+
+	LOGVOL.flushed = LOGBOOK.written;
+	LOGVOL.next++;
+	LOGVOL.segments++;
+
+	if (missed) {
+		snprintf(line, sizeof(line),
+		         "  the log: %s written, and %lu entries were already"
+		         " gone from the ring\n", name, missed);
+		say(line);
+	}
+}
 
 /* --- knowing how wrong this machine's clock is ----------------------------
  *
@@ -1540,6 +1740,15 @@ static int lay_out_the_site(void)
 	 * land until this exists, and it existing already is the ordinary
 	 * case. */
 	mkdir(UPLOAD_ROOT, 0755);
+
+	/*
+	 * Where the access log's segments go, and where the last run stopped.
+	 *
+	 * Read here rather than at the first flush so that a machine with no
+	 * volume says so once at boot, rather than silently keeping nothing
+	 * for as long as it runs.
+	 */
+	log_volume_open();
 
 	/*
 	 * Each file decided on its own, which this function did not used to do.

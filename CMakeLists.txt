@@ -1113,6 +1113,20 @@ add_executable(recon_server_log_tests
 
 add_test(NAME server_log COMMAND recon_server_log_tests)
 
+# Numbering segments, and the sort order that makes a log readable.
+#
+# Appending is not available here -- SYS_CREATE writes whole files and refuses
+# to overwrite -- so the log rotates instead. Names are zero-padded so a lexical
+# sort is a chronological one, and the next number comes from the directory
+# rather than from memory, because a server that started again at zero would
+# fail every write from its second boot onwards and say nothing.
+add_executable(recon_server_logfile_tests
+    server/log.c
+    server/logfile.c
+    server/tests/test_logfile.c)
+
+add_test(NAME server_logfile COMMAND recon_server_logfile_tests)
+
 # Three answers, and the two ways of confusing them.
 #
 # KF-244 made `connect` say `SYS_OK`, `SYS_EAGAIN` or `SYS_EIO` -- established,

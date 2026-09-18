@@ -29,10 +29,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.21.2 |
+| **Version** | 0.22.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 17 September 2026 |
-| **Checks** | 736 across eighteen suites, by `scripts/server-tests.sh` |
+| **Checks** | 770 across nineteen suites, by `scripts/server-tests.sh` |
 | **Kernel** | 0.2.48, merged from `origin/kernel` |
 
 The check figure is the first one this project has that was not assembled by
@@ -66,7 +66,7 @@ architecture document asks for:
 | `GET /api/status` | the same facts as JSON, from the same structure — including the clock offset with its uncertainty |
 | `GET /health` | `ok`, for something that is not a person |
 | `GET /api/services` | every registered service: state, polls, faults, restarts |
-| `GET /api/log` | the last 64 requests answered, and how many were dropped |
+| `GET /api/log` | the last 64 requests answered, and how many were dropped — the durable copy is in `/System/Logs` |
 | `POST /api/name` | renames the machine, validated by the same code that numbers a parallel. **Needs the token** |
 | `POST /api/upload` | takes a `multipart/form-data` file and keeps it in `/System/Uploads`, which **nothing serves**. **Needs the token** |
 | `GET /api/resolve?name=` | looks a name up in DNS and answers with its addresses. **Needs the token** — an open resolver endpoint is an open resolver |
@@ -188,6 +188,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_dns` | 72 | asking for an address, and the answers that must not be believed |
 | `server_ntp` | 41 | asking the time, and the replies that must not set a clock |
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
+| `server_logfile` | 34 | numbering segments, and the sort order that makes a log readable |
 | `server_dial` | 38 | three answers, and the two ways of confusing them |
 
 It reads its target list out of `CMakeLists.txt` rather than keeping one of its
@@ -279,6 +280,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.22.0** | **The access log survives a reboot, and the reason it could not was wrong.** It had been recorded since 0.12.0 that appending needed `O_APPEND`, which the C library drops — but appending needs the *ability* to append, and `SYS_SEEK` exists. The real blocker, measured: plain `OPEN_WRITE` is refused, `OPEN_CREATE` (*must not already exist*) **succeeds** on a file that does, and `OPEN_REPLACE` (*must exist*) is **refused** on one. The only door that opens contradicts its own documentation. So the shape changed instead: `SYS_CREATE` writes a file whole and refuses to overwrite, because ReconFS writes whole files — a log that appends is impossible here and a log that **rotates** is natural. Names are zero-padded so a lexical sort is a chronological one, and the next number comes from the directory, because a server starting again at zero would fail every write from its second boot onwards **silently**. Watched failing at 10 of 34 against exactly that version. And the number that exposed a second fault: 211 requests against two segments when six were due — `requests_served` had been counting connection-pool *steps* since 0.16.0, reading three times the truth on the dashboard for five versions. Eleven requests moved it by thirty-three. VF-026, VF-027. |
 | **0.21.2** | **The upload endpoint had never been shown to keep anything.** It has existed since 0.15.0 and was verified every way except the one that matters: no test had ever checked that a file was still there after a reboot — and inside one boot, a write that reached the volume and one that did not look identical. The cause was not difficulty, it was a missing disk: the 16 GB image lived in `/tmp`, which is shared with the other sessions here and cleaned without warning, and it vanished twice in one day. `scripts/server-disk.sh` now builds it under `kernel/build/` where nothing else reaches. Measured across two boots on one volume: 201, then 409 for the same name, then a **restart with a new token**, the web root reporting *already there* rather than rewritten, the same name still 409, and an unused name 201. Accepted and kept are different claims. VF-025. |
 | **0.21.1** | **The README claimed 736 checks and its own table summed to 735.** The userland session sent word, through Joshua, about blunt search-and-replace edits — and named the gap as doing the careful thing for code and not for `docs/`. Adding the table up took a minute: one row said 93 where the suite had grown to 94, a number quoted in the README, the board and three commit messages. My code edits all asserted their match count; the documentation edits beside them did not, **so the discipline was applied where a compiler would have caught the mistake anyway and dropped where nothing would.** `scripts/server-tests.sh` now checks the README against the run it just did — every row, the total, the suite count — and that uncovered a latent fault of its own: the runner had been parsing CRLF target names out of `CMakeLists.txt` since the day it was written, carrying a trailing carriage return that only mattered once a second reader compared it against text. Also: `/api/status` now reports the clock, which the dashboard had been showing alone for a version — in a structure whose stated purpose is that the two cannot disagree. VF-024. |
 | **0.21.0** | **The console works in a browser again, and had not since 0.17.0.** The dashboard has offered a rename form since long before there was a guard; the moment `POST /api/name` became guarded, that form answered 401 to every submission — on the one page a person actually looks at. Three versions of testing missed it because every check was `curl -H`, which is the client that *can* send a header. **Testing the API is not testing the console.** Fixed by accepting the token from a form field as well: the policy hook now gets the request body, which it needed and did not have. A token in a **query string** is still refused — that is logged, sent in `Referer` and kept in history, while a POST body is none of those. The dashboard also shows what the machine has learned to do: services running, the clock offset with its real uncertainty, and whether writes are guarded. VF-022, VF-023. |

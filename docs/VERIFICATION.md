@@ -726,3 +726,66 @@ None.
   a single boot is not tested at all -- and the reason it went untested was not
   difficulty but a missing disk, which is the least interesting possible cause
   and cost the most time.
+
+### VF-026 -- the request counter had been three times the truth since the pool landed
+
+- **Found in** `/api/status` and the dashboard, 17 September 2026. **Found by**
+  a different number not adding up: 211 requests served against only two log
+  segments, when six were due.
+- **What it was** `FACTS.served` was incremented whenever `http_serve_once`
+  answered "something happened". Before the connection pool that meant one
+  connection served; **after 0.16.0 it means one step of one connection** --
+  accepting it, reading part of a request, answering it. Same call, same
+  return value, different meaning.
+- **Measured rather than estimated.** Eleven requests were made against a fresh
+  boot and the counter moved by **thirty-three**. The log ring, which is
+  incremented once per finished response, held twelve -- correct, and the
+  contradiction that made the fault visible.
+- **Why it survived five versions** Nothing compares the two. The dashboard
+  shows the counter, `GET /api/log` shows the ring, and no check has ever
+  looked at both in one breath. Each was individually plausible: a busy-looking
+  number on a page nobody was auditing, next to a list that was right.
+- **Why it belongs here** The pool changed what `http_serve_once` *returns* and
+  every caller was reviewed for whether it still compiled, not for whether the
+  value still meant the same thing. **A function whose meaning changes while
+  its signature does not is a change no compiler reports** -- which is the same
+  shape as VF-019, where a progress check was applied to a socket type it was
+  never written for.
+- **Fixed** by counting in `note`, which runs exactly once per response --
+  including the ones refused before any handler saw them, which are requests
+  the machine answered and should be counted. It is the same event the log
+  records, so the page's figure and the log's length can no longer drift.
+
+### VF-027 -- the access log now survives a reboot, and the reason it could not was wrong
+
+- **What was recorded** From 0.12.0: the log is in memory because the C library
+  drops `O_APPEND`. It does drop it, and **appending needs the ability to
+  append, not that flag** -- `SYS_SEEK` exists, so seek-to-end then write is
+  the other route. The stated blocker was never the real one.
+- **The real one**, measured against a file that exists: plain `OPEN_WRITE` is
+  refused; `OPEN_CREATE`, documented *it must not already exist*, **succeeds**
+  on a file that does; `OPEN_REPLACE`, documented *it must exist*, is
+  **refused** on one. The only door that opens contradicts its own
+  documentation, and a log built on that is a log built on a fault.
+- **So the shape changed instead of the door.** `SYS_CREATE` is documented,
+  works, writes a file whole in one transaction and refuses to overwrite --
+  because ReconFS writes whole files. A log that appends is impossible here; a
+  log that **rotates** is natural, which is how log-structured systems are
+  built on purpose elsewhere and was arrived at here because nothing else was
+  available.
+- **The two mistakes it would have had**, both watched failing at 10 of 34:
+  names without zero padding, so `10.log` sorts before `9.log` and every reader
+  that lists a directory gets the log out of order; and a segment number
+  starting from zero each boot, which -- because `SYS_CREATE` refuses to
+  overwrite -- would not clobber the previous run but would **fail every write
+  from the second boot onwards, silently.** A log that has stopped looks
+  exactly like a server with nothing to report.
+- **Measured across two boots on one volume:** boot one reported *continuing at
+  segment 000001*, answered seventy-two requests, and boot two reported
+  *continuing at segment 000003* -- two segments written and the numbering
+  carried across the restart, while the in-memory ring came back empty, which
+  is the contrast the whole thing exists for.
+- **What it costs, written down rather than discovered:** an entry is durable
+  when its segment is written, not when it is recorded. Up to
+  `LOGFILE_FLUSH_EVERY` entries live only in the ring, and a machine that loses
+  power loses them. That is the weakness an append-only log would not have.

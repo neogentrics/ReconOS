@@ -66,7 +66,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | Kerberos KDC | server | **blocked** | no GSSAPI, no crypto |
 | TLS termination and certificates | server | **blocked** | no TLS, no certificate store |
 | HTTP auth (Basic, session, bearer) | server | **partial** | Bearer is **built** for the two writing endpoints — `server/auth.c`, a boot token on the console, 33 checks. Basic and sessions still wait on TLS; the rule in `docs/WEB.md` §5 is amended there rather than bent |
-| Audit log daemon | server | **partial** | `server/log.c` — a ring of recent requests at `GET /api/log`. **In memory only**: appending to a file needs `O_APPEND`, which the C library drops |
+| Audit log daemon | server | **built** | `server/log.c` — a ring of recent requests at `GET /api/log`, **and durable segments** in `/System/Logs` via `server/logfile.c`, 34 checks. It rotates rather than appends because ReconFS writes whole files; the reason recorded here for three versions (`O_APPEND`) was not the real one — VF-027 |
 | POSIX ACLs | kernel | partial | uid/gid and caps exist |
 
 ### Storage
