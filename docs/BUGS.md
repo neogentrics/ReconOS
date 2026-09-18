@@ -158,7 +158,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-12, and each entry says why. They are listed because a register that only
+13, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -174,6 +174,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-237** — A power cut inside a rename left no valid superblock, once
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
+- **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
 
 ---
@@ -7801,6 +7802,65 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-252 — The command ring takes whatever completion arrives, and nothing serialises it
+
+[#528](https://github.com/neogentrics/ReconOS/issues/528)
+
+- **Found:** 17 September 2026, by applying a rule the **Bluetooth session**
+  stated. They had written three matching checks at three layers and only
+  noticed the third time that they were the same check:
+
+  > An answer that does not name what it is answering must not be taken as the
+  > answer to whatever happens to be outstanding.
+
+  That is KF-248 stated better than KF-248 states it. Going looking for a fourth
+  instance found one in ten minutes — **and it was found by disproving a claim I
+  had already written down.** The signal to them said `command()` was the *right*
+  shape, a place the kernel already followed the rule. It is the opposite.
+
+- **What it is**, and it is three gaps in one function.
+
+  ```c
+  if (TRB_TYPE_OF(e.control) == TRB_COMMAND_COMPLETE) {
+          if (result)
+                  *result = e;
+          return ((e.status >> 24) & 0xFF) == COMP_SUCCESS;
+  }
+  ```
+
+  1. **The completion is not matched.** A Command Completion Event carries the
+     physical address of the command TRB it answers, in its parameter field.
+     That field is copied into `result` and never compared with what was posted.
+     The first completion of the right *type* is taken as the answer.
+  2. **Nothing serialises the ring.** `transfer_lock` guards transfers.
+     `command()` holds nothing, and `x->cmd_index` is advanced unprotected — so
+     two callers can be handed the same ring slot.
+  3. **So the two faults compound.** Two commands in flight means two writers to
+     one slot and two waiters racing for one completion, and the completion says
+     which command it belongs to.
+
+- **What it would look like.** `enable slot`, `address device` and `configure
+  endpoint` all go through here, and each reports success on `COMP_SUCCESS`. A
+  caller taking another command's completion is told its own command succeeded —
+  so a device is "addressed" when what actually succeeded was a different
+  device's slot allocation. The failure arrives later, somewhere else, as a
+  device that does not answer.
+
+- **Reachability is not proven and the entry says so.** Enumeration runs from
+  the boot thread; hot-plug (KF-199) and the HID poller run from others. Whether
+  two of them can be inside `command()` at once has **not** been demonstrated
+  here, and the honest statement is that the code does nothing to prevent it
+  rather than that it has been seen to happen. The same was true of KF-248 until
+  a Bluetooth adapter turned out to be the device that breaks it.
+
+- **The fix is one lock and one comparison**, and it belongs with KF-248: both
+  are "the event names its owner and the code ignores it", one on the command
+  ring and one on the transfer rings. Building them separately means writing the
+  same argument twice.
+
+- **Status:** open. Found by rule rather than by failure, which is the cheapest
+  way this project has found anything.
 
 ### KF-251 — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
 
