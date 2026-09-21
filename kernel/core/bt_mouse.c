@@ -8,7 +8,6 @@
 #include <recon/kernel/bt_mouse.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/hid_report.h>
-#include <recon/kernel/input.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/l2cap.h>
 
@@ -118,42 +117,20 @@ bool bt_mouse_pdu(struct bt_mouse *m, const u8 *pdu, u32 len,
 	return true;
 }
 
-void bt_mouse_post(const struct bt_mouse *m, const struct hid_mouse_state *s)
-{
-	static const u16 button[3] = { BTN_LEFT, BTN_RIGHT, BTN_MIDDLE };
-	unsigned i;
-	unsigned n = m->layout.buttons_count;
-
-	if (n > 3)
-		n = 3;
-
-	/* Motion first, then buttons.
-	 *
-	 * A click is a position and a state, and a consumer reading the two
-	 * events in order should see the pointer where it was clicked rather
-	 * than where it was a report ago. Posting the button first puts the
-	 * press at the old position for anything that reads events one at a
-	 * time. */
-	if (s->x)
-		input_post_motion(REL_X, s->x);
-
-	if (s->y)
-		input_post_motion(REL_Y, s->y);
-
-	if (s->wheel)
-		input_post_motion(REL_WHEEL, s->wheel);
-
-	for (i = 0; i < n; i++) {
-		bool down = ((s->buttons >> i) & 1u) != 0;
-
-		/* Asked of the input layer rather than remembered here, so
-		 * that two mice cannot disagree about whether a button is
-		 * down -- the same reasoning `usb_hid.c` gives. */
-		if (down != input_key_held(button[i]))
-			input_post(button[i], down ? INPUT_PRESS
-						   : INPUT_RELEASE);
-	}
-}
+/* Posting is `hid_boot.c`'s now.
+ *
+ * `bt_mouse_post` lived here and did what `hid_boot_mouse` does: turn a boot
+ * report into motion and button events, asking the input layer whether a
+ * button is already down rather than remembering. The kernel session lifted
+ * that decoder out of `usb_hid.c` into a file that names no bus, which is
+ * what this branch asked for -- so keeping a second copy here would be the
+ * drift both of us argued against, with nothing calling it.
+ *
+ * A caller with a boot report hands `rep.data` and `rep.length` from
+ * `bt_hid_input_report` straight to `hid_boot_mouse`. A descriptor-driven
+ * device needs posting from a layout rather than fixed offsets, and that has
+ * no caller yet; it comes back when one exists.
+ */
 
 /* --- the self-test --------------------------------------------------------
  *

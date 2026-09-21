@@ -97,10 +97,10 @@ bool bt_mouse_acl(struct bt_mouse *m, u16 handle, u8 pb, const u8 *payload,
 bool bt_mouse_pdu(struct bt_mouse *m, const u8 *pdu, u32 len,
 		  struct hid_mouse_state *out);
 
-/* Posts a decoded report as input events. Buttons are asked of the input
- * layer rather than remembered here, for the reason `usb_hid.c` gives: two
- * mice must not be able to disagree about whether a button is down. */
-void bt_mouse_post(const struct bt_mouse *m, const struct hid_mouse_state *s);
+/* Posting lives in `hid_boot.c` -- `hid_boot_mouse` takes the report bytes
+ * `bt_hid_input_report` hands back. There is no copy here, deliberately:
+ * one decoder for both transports is the whole point of it being moved
+ * out of `usb_hid.c`. */
 
 bool bt_mouse_self_test(void);
 

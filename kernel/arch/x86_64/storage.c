@@ -26,6 +26,7 @@
 #include <recon/kernel/pci.h>
 #include <recon/kernel/xhci.h>
 #include <recon/kernel/virtio.h>
+#include <recon/kernel/virtio_gpu.h>
 #include <recon/kernel/net.h>
 #include <recon/kernel/console.h>
 
@@ -55,6 +56,23 @@ void arch_storage_probe(void)
 		if (ahci_attach(d))
 			continue;
 
+		/* Network cards, in a file named for storage.
+		 *
+		 * That is not a tidy place for them and the name is the least
+		 * of it: this loop is the whole of device binding on this
+		 * architecture, there is one of it per architecture, and a
+		 * driver in portable `core/` cannot be reached without editing
+		 * an `arch/` file. NW-004 records it. Adding the line here
+		 * rather than inventing a driver registry alongside it is
+		 * deliberate -- one more entry on a list is cheap and honest,
+		 * and a registry built to hold three drivers would be an
+		 * interface designed before anything measured what it needs. */
+		if (r8169_attach(d))
+			continue;
+
+		if (e1000_attach(d))
+			continue;
+
 		if (!virtio_pci_probe(d, &v))
 			continue;
 
@@ -65,6 +83,12 @@ void arch_storage_probe(void)
 		 * here carries no meaning and adding a third costs a
 		 * line. */
 		if (virtio_blk_attach(&v))
+			continue;
+
+		/* A screen is the third kind, added when the display layer
+		 * gained a second backend. Declining quietly for anything that
+		 * is not one, exactly as the two above do. */
+		if (virtio_gpu_attach(&v))
 			continue;
 
 		virtio_net_attach(&v);

@@ -50,15 +50,19 @@
 #include <recon/kernel/sdp.h>		/* and where a descriptor comes from */
 #include <recon/kernel/bt_link.h>	/* bringing a link up */
 #include <recon/kernel/bt_pair.h>	/* agreeing a link key */
-#include <recon/kernel/bt_mouse.h>
-#include <recon/kernel/bt_stack.h>	/* the whole sequence */	/* and all of it joined together */
+#include <recon/kernel/bt_mouse.h>	/* the layers joined together */
+#include <recon/kernel/bt_stack.h>	/* and the sequence that drives them */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
+#include <recon/kernel/logport.h>
 #include <recon/kernel/aml.h>
 #include <recon/kernel/aml_eval.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/display.h>
+#include <recon/kernel/amd_display.h>
+#include <recon/kernel/intel_display.h>
+#include <recon/kernel/virtio_gpu.h>
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/lock.h>
@@ -240,6 +244,9 @@ void kmain(void)
 	input_init();
 	block_print_summary();
 	display_print_summary();
+	intel_display_print_summary();
+	amd_display_print_summary();
+	virtio_gpu_print_summary();
 	suspend_print_summary();
 
 	/* What the devices can do about interrupts, printed here rather than
@@ -340,6 +347,30 @@ void kmain(void)
 		i2c_self_test() ? "pass" : "FAIL");
 	kprintf("  a mode of our own  : %s\n",
 		display_self_test() ? "pass" : "FAIL");
+
+	/* **What the one above cannot ask.** `display_self_test` sets modes and
+	 * reads them back, which proves a mode was established and says nothing
+	 * about whether anything reached the glass -- on a display whose pixels
+	 * are guest memory, reading back what was written is reading back what
+	 * was written, and it passes against a black screen (GX-003). This one
+	 * asks the device instead. */
+	kprintf("  a present that lands : %s\n",
+		virtio_gpu_self_test() ? "pass" : "FAIL");
+
+	/* The recognition table for real graphics hardware, checked on machines
+	 * that have none -- which is every machine in this matrix. What it
+	 * refuses matters more than what it claims: the ids it must decline are
+	 * the host bridge sitting beside the graphics in the same package, and
+	 * Intel display engines of generations this kernel has no code for. */
+	kprintf("  graphics it knows  : %s\n",
+		intel_display_self_test() ? "pass" : "FAIL");
+
+	/* And the other real-hardware table. Its refusals include two identifier
+	 * collisions that exist in pci.ids today -- 164e is AMD's Raphael and
+	 * Broadcom's NetXtreme II, and 164e is the graphics in this project's own
+	 * desktop -- plus the USB controllers AMD puts on its graphics cards. */
+	kprintf("  the graphics cards it knows : %s\n",
+		amd_display_self_test() ? "pass" : "FAIL");
 
 	/* After the sweep above, which sets seven modes in turn and moves the
 	 * framebuffer each time. A program's mapping is of one physical address;
@@ -584,6 +615,27 @@ void kmain(void)
 	 *
 	 * Before power-off, because that does not return. */
 	klog_save_to_medium();
+
+	/* And over the network, for the machine where the line above cannot
+	 * work.
+	 *
+	 * `klog_save_to_medium` writes to the medium the kernel booted from, and
+	 * on the Gateway that medium is a USB stick whose driver is the thing
+	 * being diagnosed (KF-256). A machine whose fault prevents recording the
+	 * evidence of that fault is a machine diagnosed by photographing a
+	 * panel, which this project has now done four times.
+	 *
+	 * **The network does not depend on the disk**, which is the entire
+	 * argument. Off unless the command line says `logport`, and it prints
+	 * nothing at all when nobody asked -- see logport.h for why it reads
+	 * from nobody and why it is not SSH.
+	 *
+	 * Started after the log is saved rather than before, so the two are not
+	 * competing for the same report, and after the summaries so that what a
+	 * reader gets is the whole boot rather than the part printed by the time
+	 * a socket opened. */
+	logport_start();
+	logport_print_summary();
 
 	/* Asked for on the command line, and last, because it does not return.
 	 *

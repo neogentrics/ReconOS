@@ -42,19 +42,6 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Every prefix the register uses. Kept in the same shape as the list in
-# `scripts/make-issues.py` and for the same reason: a prefix spelled into a
-# regex is a prefix that every new session edits in place, and two sessions
-# claiming one at the same time then conflict on the line rather than on the
-# list. Add a prefix here.
-#
-# Counting by prefix rather than summing two named ones also means a track
-# whose prefix nobody added is *missing from the total*, which the badge then
-# reports as a mismatch. That is the loud failure. Summing `BG` and `KF` by
-# name was the quiet one: `GX-` entries existed on `graphics` and this file
-# counted none of them while reporting itself green.
-PREFIXES = ("BG", "KF", "GX", "BT")
-
 
 def read(path):
     return io.open(os.path.join(ROOT, path), encoding="utf-8",
@@ -64,17 +51,34 @@ def read(path):
 def bug_counts():
     """How many entries the register actually holds, by prefix.
 
-    Every prefix the register carries, not a named two -- and any heading that
-    looks like an entry but carries a prefix nobody registered is returned
-    under its own key too, so that it is visible rather than uncounted.
+    **Every prefix, discovered from the file — not a list.**
+
+    That sentence was already the comment here on 17 September 2026, and the
+    line under it read::
+
+        heads = re.findall(r"^### (BG|KF|GX)-\\d+", ...)
+
+    which is precisely a list of the prefixes that existed when it was
+    written. The comment described the property the code was supposed to have
+    and the code did not have it, so the file asserted its own correctness and
+    nothing checked the claim.
+
+    It was about to cost something real twice over: the `network` branch
+    carries eight `NW-` entries and `bluetooth` carries `BT-`, and on merge
+    both would have been counted as **zero** — a badge that goes green while
+    undercounting the register, which is the exact failure this script exists
+    to prevent. The network session spotted it from their side and said so in
+    their signals; it is fixed here rather than by adding two more names.
+
+    Two letters and a dash, taken from the register itself. A new track adds
+    entries and this counts them, with nothing to remember.
     """
     heads = re.findall(r"^### ([A-Z]{2})-\d+", read("docs/BUGS.md"), re.M)
-    counts = dict((p, 0) for p in PREFIXES)
 
-    for h in heads:
-        counts[h] = counts.get(h, 0) + 1
-
-    return counts
+    out = {}
+    for p in heads:
+        out[p] = out.get(p, 0) + 1
+    return out
 
 
 def suite_count():
@@ -126,10 +130,10 @@ def main():
     if not m:
         problems.append("no bug-count badge found; has the README changed shape?")
     elif int(m.group(1)) != total:
-        breakdown = ", ".join("%d %s" % (n, p)
-                              for p, n in sorted(bugs.items()) if n)
         problems.append("bugs badge says %s, the register holds %d (%s)"
-                        % (m.group(1), total, breakdown))
+                        % (m.group(1), total,
+                           " + ".join("%d %s" % (bugs[p], p)
+                                      for p in sorted(bugs) if bugs[p])))
         fixed = re.sub(r"(bugs_recorded-)\d+(-)", r"\g<1>%d\g<2>" % total, fixed)
 
     # --- the version, in both badges -----------------------------------

@@ -42,6 +42,17 @@
 #define BAD_GEOMETRY    64	/* the numbers do not describe a screen */
 #define BAD_READBACK    65	/* a pixel did not come back */
 
+/* SYS_PRESENT, and one code per thing it must refuse.
+ *
+ * Separate numbers rather than one "present is wrong", because a call that
+ * refuses everything and a call that refuses nothing both fail a single
+ * combined check, and they need opposite fixes. */
+#define BAD_PRESENT     66	/* an honest present was refused */
+#define BAD_PRESENT_ANY 67	/* it presented through a descriptor that is
+				 * not the framebuffer */
+#define BAD_PRESENT_NIL 68	/* it accepted a zero-sized rectangle */
+#define BAD_PRESENT_OFF 69	/* it accepted a rectangle off the screen */
+
 /*
  * The two the compiler is allowed to call without being asked.
  *
@@ -234,7 +245,51 @@ int main(void)
 		}
 	}
 
-	recon_say(1, "paint: a C program drew on the screen\n");
+	/*
+	 * And show it. On the EFI framebuffer and on Intel this does nothing
+	 * and says so by succeeding; on virtio-gpu it is the difference between
+	 * a picture and a program that drew into memory nobody looks at.
+	 *
+	 * The rectangle is the whole screen, spelled out from what the kernel
+	 * reported rather than as a zero that means everything.
+	 */
+	if (recon_present((int)fd, 0, 0, screen.width, screen.height) != 0) {
+		recon_close((int)fd);
+		return BAD_PRESENT;
+	}
+
+	/*
+	 * Three refusals, each asserted on its own.
+	 *
+	 * A call that can only be seen succeeding is a call nobody has tested:
+	 * `present` returning 0 above is consistent both with the kernel doing
+	 * the work and with a stub that returns 0 for anything. These three ask
+	 * for things it must say no to, and a stub passes none of them.
+	 */
+
+	/* Standard input is a descriptor, is open, and is not the framebuffer.
+	 * A kernel that checks only "is this open" accepts it. */
+	if (recon_present(0, 0, 0, 1, 1) == 0) {
+		recon_close((int)fd);
+		return BAD_PRESENT_ANY;
+	}
+
+	/* Zero width. The whole argument against a sentinel: this is what an
+	 * uninitialised variable looks like, and it must be refused rather than
+	 * quietly promoted to the whole screen. */
+	if (recon_present((int)fd, 0, 0, 0, screen.height) == 0) {
+		recon_close((int)fd);
+		return BAD_PRESENT_NIL;
+	}
+
+	/* One pixel past the right-hand edge. Refused, not clamped -- a program
+	 * told this succeeded believes the screen is wider than it is. */
+	if (recon_present((int)fd, 1, 0, screen.width, screen.height) == 0) {
+		recon_close((int)fd);
+		return BAD_PRESENT_OFF;
+	}
+
+	recon_say(1, "paint: a C program drew on the screen and presented it\n");
 	recon_close((int)fd);
 	return OK;
 }

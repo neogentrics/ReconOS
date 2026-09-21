@@ -31,6 +31,18 @@ bool fbcon_adopt(const struct framebuffer *given);
 /* One character. Understands \n, \r and \t, and scrolls at the bottom. */
 void fbcon_putc(char c);
 
+/* Put what has been drawn onto the screen, where that is a separate step.
+ *
+ * On a display whose framebuffer is scanned out continuously this does nothing
+ * and costs a branch. On one that has to be told -- virtio-gpu, and every real
+ * GPU -- it is the difference between a console that works and a black screen
+ * that reports success.
+ *
+ * **Call it without the console lock held.** Presenting talks to a device and
+ * prints when that fails, and printing takes the lock.
+ */
+void fbcon_present(void);
+
 /* Whether anything is being drawn. For code that wants to say something
  * different when the only console is a cable. */
 bool fbcon_active(void);

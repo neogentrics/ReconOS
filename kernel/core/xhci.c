@@ -1274,6 +1274,24 @@ bool xhci_bulk_transfer(struct xhci *x, struct usb_device *ud, bool in,
 	u32 done = 0;
 	bool ok;
 
+	/* **Answered before anything can fail, so a failure cannot leave the
+	 * caller's last answer in place.** (KF-253)
+	 *
+	 * `*transferred` used to be written only where a completion arrived.
+	 * Every other exit -- not configured, no endpoint, a bad buffer, and
+	 * above all the timeout -- returned false having left the variable
+	 * holding whatever the *previous* transfer put there.
+	 *
+	 * KF-246's diagnostic then printed it, and the first real failure it
+	 * ever reported read `the device sent no data (31 of 4096 bytes
+	 * moved)`. Thirty-one is `CBW_LENGTH`: the command wrapper that had
+	 * just succeeded. Nothing moved at all, and the number naming how much
+	 * had moved was a leftover from the phase before -- which is exactly
+	 * the class of fault the diagnostic was built to end, reproduced inside
+	 * the diagnostic itself on its first outing. */
+	if (transferred)
+		*transferred = 0;
+
 	if (!ud->configured || !address)
 		return false;
 	if (length && !phys)
