@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-20, and each entry says why. They are listed because a register that only
+18, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -213,7 +213,6 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
-- **NW-016** — Two entries name kernel versions that were never released
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -537,6 +536,45 @@ turned out to be true.
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
 
+### NW-018 — The Open list was checked entry by entry and the number introducing it was not
+
+[#548](https://github.com/neogentrics/ReconOS/issues/548)
+
+- **Found in** `docs/BUGS.md` and `scripts/make-issues.py`, on 20 September
+  2026, by the network session, by closing NW-016 and watching the checker
+  report 18 while the sentence above the list said 19.
+- **Was** the `## Open` section opens *"N, and each entry says why"*, and
+  `check_open` validated the list beneath it in both directions — every open
+  entry named, nothing named that is not open — while **N itself was compared
+  with nothing.**
+- **This is NW-014 one file over.** There, the README stated the test-suite
+  count in a badge and in prose, the badge was checked and the prose was not,
+  and they disagreed by eleven. Here the list is checked and its own headline
+  count is not. The shape is the same and so is what makes it expensive: **the
+  checked copy is what makes the unchecked one look vouched for.** A reader who
+  knows `--check` validates the Open section has no reason to doubt the number
+  at the top of it.
+- **What it cost this time: nothing, and that is luck rather than design.** The
+  number was wrong for the length of one commit, because the entry that moved
+  out of the list was moved by hand and the count was edited by hand after it.
+  Had it drifted quietly it would have stayed wrong until somebody counted
+  bullets, which nobody does.
+- **Found by** doing the thing the register is for — closing an entry and
+  running the checker — rather than by looking for this. NW-016 went from open
+  to fixed, the bullet came out, and the two numbers disagreed on the next run.
+- **Fixed in** kernel 0.5.10 on `network`, by checking the sentence against the
+  same `open_now` the list is checked against. Deliberately the same source:
+  counting it a second way would let the two counts disagree about what they
+  were counting, which is the fault KF-247 records on the other side.
+- **Proved both ways.** With the sentence set back to 19 the checker reports
+  *"the Open section says 19 entries and lists 18"* and exits 1; corrected, it
+  exits 0.
+- **Third check written today and the third to have had something wrong with
+  it** — NW-016's pattern ate a full stop, NW-017 could not see a merge, and
+  this one did not exist. Every one of them was found by running the checker
+  against the live register rather than by reasoning about it, which is the only
+  method that has worked all day.
+
 ### NW-017 — The version check could not see a version set by a merge
 
 [#547](https://github.com/neogentrics/ReconOS/issues/547)
@@ -616,11 +654,27 @@ turned out to be true.
   success. Neither would have been noticed from the exit code, so the pattern
   was run against the register directly and made to name what it found before
   the result was believed.
-- **Not fixed here, and the reason is that guessing would be worse.** These are
-  the kernel session's entries and the correct attribution is theirs to make:
+- **Not fixed here, and the reason was that guessing would be worse.** These are
+  the kernel session's entries and the correct attribution was theirs to make:
   the fixes are real and landed somewhere, most plausibly folded into 0.2.34,
   but "most plausibly" is exactly the confidence that produced the fault.
   Reported with the evidence instead.
+- **Status:** fixed by the kernel session, merged here on 20 September 2026, and
+  the answer was 0.2.34 for both — derived rather than guessed.
+
+  Their evidence, verified here before this entry was closed rather than taken
+  on their word: `3e058d9` introduced **KF-227, KF-228 and KF-229 together**,
+  raised `VERSION` from 0.2.29 to 0.2.34 in that same commit, and KF-229 already
+  named 0.2.34. Three consecutive fixes given three consecutive numbers in prose
+  while the line moved once, exactly as KF-228's *"like its two neighbours"*
+  suggested.
+
+  **No version for this one.** It corrected two entries in `docs/BUGS.md` and
+  nothing else, so the binary is identical and a number would name a difference
+  that does not exist — the same reasoning as NW-015, and the kernel session
+  applied the same test from the other side when they ruled on KF-261.
+
+  Issue [#546](https://github.com/neogentrics/ReconOS/issues/546) closed.
 - **Only half of the rule is machine-checkable and the entry should say so.**
   Whether a *released* version's tree really contains a given fix needs to know
   which commit was the fix, which no script here can know. What is checkable is

@@ -417,7 +417,17 @@
 # took the *other* branch's whole file and dropped `check_versions` with it. The
 # split was not worth a second attempt. Eight from the merge, one from NW-017,
 # and the line says nine.
-VERSION := 0.5.9
+#
+# **0.5.10: NW-018, and the fifth matrix run this rule has cost.**
+#
+# `check_open` validated the Open list in both directions and never looked at
+# the number introducing it, which said 19 while the list held 18. NW-014 one
+# file over.
+#
+# This one was killed at sixty-seven seconds, which is the cheapest of the five
+# and the reason it was not deferred. The temptation to defer is the whole
+# subject of KF-200 and it does not get weaker with practice.
+VERSION := 0.5.10
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

@@ -730,6 +730,24 @@ def check_open(text):
         print('  %s is open and the Open section does not say so' % b)
     for b in extra:
         print('  %s is named as open and its own entry says otherwise' % b)
+    """The sentence beside the list, which nothing checked -- NW-018.
+
+    The `## Open` section opens with *"N, and each entry says why"*, and that N
+    was never compared with anything. The list above was validated entry by
+    entry while the number introducing it was taken on trust, so it said 19
+    while the list held 18.
+
+    Same fault as NW-014, one file over: a derivable number checked in one
+    spelling and not the other, where the checked copy is what makes the
+    unchecked one look vouched for. Checked here, from the same `open_now` the
+    list is checked against, so the two cannot disagree about what they counted.
+    """
+    said = re.search(r'(\d+), and each entry says why', head.group(1))
+    if said and int(said.group(1)) != len(open_now):
+        print('  the Open section says %s entries and lists %d'
+              % (said.group(1), len(open_now)))
+        extra = extra + ['count']
+
     if not missing and not extra:
         print('  Open names all %d open entries and no others' % len(open_now))
     return 1 if (missing or extra) else 0
