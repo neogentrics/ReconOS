@@ -8616,7 +8616,219 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-260 — A fallback that rebuilt the exact wrong number it was written to replace
+
+[#544](https://github.com/neogentrics/ReconOS/issues/544)
+
+- **Found:** 18 September 2026, auditing this tree for one shape after producing
+  it myself: **an empty capture becoming a plausible number.**
+
+- **What it was.** `install-then-boot-test.sh` looks up where the EFI partition
+  landed, because a literal 1 MiB went stale when a BIOS boot partition was put
+  in front of the ESP. The comment explaining that is still there and is good.
+  The line under it was:
+
+  ```sh
+  esp_lba=$(sgdisk -p "$W/target.img" | awk '$6 == "EF00" { print $2; exit }')
+  esp_at=$(( ${esp_lba:-2048} * 512 ))
+  ```
+
+  **2048 blocks is the stale 1 MiB.** So whenever the lookup found nothing --
+  no EF00 partition, a damaged table, `sgdisk` absent -- the fallback silently
+  reinstated the exact offset the lookup exists to replace, and the test then
+  read a BIOS boot partition as a filesystem and reported *"non DOS media"*.
+  Which the comment four lines above calls *a confusing way to be told that a
+  constant went stale.*
+
+- **Measured rather than assumed**, because the three cases behave differently
+  and only one of them is safe:
+
+  | written as | when empty |
+  |---|---|
+  | `$(( var * 512 ))` | **0**, silently |
+  | `$(( ${var:-2048} * 512 ))` | **1048576**, silently |
+  | `$(( $(cmd) * 512 ))` | **syntax error**, loudly |
+
+  `install-onto-test.sh` uses the third form and is safe by accident. This one
+  used the second.
+
+- **Why it was looked for at all.** The same shape had just produced a false
+  fact in this register: a probe reported `0 sectors written` for a deliberate
+  200 MB write, and that zero was `$((b - a))` over two empty strings after an
+  awk syntax error the author's own `2>/dev/null` had hidden. It was published
+  as *"`/proc/diskstats` is broken on this machine"* and retracted an hour
+  later. Grepping the tree for arithmetic over captured values found this in
+  two minutes.
+
+- **Fixed** by refusing instead of defaulting: an empty `esp_lba` now fails with
+  the reason, and says why it is not falling back. The dead `${esp_lba:-2048}`
+  left in the success message went too -- a default in a message implies a
+  fallback that no longer exists.
+
+- **Latent, not live.** Every image the matrix builds has an EF00 partition, so
+  this has never fired. It is recorded because the conditions that make it fire
+  -- `sgdisk` missing, a table damaged by the thing under test -- are exactly
+  the conditions under which somebody would be reading the output most closely.
+
+- **Status:** fixed, kernel 0.5.0.
+
+### KF-259 — Six paths failed about processors that had been preempted perfectly well
+
+[#540](https://github.com/neogentrics/ReconOS/issues/540)
+
+- **Found:** 18 September 2026, matrix 73, six paths red at once:
+
+  ```
+  PVH 2 processors, no ticks
+  PVH 4 processors, no ticks
+  PVH 8 processors, no ticks
+  device tree 2 processors, no ticks
+  ...
+      PVH, 2 processors    FAILED -- online, and not one of them was preempted
+        cpu 0        : online, hw 0x0, 4 ticks, 0 switches
+        cpu 1        : online, hw 0x1, 0 ticks, 0 switches
+  ```
+
+- **Six paths at once, immediately after a merge, is a story that writes
+  itself** -- and the story was wrong. The merge before it brought two network
+  drivers and an interrupt hook that claims a vector, so "the NIC drivers broke
+  SMP interrupts" was sitting there ready to be believed.
+
+  **It reproduced with no network device attached at all**, which killed that in
+  one command. Then the pre-merge kernel reproduced the same `cpu 1: 0 ticks`
+  while *passing* -- so the tick counts printed beside the failure were not the
+  failure either, and the merge was innocent.
+
+- **What it actually was.** `verify-kernel.sh` reads the preemption evidence out
+  of the boot report with an anchored expression:
+
+  ```sh
+  sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks$/\1/p'
+  ```
+
+  Note `ticks$`. **And the commit before the merge appended a field to exactly
+  that line**, for KF-258: the summary could not distinguish a thread that is
+  about to run from one that can never be chosen, so it now says which.
+
+  ```
+  thread 2     : idle-001, running, 2 ticks, idle-for-this-cpu
+  ```
+
+  The anchor stops matching, `idle_ticks` comes back empty, and the check
+  reports that nothing was preempted about a machine that preempted normally.
+
+- **A boot report is an interface.** It is read by a person, and it is also
+  parsed by seventeen sub-scripts and the run that drives them. Adding a word to
+  a line is an ABI change to every one of them, and nothing in this tree says so
+  -- there is no list of which lines are load-bearing, and the only way to find
+  out is `grep` before editing a `kprintf`.
+
+- **It failed closed, and that is the only reason this was cheap.** An anchored
+  expression that stops matching produces an empty answer, and the check treats
+  empty as failure. The same fault in the other direction -- a looser pattern
+  that matched something wrong -- would have gone on reporting `pass` about
+  preemption nobody was measuring any more, on every SMP path, indefinitely.
+  **This is the shape of KF-247 with the sign flipped**, and it is the good sign.
+
+- **Fixed:** `ticks.*$`. The expression wanted the number and had no business
+  insisting the line ended there. Verified by feeding it both the new
+  `running, ... , idle-for-this-cpu` line and the `ready` line beside it: it
+  takes the first and ignores the second, which is what it always meant.
+
+- **Status:** fixed, kernel 0.5.0. No kernel code changed -- the kernel was
+  right and its reader was not.
+
 ### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
+
+[#534](https://github.com/neogentrics/ReconOS/issues/534)
+
+> ### Narrowed, 18 September 2026, and it is not the idle path
+>
+> The entry below blames the idle path. **That was wrong**, and it is left
+> standing above this note because the reasoning that produced it is the
+> reasoning somebody else would repeat.
+>
+> **The discriminator is a user program, not an idle machine.** Counting
+> completed sleeps in the same kernel, same command, one word apart:
+>
+> ```
+> with the first screen : 1
+> with noinit           : 4
+> ```
+>
+> `noinit` is the only difference, and all it does is not start `recon-init`.
+> A machine that runs no user program sleeps and wakes indefinitely; a machine
+> that starts one stops after the first sleep. So the idle path is a bystander
+> -- it was suspect only because "the machine has gone quiet" and "the first
+> program has started" happen at nearly the same moment, and I took the first.
+>
+> **The thread table at the moment it wedges**, printed from inside the
+> sleeper immediately after its first sleep returns:
+>
+> ```
+> thread 0  : boot,       ready,   188 ticks
+> thread 31 : recon-init, ready,     0 ticks
+> thread 30 : logport,    running,   0 ticks
+> thread 2  : kworker,    finished,  1 ticks
+> thread 1  : idle-000,   ready,     4 ticks
+> ```
+>
+> **`recon-init` is READY and has had zero ticks.** It has never been given the
+> processor. `pick_next` takes a thread only when
+> `t->state == THREAD_READY && t->off_cpu` and its `idle_for` and `pinned_to`
+> allow this processor -- so a thread that is READY and never picked is either
+> not `off_cpu`, or is being passed over for a reason the summary does not
+> show. Both the boot thread and `idle-000` are marked idle-for-this-processor
+> and are last resorts, so with a program *ready*, the picker believes there is
+> work and the two waiters are skipped.
+>
+> That is a **scheduling** fault, and it is a much better place to look than
+> the timer wheel: the sleeper's timer fires correctly (`timer_next_deadline`
+> was observed returning the right deadline, 107 ms out, and the idle path
+> armed it).
+>
+> **Adding a `kprintf` to `power_idle_wait` makes it go away** -- four sleeps
+> complete instead of one. So it is timing-sensitive, which is consistent with
+> a race around a thread becoming runnable rather than with a wrong constant.
+>
+> **Its likely relative is KF-150** -- *about one boot in sixty, a user program
+> does not finish, and nothing says why* -- which has been open since before
+> any of this and is a user program not being run. That is the same sentence.
+>
+> **Deliberately not patched.** The fix belongs in `pick_next` or in whatever
+> sets `off_cpu`, and the scheduler is the one file in this tree where a wrong
+> guess produces intermittent faults nobody can attribute -- KF-150 may already
+> be one. The evidence above is worth more than a patch written from it in the
+> same hour.
+>
+> **That next step is done, and it eliminated its own hypothesis.**
+> `sched_print_summary` now prints whether a READY thread is actually pickable
+> and whether it is an idle thread, and the wedge re-run says:
+>
+> ```
+> thread 0  : boot,       ready,  195 ticks, idle-for-this-cpu
+> thread 31 : recon-init, ready,    0 ticks
+> thread 30 : logport,    running,  0 ticks
+> thread 1  : idle-000,   ready,    4 ticks, idle-for-this-cpu
+> ```
+>
+> `recon-init` carries **neither** marker: it is READY, it *is* `off_cpu`, and
+> it is not an idle thread. So it is fully eligible and `pick_next` should
+> return it on the next call. **It is not a picker-eligibility fault**, which
+> was the leading candidate an hour ago and is now ruled out by one word of
+> output.
+>
+> What remains is the program's **lifetime**: `noinit` -- which differs only by
+> not starting it -- sleeps indefinitely, so it is `recon-init` running and
+> exiting that breaks the sleeper, not its existing. The next thing to look at
+> is teardown: `timer_sleep_ns` keeps its `struct sleeper` and `struct timer`
+> **on the caller's stack**, and a timer still filed against freed or corrupted
+> memory is a callback writing somewhere it does not own. KF-209 was a teardown
+> freeing pages it should not have, in this same path.
+>
+> Then re-measure KF-150 -- *about one boot in sixty, a user program does not
+> finish* -- against whatever it turns out to be.
+
 
 [#534](https://github.com/neogentrics/ReconOS/issues/534)
 
@@ -9643,6 +9855,302 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
+
+[#496](https://github.com/neogentrics/ReconOS/issues/496)
+
+> ### A third sighting, 18 September 2026 — and it stops being "intermittent"
+>
+> Reported by the **graphics session**, from their own matrix run, on a branch
+> whose only changes are `intel_modeset.c`, a script, docs and a badge. They
+> took no number because the prefix is this track's, and they were right to
+> report it rather than sit on it.
+>
+> ```
+> a rename survives the power going out       FAILED
+>       proving the checker first:
+>           checksum: caught
+>           unallocated: caught
+>           torn: caught
+>
+>       round 1 (cut at 271ms):
+>           unreadable no valid superblock
+>
+>     6 cuts inside a rename on x86_64: 1 inconsistent.
+> ```
+>
+> **The checker proved itself on all three fault shapes in the same run**, so
+> this is not a broken reader — which is the first thing that would have to be
+> ruled out and was, without being asked.
+>
+> Three sightings, three different cut moments: **1115 ms** (matrix 57),
+> **904 ms** (matrix 70), **271 ms** (theirs). One round of six each time. That
+> is not one unlucky instant; it is a window that exists across the whole write
+> sequence.
+>
+> #### The argument that changes what this entry is
+>
+> All three happened on a **contended machine**. Theirs had four
+> `verify-kernel.sh` processes from the `ReconOS-matrix` worktree running
+> against it — this session's — and its first attempt failed `clock and tick`
+> at **14 Hz against an expected 100**, which is the starvation signature.
+>
+> The easy conclusion is *the harness is flaky under load*. They refused it, and
+> the refusal is the most useful sentence anybody has written about this bug:
+>
+> > **A window that only opens under load is still a window.** A real power cut
+> > does not wait for the machine to be idle. If anything, a starved host is a
+> > better model of a laptop losing power mid-save than an idle one is.
+>
+> That is correct and it inverts the reading. Contention is not an excuse for
+> the failure; **contention is the test condition that finds it.** A filesystem
+> whose crash consistency holds only when nothing else is happening is a
+> filesystem that has not been tested, and this rig has been quietly grading it
+> on the easy case.
+>
+> #### And it explains why two reproduction attempts failed
+>
+> KF-250 records the same caveat from the other side: *the load I reproduced was
+> the wrong load.* Six CPU spinners were run against `install-then-boot-test.sh`
+> and it passed twice; twelve plain boots six at a time found nothing. **Spinning
+> CPUs is not disk contention**, and four concurrent matrices — each formatting
+> and writing disk images — is.
+>
+> So the reproduction to attempt is not "a busy machine" but **"a machine whose
+> disk is busy"**, and the cheapest version of it is to run
+> `rename-crash-test.sh` beside something doing heavy I/O rather than beside
+> something burning CPU.
+>
+> #### One operational fact this surfaced — and the first version of it, written here, was wrong
+>
+> Three matrices were running at once when the graphics session saw 14 Hz. I
+> wrote that `RECON_TREE_LOCK` makes the lock per-worktree and that its
+> granularity is wrong for the scarce resource. **That is backwards**, and the
+> graphics session corrected it with the line itself:
+>
+> ```sh
+> LOCKFILE=${RECON_TREE_LOCK:-/tmp/reconos-kernel-tree.lock}
+> ```
+>
+> **The default is one path for the whole machine.** A session that leaves the
+> variable alone serialises with every other session that leaves it alone. The
+> granularity is right by design; it is being *overridden* — and this session
+> is one of the two overriding it:
+>
+> ```
+> ReconOS-matrix    RECON_TREE_LOCK=/tmp/reconos-matrix-tree.lock   <- mine
+> ReconOS-network   RECON_TREE_LOCK=/tmp/reconos-network-tree.lock
+> ReconOS-graphics  unset -> the shared default
+> ```
+>
+> So the starvation is not a missing mechanism somebody has to build. It is two
+> sessions opting out of one that already works, and the fix is a line each
+> rather than a design.
+>
+> **Why this session set it** is in `reference-reconos-matrix-worktree`: so a
+> matrix could run while the other session edited the kernel worktree. That
+> reason is still sound for *trees* — two worktrees genuinely are two trees —
+> and it silently gave up the machine-wide serialisation that came free with the
+> default. The cost was recorded as "processor contention"; the bill is a
+> filesystem test failing on a starved host.
+>
+> Their failure images are kept at
+> `/home/neoge/reconos-verify-failures/20260918-054447`.
+>
+> #### The first hunt with the right idea and the wrong instrument
+>
+> 18 September, acting on the reading above: ten rounds of six cuts, run
+> deliberately while the graphics session's matrix held the machine. Every round
+> printed `contended=yes`, taken from `fuser` on the shared lock. All sixty cuts
+> came back clean.
+>
+> **The result is worthless and the reason is the entry.** Load average during
+> those sixty cuts was **1.78 on sixteen cores** -- about eleven per cent. Their
+> run was in a serial phase with one guest, so the lock was held and the machine
+> was idle.
+>
+> **A held lock means a matrix is running. It says nothing about whether the
+> machine is busy**, and an entire experiment was built on the two being the
+> same thing. So that is three failed reproductions on quiet machines, two of
+> them believed to be loaded at the time: six CPU spinners, twelve parallel
+> boots, and a lock file.
+>
+> This bug keeps producing the same fault in the people hunting it -- **a test
+> that reports the condition it wanted rather than the condition it had**, which
+> is the shape of KF-247, KF-250 and KF-259 in a different costume.
+>
+> #### The dose indicator was in the report all along
+>
+> The graphics session's failing run said `clock and tick` was running at
+> **14 Hz against an expected 100**. That is the kernel measuring its own
+> starvation, and it answers exactly the question the lock check was pretending
+> to: *is this machine actually starved?* It went unread twice.
+>
+> **So the condition to reproduce is not "another matrix is running" but "the
+> guest's own tick rate has collapsed"**, and any future attempt should establish
+> that before it starts cutting -- otherwise a clean sweep says nothing except
+> that the load was never built.
+>
+> #### The second hunt, and why this line of attack is closed for now
+>
+> The graphics session read the plan before the data and caught the same error
+> one level up: **14 Hz is a CPU-starvation number, measured inside the guest,
+> and the plan was to apply disk load.** An indicator on one axis and a variable
+> on another -- a mirror of the lock column. They were right, and the reality
+> turned out worse than their prediction in two further ways.
+>
+> **The load generator was CPU, not disk.** Eight `dd if=/dev/urandom ...
+> conv=fsync` writers sat at about 25 per cent CPU each. Generating sixty-four
+> megabytes of randomness is expensive; the write is cheap. So the second hunt
+> was a **CPU** load built by someone who had, minutes earlier, thrown out an
+> experiment for confusing two conditions.
+>
+> **And then I claimed the instrument was broken, which was false.** Retracted
+> in full, because it is the one conclusion here that would have cost somebody
+> else something: it removes a working gauge from everyone who reads this.
+>
+> The claim was that `/proc/diskstats` does not advance for writes under WSL2,
+> from this probe:
+>
+> ```
+> sectors written during a deliberate 200 MB fsync write: 0
+> ```
+>
+> **It advances perfectly well.** Measured properly, with the whole line printed
+> before and after rather than one field picked in advance:
+>
+> ```
+> $10 sectors_written   788942992 -> 789353000   delta 410008
+> ```
+>
+> 410,008 sectors of 512 bytes is 209.9 MB, which is the 200 MiB that was
+> written. `writes_completed` moved by 207, `ms_writing` by 173, `io_ticks` by
+> 88.
+>
+> **What produced the zero is the part worth keeping.** The awk program never
+> ran. Passed through `wsl.exe` into `bash -c "..."`, the field references were
+> consumed by the outer shells before awk saw them, and what arrived was:
+>
+> ```
+> awk: cmd. line:1: =="sdd"{print 0}
+> awk: cmd. line:1: ^ syntax error
+> ```
+>
+> `$3` became empty and `$10` became `0`. awk exited with a syntax error, the
+> command substitution captured an empty string, `$((b-a))` subtracted two empty
+> strings and produced **0** -- and the error itself went to `/dev/null`, by a
+> redirect I had written into the same line.
+>
+> So the figure was not a measurement of an idle disk. **It was a failed command,
+> silenced by its own author, whose empty output became a plausible number.**
+> That is the shape of KF-247, KF-250 and KF-259, produced by the person who had
+> written all three up the same day.
+>
+> Caught by the graphics session, who were right that the instrument works and
+> wrong about why -- they diagnosed an off-by-three field index, and the actual
+> cause was shell quoting eating the references. **Their conclusion was right and
+> their reasoning was not, which is why it still had to be measured rather than
+> accepted.**
+>
+> Two caveats on the gauge, theirs and worth keeping: `io_ticks` is coarse under
+> a virtual disk -- 88 ms of busy for a write that took far longer in wall clock
+> -- so it is usable as a *relative* dose between rounds and not as an absolute
+> utilisation. And it is the host's view of the virtual disk; what a guest
+> experiences is a layer further down. `sectors_written` is the trustworthy
+> field.
+>
+> #### Four instruments, four failures, in one hour
+>
+> | instrument | what it was believed to say | what it said |
+> |---|---|---|
+> | `fuser` on the shared lock | the machine is busy | a matrix process exists |
+> | `dd if=/dev/urandom` | disk load | CPU load |
+> | `/proc/diskstats` io_ticks | disk utilisation | it works -- my *reading* of it was a silenced syntax error |
+> | guest tick at 14 Hz | (correct, but) CPU starvation | measured on the wrong axis for this plan |
+>
+> **Every one was caught by measuring rather than by reasoning**, and three of
+> the four were caught only because somebody asked the next question instead of
+> accepting the previous answer. That is the whole method, and this bug keeps
+> finding people who stop one question early -- including, three times in one
+> hour, the person hunting it.
+>
+> #### What is actually established
+>
+> **Nothing about the bug.** Sixty cuts on a quiet machine and an aborted sweep
+> on a CPU-loaded one say only that the condition was never built. The three
+> sightings stand; the four reproduction attempts say nothing about them.
+>
+> #### What the experiment would have to be
+>
+> The graphics session's proposal, and it is the right one because it is the
+> only condition ever observed to produce this:
+>
+> **Run two or three matrices concurrently and sweep the cuts under them.** All
+> three sightings happened with three running. That saturates every axis at once
+> -- CPU, disk, and the I/O *pattern* that matters, which is many small metadata
+> commits with barriers rather than one sequential stream. It also cannot be
+> faked on this host, because the only workload whose disk load can be confirmed
+> is one whose effects are visible in the guests themselves.
+>
+> **Cost: roughly an hour of the machine, and it starves every other session
+> while it runs.** That is a decision about somebody's computer rather than a
+> technical call, so it waits to be asked for rather than being taken.
+>
+> One measured aside: `lsblk` reports `ROTA=1` for every disk here, including
+> the 1 TB. If that is real rather than a virtualisation artefact, seek time is
+> a variable and scattered concurrent commits contend far more sharply than one
+> stream -- which would help explain why several guests doing small commits
+> reproduce this and one process writing hard does not.
+>
+> #### A fourth sweep, sampled rather than assumed — and it is a quiet-machine sample too
+>
+> The graphics session's matrix ran the rename path on 18 September and came
+> back `6 cuts inside a rename on x86_64: 0 inconsistent`. Their run was holding
+> the shared lock throughout, so it would have been filed as *"clean under
+> contention, one matrix"* — which is the first hunt's error exactly.
+>
+> **They sampled instead of assuming**, every five seconds for the last eight
+> minutes of the run:
+>
+> ```
+> 93 samples   load: mean 0.59, max 0.98 on 16 cores  (~4%)
+>              disk: 780 MB written over the window, one 485 MB burst,
+>                    the rest near zero
+> reconfs section:  load 0.21..0.37, sectors_delta mostly 0-184
+> ```
+>
+> **So the fourth sweep is a fourth quiet-machine sweep**, not a fifth data
+> point at a different dose. It joins the pile rather than adding to it. Five
+> attempts now, all at roughly the same condition, and the three sightings stand
+> where they were.
+>
+> #### The finding that actually matters, and it is about the experiment rather than the bug
+>
+> **A single matrix writes 780 MB in eight minutes and almost all of it in one
+> 485 MB burst.** The load average across the same window averaged four per cent
+> of sixteen cores.
+>
+> That kills a design assumption nobody had stated. *"Run three matrices and
+> sweep the cuts under them"* sounds like applying a dose; it is really three
+> bursty sources that may or may not overlap, separated by long quiet gaps. A
+> sweep of sixty cuts under three concurrent matrices could easily place most of
+> its cuts **in the gaps** and come back clean for a reason having nothing to do
+> with whether the window exists.
+>
+> **So the concurrent-matrix run is only worth doing with per-cut instrumentation**:
+> record the `sectors_written` delta and the load across each individual cut, and
+> label every round by what it actually coincided with. Without that it is an
+> expensive way to generate another ambiguous clean sweep, and this entry already
+> has five of those.
+>
+> And read by address, with the field escaped for both shells, so it cannot
+> degrade into the silent zero that produced the retracted claim above:
+>
+> ```sh
+> awk -v d=sdd "\$3==d {print \$10}" /proc/diskstats
+> ```
+
+
+
 
 [#496](https://github.com/neogentrics/ReconOS/issues/496)
 

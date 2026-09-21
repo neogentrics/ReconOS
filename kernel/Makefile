@@ -207,6 +207,19 @@
 # ever written for 0.3.0, so this bump rests on the rule above rather than on a
 # checklist, and saying so is the honest version of stamping it.
 #
+# **0.5.0 on 18 September 2026: two network cards the kernel could not drive.**
+#
+# The network branch's own record is kept below, unedited, because it is their
+# work and their reasoning. What this line adds is the merge's arithmetic.
+#
+# They asked for a minor and said why: *the capability is "the kernel can drive
+# a network card that is not virtio", and it arrives once* -- one bump, not one
+# per driver. That is right, and their branch reached 0.3.7 from a base of
+# 0.2.49 while this one reached 0.4.0 independently. A minor zeroes the patch
+# either way, so the two sequences lay end to end at **0.5.0** rather than
+# interleaving; both sets of entries stand and mean what they say.
+#
+#
 # **0.3.5 on 17 September 2026: five patches from the network track, and
 # deliberately not a minor.**
 #
@@ -335,7 +348,23 @@
 # The price is affordable and the alternative is not. A version that lags the
 # tree is a version nobody can use to ask *which* tree, and the whole point of
 # raising it per fix is that somebody later can.
-VERSION := 0.4.4
+#
+# **0.5.4 on 20 September 2026: 0.5.0 is theirs, and four patches land on it.**
+#
+# The kernel session merged this branch at `3c73212` and called the result
+# **0.5.0** — one minor for the capability rather than one per driver, which is
+# the right arithmetic and is theirs to make. A minor zeroes the patch, so the
+# two sequences lay end to end exactly as their signal says.
+#
+# **What their 0.5.0 does not contain is the four fixes made after that commit**,
+# and they are what the .4 counts: NW-010, NW-011, NW-012 and NW-014. Verified
+# rather than assumed before this number was chosen — `netdev_primary` appears
+# zero times in their `netdev.c` and NW-010 has no entry in their register.
+#
+# NW-013 and NW-015 add nothing here. NW-013 is open, and it is the boot track's
+# file to change. NW-015 changed `README.md` alone, so the binary was identical
+# and a number would have implied a difference that was not there.
+VERSION := 0.5.4
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
