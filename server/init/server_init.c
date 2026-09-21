@@ -142,6 +142,22 @@ struct server_facts {
 	 * at all: the page and the JSON endpoint must not be able to disagree,
 	 * and two readers of one fact eventually become two facts. */
 	long long clock_offset_ms;
+
+	/*
+	 * The round trip, and with it the real uncertainty.
+	 *
+	 * Refused until 0.34.0, and the refusal was right at the time: this
+	 * machine's two timestamps both landed in the same second, so the
+	 * computed delay was always zero and printing it would have been
+	 * reporting quantisation as a measurement. VF-021.
+	 *
+	 * KF-251 gave the wall clock a fraction and it is measured again here
+	 * rather than assumed -- see VF-040. The true offset is within half
+	 * this of the measured one, which is what an uncertainty is, and it is
+	 * two orders of magnitude smaller than the second it replaces.
+	 */
+	long long clock_delay_ms;
+
 	int       clock_stratum;
 	int       clock_known;
 };
@@ -439,10 +455,12 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	/*
 	 * The clock, in words, with its real uncertainty.
 	 *
-	 * **Never to the millisecond it cannot support.** `SYS_WALLTIME`
-	 * counts whole seconds -- VF-021 -- so this machine's contribution to
-	 * the offset is coarse, and a page that printed "1174 ms" would be
-	 * claiming a precision the hardware underneath it does not have.
+	 * **To the precision it can support and no further.** Until 0.34.0
+	 * that was a whole second, because `SYS_WALLTIME` counted whole
+	 * seconds -- VF-021 -- and a page printing "1174 ms" would have been
+	 * claiming what the hardware underneath it could not give. KF-251
+	 * changed the clock, VF-040 measured the change, and the bound is now
+	 * half the round trip, which is what it should always have been.
 	 */
 	if (!f->clock_known) {
 		snprintf(clock_said, sizeof(clock_said),
@@ -451,9 +469,12 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 		long long off = f->clock_offset_ms;
 
 		snprintf(clock_said, sizeof(clock_said),
-		         "about %lld s %s (+/- 1 s), from a stratum %d server",
-		         (off >= 0 ? off : -off) / 1000,
-		         off >= 0 ? "behind" : "ahead", f->clock_stratum);
+		         "about %lld ms %s, give or take %lld -- half a round "
+		         "trip of %lld ms to a stratum %d server",
+		         off >= 0 ? off : -off,
+		         off >= 0 ? "behind" : "ahead",
+		         f->clock_delay_ms / 2, f->clock_delay_ms,
+		         f->clock_stratum);
 	}
 
 	/* Six bytes out for one in, worst case -- a name of nothing but quotes.
@@ -717,15 +738,21 @@ static int handle_status(const struct http_request *r, const char *body,
 	              * a machine whose clock is right and one that has never
 	              * asked must not report the same thing.
 	              *
-	              * `clock_uncertainty_ms` is 1000 and is not a guess. See
-	              * VF-021: `SYS_WALLTIME` counts whole seconds, so this
-	              * machine's own two timestamps put about a second around
-	              * any offset it computes. A consumer that rounds to the
-	              * nearest second is reading this correctly.
+	              * `clock_uncertainty_ms` was 1000 until 0.34.0 and was
+	              * not a guess then either: `SYS_WALLTIME` counted whole
+	              * seconds, so this machine's own two timestamps put about
+	              * a second around any offset it computed -- VF-021.
+	              *
+	              * KF-251 gave the clock a fraction, VF-040 measured that
+	              * it had, and the number is now **half the round trip**,
+	              * which is what an NTP uncertainty is. It is reported
+	              * beside the delay it comes from rather than alone, so a
+	              * consumer can see where it came from.
 	              */
 	             "\"clock_measured\":%s,"
 	             "\"clock_offset_ms\":%lld,"
-	             "\"clock_uncertainty_ms\":1000,"
+	             "\"clock_delay_ms\":%lld,"
+	             "\"clock_uncertainty_ms\":%lld,"
 	             "\"clock_stratum\":%d}\n",
 	             name, arch,
 	             f->machine.processors_found, f->machine.processors_online,
@@ -734,7 +761,8 @@ static int handle_status(const struct http_request *r, const char *body,
 	             f->machine.page_size,
 	             f->served, f->bytes_out,
 	             f->clock_known ? "true" : "false",
-	             f->clock_offset_ms, f->clock_stratum);
+	             f->clock_offset_ms, f->clock_delay_ms,
+	             f->clock_delay_ms / 2, f->clock_stratum);
 
 	/* 500, not 413. The request was fine; this server could not fit its own
 	 * answer into its own buffer. See `HTTP_EINTERNAL` in `http.h`. */
@@ -3015,36 +3043,51 @@ static int clock_poll(void *ctx)
 	}
 
 	/*
-	 * **The round trip is not reported, and that is a finding rather than
-	 * an omission.**
+	 * **The round trip is reported, and for three versions it was not.**
 	 *
-	 * `SYS_WALLTIME` is declared in nanoseconds and counts whole seconds.
-	 * Measured: five reads in a row gave 1789646397000000000, low nine
-	 * digits zero every time. So both of this machine's two timestamps in
-	 * the exchange land on the same second, the computed round trip is
-	 * zero, and printing "round trip 0 ms" to a server on the far side of
-	 * the internet would be reporting quantisation as a measurement.
+	 * 0.20.0 refused to print it and was right to. `SYS_WALLTIME` was
+	 * declared in nanoseconds and counted whole seconds -- five reads in a
+	 * row gave 1789646397000000000, low nine digits zero every time -- so
+	 * both of this machine's timestamps landed in the same second, the
+	 * delay computed to zero, and "round trip 0 ms" to a server on the
+	 * other side of the internet would have been quantisation wearing the
+	 * clothes of a measurement. VF-021, and the comment here ended: *a
+	 * finer wall clock makes this useful; nothing else has to change.*
 	 *
-	 * The offset survives because two of its four terms are the *server's*
-	 * timestamps, which are fine-grained -- which is why it reads 1616 ms
-	 * rather than a whole number of seconds. What it does not survive is
-	 * precision: this machine's two coarse readings put roughly a second
-	 * of uncertainty around it, and the line says so rather than implying
-	 * millisecond accuracy it cannot have.
+	 * KF-251 gave the wall clock a fraction, and nothing else did have to
+	 * change. **Measured rather than taken on trust**, which is the only
+	 * reason this line moved -- the same five-read probe, on the merged
+	 * kernel:
 	 *
-	 * Filed in `docs/SIGNALS.md`. A finer wall clock makes this useful;
-	 * nothing else has to change.
+	 *     1789953985098800091
+	 *     1789953985147920228   <- 49 ms later
+	 *     1789953985203703650   <- 56 ms
+	 *     1789953985264110760   <- 60 ms
+	 *     1789953985334383524   <- 70 ms
+	 *
+	 * **So the uncertainty line stays and its bound changes**, which is
+	 * what the kernel session asked for when they took the fault. It is no
+	 * longer a second imposed by this machine's own clock; it is half the
+	 * round trip, which is what an NTP uncertainty has always been and
+	 * what this could not claim before. VF-040.
+	 *
+	 * One thing the bound still does not cover, said here rather than
+	 * implied: the offset is as measured at the last poll, and this
+	 * machine's monotonic counter is not invariant on this hardware -- the
+	 * kernel says so at boot -- so it drifts with clock speed between
+	 * polls. The number is right when it is taken and ages.
 	 */
 	FACTS.clock_offset_ms = sample.offset_ms;
+	FACTS.clock_delay_ms = sample.delay_ms;
 	FACTS.clock_stratum = sample.stratum;
 	FACTS.clock_known = 1;
 
 	snprintf(line, sizeof(line),
-	         "  the clock: %s by about %lld ms (+/- a second, this"
-	         " machine's clock counts whole ones), stratum %d\n",
+	         "  the clock: %s by about %lld ms (+/- %lld, half a round trip"
+	         " of %lld), stratum %d\n",
 	         sample.offset_ms >= 0 ? "behind" : "ahead",
 	         sample.offset_ms >= 0 ? sample.offset_ms : -sample.offset_ms,
-	         sample.stratum);
+	         sample.delay_ms / 2, sample.delay_ms, sample.stratum);
 	say(line);
 	return SERVICE_OK;
 }

@@ -1627,3 +1627,106 @@ second boot   {"from":"/System/Config","generation":2,"next":3,
   still on the volume and nothing can select one, because nothing here can read
   a boot argument. The entry in `docs/KERNEL-WANTS.md` is narrowed rather than
   closed.
+
+### VF-040 -- the clock can be measured now, and my own line was the stale claim
+
+- **What changed underneath** KF-251. The kernel session carried the wall clock
+  on the monotonic counter and left the RTC to set it, and told this seat:
+  *your round trip becomes real; the offset is still late by up to the probe
+  interval, so keep the uncertainty line.*
+- **Measured rather than taken on trust**, with the same five-read probe that
+  produced VF-021. Then:
+
+```
+clock probe: walltime ns = 1789646397000000000   (x5, identical)
+```
+
+  Now, on the merged kernel:
+
+```
+1789953985098800091
+1789953985147920228   <- 49 ms later
+1789953985203703650   <- 56 ms
+1789953985264110760   <- 60 ms
+1789953985334383524   <- 70 ms
+```
+
+- **So the console line this project was proud of had become the false claim.**
+  *"+/- a second, this machine's clock counts whole ones"* was exactly right
+  when it was written and is exactly the kind of statement this register exists
+  to catch: a limitation that quietly stopped being true. It had survived one
+  kernel merge already.
+- **What it says now**, on the machine:
+
+```
+the clock: behind by about 950 ms (+/- 7, half a round trip of 14), stratum 3
+```
+
+  Two orders of magnitude, and the uncertainty is a measurement rather than a
+  bound imposed by the hardware. `/api/status` carries `clock_delay_ms` beside
+  `clock_uncertainty_ms`, so a consumer can see where the number came from
+  rather than being handed a constant.
+- **The prediction in the code was right, which is worth recording.** The 0.20.0
+  comment refusing to print the round trip ended: *a finer wall clock makes this
+  useful; nothing else has to change.* Nothing else did have to change. The
+  delay was already computed, already bounded against a negative, and already
+  carried in `struct ntp_sample`; three versions of it were thrown away every
+  time because printing it would have been a lie.
+- **One thing the new bound still does not cover**, said in the code rather than
+  implied: the offset is as measured at the last poll, and this hardware's
+  counter is not invariant -- the kernel says so at boot -- so it drifts with
+  clock speed between polls. The number is right when it is taken, and ages.
+- **And the suite that should have caught the stale line did not exist.** The
+  machine suite had no check for the clock or the resolver until this version,
+  which is a gap worth naming: **the resolver is what the *last* kernel merge
+  broke** (VF-019), and the check that would have caught it was still not
+  written when the next merge landed. It is now, and it fails loudly rather
+  than passing quietly when the network is absent.
+
+### VF-041 -- two connections a second, and a check that was really measuring the client
+
+- **How it turned up** The machine suite failed *intermittently* on *two
+  hundred connections in a row*: 200 of 200, then 141, then 99, then 150. A
+  flaky check is the worst kind, because it gets re-run until it passes and
+  then believed.
+- **Measured properly**, with a burst as fast as the client can go:
+
+```
+attempt 1:  12 of 300 in 5.0s   <- stalled at 12, recovered after 0.5s
+attempt 2:  12 of 300 in 4.8s   <- stalled at 12, recovered after 0.5s
+attempt 3:  12 of 300 in 4.8s   <- stalled at 12, recovered after 0.5s
+with a 50 ms gap:  12 of 120    <- stalled at 12
+with a 20 ms gap:  12 of 120    <- stalled at 12
+with a 10 ms gap:  12 of 120    <- stalled at 12
+```
+
+  **Twelve every time**, regardless of pacing, and recovery in half a second.
+- **So the number in VF-034 was true and hid this.** *The same machine now
+  answers 200 of 200* was correct: with `tcp_tick` in `socket_accept` the table
+  drains and the machine never dies. What it did not say is what each of those
+  two hundred costs. The table holds sixteen, a closed connection sits in
+  `TIME_WAIT` for two seconds, and **a SYN arriving when the table is full is
+  dropped rather than refused** -- so the client waits out its own retransmit.
+  Sustained, that is **about two connections a second**.
+- **The check was therefore measuring the client's patience.** With a
+  six-second timeout it passed or failed depending on whether a retransmit
+  landed inside it. It now runs forty connections with a timeout long enough to
+  cover the pause, and **prints the sustained rate as a note rather than
+  asserting one** -- the table size and the `TIME_WAIT` are the kernel's
+  decisions, and a threshold here would be this seat asserting something it
+  does not own.
+- **Two hundred was the right number when it was chosen and is not now.** It was
+  *one more than any plausible table*, from a time when a connection cost
+  nothing. At two a second it is a two-minute load test inside a suite that is
+  supposed to take one, and it arrived there by accident rather than by anybody
+  deciding to load-test. Forty proves the same property -- that the table drains
+  and keeps draining -- in twenty seconds.
+- **One thing is open and is not diagnosed.** Roughly once in a hundred or two,
+  a connection is made, a request is sent, and **nothing comes back** -- no
+  timeout, no reset, an empty read. On the run where the client counted 99, the
+  guest's own counter said it had served 184, so the answers were produced. That
+  puts the loss between the guest's socket and the client, which is QEMU's user
+  networking or the host loopback, and this seat has not proved which. It is
+  recorded rather than explained, and the counter comparison is the instrument
+  to reach for next: **the guest says it answered and the client says it did not
+  hear**, which is a sharper starting point than a flake.

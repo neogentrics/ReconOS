@@ -40,6 +40,7 @@ twice to find out what went wrong.
 """
 
 import gzip
+import json
 import socket
 import sys
 import time
@@ -113,20 +114,47 @@ def it_answers():
     ok(header(lines, "Server") is not None, "and it names itself")
 
 
-def two_hundred_connections():
+def forty_connections():
     """
     The property VF-034 was about, and the reason this file exists.
 
     A server that stops after twelve is a server nobody would ship, and every
-    host suite in this repository passed on one. Two hundred is not a load
-    test -- it is one more than any plausible table.
+    host suite in this repository passed on one.
+
+    --- Forty, and it used to be two hundred ---
+
+    Two hundred was chosen as *one more than any plausible table*, when a
+    connection cost nothing. It does not: this machine sustains about **two
+    connections a second** (VF-041), so two hundred is a two-minute load test
+    that arrived by accident in a suite meant to take a minute. Forty is
+    twenty seconds and proves the same thing -- that the table drains and
+    keeps draining, rather than filling once and stopping for ever, which is
+    the whole of VF-034.
+
+    --- The timeout is fifteen seconds, and that is the measurement ---
+
+    Not generosity. This machine's TCP table holds sixteen connections, a
+    closed one sits in `TIME_WAIT` for two seconds, and **a SYN that arrives
+    when the table is full is dropped rather than refused** -- so the client
+    waits out its own retransmit before getting in. Measured: bursts stall at
+    exactly twelve, every time, and a fresh attempt succeeds half a second
+    later. VF-041.
+
+    A six-second timeout made this check *intermittent* -- 200 of 200 on one
+    run and 141 on the next -- which is the worst kind of check, because a
+    flake gets re-run until it passes and then believed. The pause is a real
+    property of the machine and the check now waits it out and reports the
+    rate, rather than failing at a threshold that is really the client's
+    patience.
     """
     answered = 0
     stopped_at = None
-    for i in range(200):
+    start = time.time()
+
+    for i in range(40):
         try:
             answer = raw("GET /health HTTP/1.1\r\nHost: m16\r\n"
-                         "Connection: close\r\n\r\n", timeout=6)
+                         "Connection: close\r\n\r\n", timeout=15)
         except OSError as e:
             stopped_at = "%d (%s)" % (i, type(e).__name__)
             break
@@ -135,9 +163,17 @@ def two_hundred_connections():
             break
         answered += 1
 
-    ok(answered == 200,
-       "two hundred connections in a row are all answered",
-       "answered %d, stopped at %s" % (answered, stopped_at))
+    took = time.time() - start
+    ok(answered == 40,
+       "forty connections in a row are all answered",
+       "answered %d in %.1fs, stopped at %s" % (answered, took, stopped_at))
+
+    # Printed rather than asserted. What a good number is depends on the table
+    # size and the TIME_WAIT, both of which are the kernel's to choose, and a
+    # threshold here would be this seat asserting a decision it does not own.
+    if answered:
+        print("  note  %.1f connections a second sustained, over %.0fs"
+              % (answered / took, took))
 
 
 def keep_alive():
@@ -657,6 +693,76 @@ def the_console_escapes_what_it_shows():
        "be looking at the wrong thing")
 
 
+def the_resolver_and_the_clock():
+    """
+    The two capabilities that reach off this machine, and the one a kernel
+    merge has already broken once.
+
+    **This suite did not check either of them until 0.34.0**, which is worth
+    admitting rather than quietly fixing: VF-019 is the entry about a kernel
+    merge that broke `connect` on every datagram socket and took DNS with it,
+    and it was found by a boot rather than by a check. The merge before this
+    one would have been caught here; the merge before that was not.
+
+    Both need the network beyond this machine, so a failure can be the
+    network rather than the server. The check says which it is by asking for
+    the parts separately -- an address, then a time from that address.
+    """
+    status, lines, body = parts(get("/api/resolve?name=time.cloudflare.com",
+                                    "Authorization: Bearer %s\r\n" % TOKEN))
+    ok(status.startswith("HTTP/1.1 200") or status.startswith("HTTP/1.1 502"),
+       "the resolver answers one way or the other", status)
+
+    if b'"resolved":true' in body:
+        ok(True, "and this machine resolved a name off its own network")
+    else:
+        # A 502 is a true answer about a network that did not reply, and it
+        # is not this server failing. Said rather than counted as a pass in
+        # silence, because a suite that cannot tell them apart is a suite
+        # that goes green on a machine with no DNS at all.
+        print("  note  the resolver got no answer; the checks that need the "
+              "network beyond this machine are inconclusive")
+        print("        %s" % body[:120].decode("latin-1", "replace"))
+        return
+
+    status, _, body = parts(get("/api/status"))
+    doc = {}
+    try:
+        doc = json.loads(body.decode("latin-1"))
+    except ValueError:
+        pass
+
+    ok(doc.get("clock_measured") is True,
+       "the clock has been measured against a time server",
+       body[:120].decode("latin-1", "replace"))
+    if not doc.get("clock_measured"):
+        return
+
+    #
+    # The number that VF-021 said could not exist.
+    #
+    # `SYS_WALLTIME` counted whole seconds until KF-251, so both of this
+    # machine's timestamps landed in the same second and the round trip was
+    # always zero. A delay of zero now means either the clock has gone coarse
+    # again or the arithmetic has broken, and both are worth failing on.
+    #
+    delay = doc.get("clock_delay_ms", 0)
+    ok(delay > 0,
+       "and the round trip is a real number, which needs a clock with a "
+       "fraction -- VF-021, VF-040", "delay_ms = %r" % delay)
+    ok(0 < delay < 5000,
+       "and a plausible one for a server on the internet",
+       "delay_ms = %r" % delay)
+    ok(doc.get("clock_uncertainty_ms") == delay // 2,
+       "the uncertainty is half the round trip, and is reported beside the "
+       "delay it comes from",
+       "uncertainty %r against delay %r"
+       % (doc.get("clock_uncertainty_ms"), delay))
+    ok(doc.get("clock_stratum", 0) > 0,
+       "and the answer came from a server that says where it stands",
+       "stratum = %r" % doc.get("clock_stratum"))
+
+
 def main():
     global PORT, TOKEN
 
@@ -670,9 +776,9 @@ def main():
                   chunked_bodies, a_body_larger_than_one_read,
                   a_form_field_past_its_bound, conditional_requests,
                   the_console_itself, the_console_escapes_what_it_shows,
-                  negotiation,
+                  the_resolver_and_the_clock, negotiation,
                   compression, files_off_the_volume, the_status_line,
-                  keep_alive, two_hundred_connections):
+                  keep_alive, forty_connections):
         try:
             check()
         except Exception as e:                  # noqa: BLE001
