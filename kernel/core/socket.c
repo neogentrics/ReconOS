@@ -277,6 +277,16 @@ bool socket_connect(struct socket *s, ipv4_addr addr, u16 port)
 	s->remote_ip = addr;
 	s->remote_port = port;
 
+	/*
+	 * The local address is set inside the stream branch below, by the
+	 * kernel session's own version of this fix -- KF-255.
+	 *
+	 * This seat carried a copy of it here, outside that branch, from
+	 * 0.19.1 until the 0.5.0 merge, when git kept both because they sit in
+	 * different places. Theirs is the one to keep: it is immediately
+	 * before `tcp_open`, which is the call the address has to be right
+	 * for, and it is the one with the number.
+	 */
 	if (s->type == SOCK_STREAM) {
 		/*
 		 * **The local address has to be the real one before the
@@ -344,23 +354,23 @@ enum socket_progress socket_connect_progress(struct socket *s)
 	if (!s)
 		return SOCKET_PROGRESS_FAILED;
 
-	/*
-	 * **A datagram has no handshake, so a connected one is finished.**
+	/* **A datagram has no handshake, so a connected one is finished.**
 	 *
-	 * This used to read `s->type != SOCK_STREAM` as a failure, which
-	 * conflated *this socket cannot be asked* with *this socket did not
-	 * make it*. `sys_connect` asks every socket, so `connect` on a UDP
-	 * socket answered `SYS_EIO` immediately after `socket_connect` had
-	 * succeeded and set `connected`.
+	 * This condition used to be folded into the failure test above --
+	 * `!s || s->type != SOCK_STREAM || s->conn < 0` -- which made every
+	 * datagram socket report as having lost. KF-244 introduced that while
+	 * fixing the opposite fault for streams, and it took `SYS_CONNECT` away
+	 * from the only shape of UDP a program can use.
 	 *
-	 * That broke every connected datagram -- which is the only shape of UDP
-	 * a program can use, as `socket_file.c` says. Found by the server
-	 * role's resolver, which had been answering with real addresses the
-	 * day before and stopped on the first boot after the merge.
-	 */
+	 * *This socket cannot be asked* and *this socket was asked and failed*
+	 * are different facts, and one line said both. Found by the server
+	 * session on their DNS resolver, which went `resolved:false` on the
+	 * first boot after the merge and came back with three controls holding
+	 * it steady -- inbound TCP still answering, DHCP still completing, and
+	 * the same address on both boots. */
 	if (s->type != SOCK_STREAM)
 		return s->connected ? SOCKET_PROGRESS_DONE
-		                    : SOCKET_PROGRESS_FAILED;
+				    : SOCKET_PROGRESS_FAILED;
 
 	if (s->conn < 0)
 		return SOCKET_PROGRESS_FAILED;

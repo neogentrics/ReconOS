@@ -125,6 +125,13 @@ AREA = {
     'KF-198': 'storage', 'KF-199': 'kernel', 'KF-200': 'build', 'KF-201': 'network', 'KF-202': 'build',
     'KF-203': 'display', 'KF-204': 'kernel',
     'KF-205': 'build',
+
+    # The graphics track, from 15 September 2026. All 'display': they are
+    # faults in the display layer and the drivers under it, which is what that
+    # label already means on the desktop side.
+    'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
+    'GX-004': 'display', 'GX-005': 'display', 'GX-006': 'display',
+    'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display', 'GX-010': 'display',
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',
@@ -200,6 +207,22 @@ AREA = {
     'KF-242': 'kernel',
     'KF-243': 'kernel',
     'KF-244': 'network',
+    'KF-245': 'startup',
+    'KF-246': 'storage',
+    'KF-247': 'docs',
+    'KF-248': 'kernel',
+    'KF-249': 'kernel',
+    'KF-250': 'network',
+    'KF-251': 'kernel',
+    'KF-252': 'kernel',
+    'KF-253': 'kernel',
+    'KF-254': 'network',
+    'KF-255': 'network',
+    'KF-256': 'storage',
+    'KF-257': 'network',
+    'KF-258': 'kernel',
+    'KF-259': 'build',
+    'KF-260': 'build',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
@@ -245,6 +268,19 @@ def is_fixed(body):
     the only form that can say a thing this register needs to say. *Half fixed*
     reads as open, because it is -- KF-127 says exactly that and means it.
     """
+    # The third state, and it is matched as a whole phrase on purpose.
+    #
+    # Some entries are neither open nor fixed: KF-225 is a question that was
+    # asked and answered, recorded so nobody re-derives it, with nothing
+    # broken. Before this it read as open for ever -- the checker said so on
+    # every run, which is how a check trains people to ignore it.
+    #
+    # `not a bug` in full, never a prefix. `startswith('not')` would swallow
+    # **Status:** not fixed and quietly close the issue for a live fault, which
+    # is the one mistake this function must not make.
+    if re.search(r'\*\*Status:\*\*\s*\**\s*not a bug\b', body, re.I):
+        return True
+
     said = re.search(r'\*\*Status:\*\*\s*\**\s*([A-Za-z]+)', body)
     if said:
         return said.group(1).lower().startswith('fix')
@@ -288,27 +324,103 @@ def existing_titles():
     return titles
 
 
+# An entry heading, and every way one has actually been typed.
+#
+# `--` was added after fourteen entries written that way were *not seen* --
+# not skipped with a warning, not counted as unparsed, not reported at all. A
+# bare `-` is added now after twenty-one more went the same way (KF-247). That
+# is the same fault twice, so the spellings are written once here and used by
+# everything in this file that needs to know what an entry looks like.
+#
+# The separator is matched *after* the number, never inside it. A pattern
+# allowing a bare `-` with optional spaces on either side will happily match
+# the hyphen in `KF-246` itself, given the chance -- and the chance is a regex
+# that does not say where to start.
+# What an entry's identifier looks like -- **two capitals and a number, not a
+# list of the tracks that exist today.**
+#
+# It was a list twice. `GX-` arrived with the graphics branch and had to be
+# added to five separate literals spread through this file; collapsing those
+# into one constant was right and did not go far enough, because the constant
+# was still `(?:BG|KF|GX)` and `NW-` and `BT-` are already written on two other
+# branches waiting to merge.
+#
+# The blind spot that leaves is the interesting part. The check at the bottom
+# of `parse` compares what the parser found against a second, looser count --
+# and if **both** are built from a list of prefixes, an unknown track is
+# invisible to the parser *and* to the thing watching the parser, and the run
+# reports a register it cannot see all of. A second opinion drawn from the same
+# assumption is not a second opinion.
+#
+# `check-readme-badges.py` had the same fault with a comment above it claiming
+# the opposite -- "every prefix, not a list of the ones that existed when this
+# was written", directly above that list. Both are derived now.
+ENTRY_ID = r'[A-Z]{2}-\d+'
+
+ENTRY_HEAD = r'### (' + ENTRY_ID + r') *(?:—|–|--|-) *'
+
+# The same heading with no separator required and no anchor, so a caller that
+# needs to match mid-string gets it from here rather than slicing a `^` off
+# ENTRY_ANY -- a slice that keeps working right up until the pattern's shape
+# changes, and then stops silently.
+
+# What an entry heading is when you are only counting them. Deliberately
+# looser than ENTRY_HEAD; the gap between the two is what the check below
+# measures.
+ENTRY_NUM = r'### (' + ENTRY_ID + r')'
+ENTRY_ANY = r'^' + ENTRY_NUM
+
+
 def parse(path):
     text = io.open(path, encoding='utf-8').read()
     # Everything from the first entry on; the preamble is not an entry.
-    blocks = re.split(r'\n### ((?:BG|KF)-\d+ *(?:—|–|--) )', text)
+    blocks = re.split('\n' + ENTRY_HEAD, text)
     entries = []
     for i in range(1, len(blocks), 2):
-        head = blocks[i]
+        num = blocks[i]
         rest = blocks[i + 1]
         title_line, _, body = rest.partition('\n')
         # A trailing "---" or a following "## " heading ends the entry.
         body = re.split(r'\n---\n|\n## ', body)[0].strip()
         entries.append({
-            'id': head[:6],
-            # The heading may have been typed with `--`. Every issue
-            # title on GitHub uses an em dash, so one form reaches the
-            # filer however the entry was written.
-            'title': re.sub(r' *(?:—|–|--) *',
-                            ' — ', (head + title_line).strip(),
-                            count=1),
+            'id': num,
+            # However the separator was typed, the title carries an em dash:
+            # every issue title on GitHub has one, so a heading written four
+            # different ways still finds its own issue instead of filing a
+            # second one beside it.
+            'title': '%s — %s' % (num, title_line.strip()),
             'body': body,
         })
+
+    # --- the check this file was missing twice ---------------------------
+    #
+    # Both faults above were invisible for one reason: **the filer counted the
+    # entries its own parser had found**, so the count could never disagree
+    # with the parser. "302 entries" was true of the parser and false of the
+    # file, and no green run could have said so.
+    #
+    # Counting a second way is the fix, and it is not the same as a stricter
+    # parser -- a stricter parser has the identical blind spot pointed
+    # somewhere else. It refuses rather than warns, because a warning inside a
+    # run that prints three hundred lines is a warning nobody reads.
+    #
+    # `check_open` below has always split on ENTRY_ANY. So the two halves of
+    # this one file have disagreed about what an entry *is* for as long as
+    # both have existed, and neither could see the other.
+    headings = re.findall(ENTRY_ANY, text, flags=re.M)
+    if len(headings) != len(entries):
+        found = set(e['id'] for e in entries)
+        lost = [h for h in headings if h not in found]
+        raise SystemExit(
+            '%s has %d entry headings and %d of them parse.\n'
+            'Unparsed, and so invisible to every issue this script files:\n'
+            '  %s\n'
+            'The heading separator must be an em dash, an en dash, `--` or '
+            '`-`.\n'
+            'Refused rather than warned about: a register nobody can see all '
+            'of\nis not a smaller register, it is a wrong one.'
+            % (path, len(headings), len(entries), '\n  '.join(lost)))
+
     return entries
 
 
@@ -374,7 +486,7 @@ def check_links():
     titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
     linked = wrong = missing = 0
 
-    for m in re.finditer(r'^### ((?:BG|KF)-\d+) .*$', text, re.M):
+    for m in re.finditer(ENTRY_ANY + r' .*$', text, re.M):
         bg = m.group(1)
         after = text[m.end():m.end() + 200].lstrip('\n')
         cite = re.match(r'\[#(\d+)\]', after)
@@ -413,12 +525,12 @@ def check_open(text):
         return 0
 
     open_now = []
-    for block in re.split(r'(?=^### (?:BG|KF)-)', text, flags=re.M):
-        m = re.match(r'### ((?:BG|KF)-\d+)', block)
+    for block in re.split(r'(?=' + ENTRY_ANY + r')', text, flags=re.M):
+        m = re.match(ENTRY_NUM, block)
         if m and not is_fixed(block.split('\n## ')[0]):
             open_now.append(m.group(1))
 
-    named = set(re.findall(r'(?:BG|KF)-\d+', head.group(1)))
+    named = set(re.findall(ENTRY_ID, head.group(1)))
     missing = [b for b in open_now if b not in named]
     extra = [b for b in named if b not in open_now]
 
@@ -431,7 +543,46 @@ def check_open(text):
     return 1 if (missing or extra) else 0
 
 
+USAGE = """usage: make-issues.py [--dry-run | --check]
+
+  --dry-run   say what would be created, closed and relabelled
+  --check     verify the register against itself and against the issues
+  (none)      create, close and relabel issues on %s
+
+Run from the top of the repository, with `gh` authenticated.
+""" % REPO
+
+
 def main():
+    """
+    An argument this script does not recognise is a **refusal**, not a run.
+
+    The default mode writes to a public issue tracker -- it creates issues,
+    closes them and edits their labels -- and every other mode is read-only.
+    So "no recognised flag" and "no flag at all" used to mean the same thing,
+    and `--help`, which this file did not implement, fell through to the one
+    branch that mutates something outside the repository.
+
+    That is NW-009, and it happened: eight issues were created by a command
+    typed to ask what the options were. The result was correct, because the
+    register was correct -- which is exactly what makes it worth a guard. A
+    mistake that produces the right answer teaches nothing and repeats.
+
+    The rule this settles: **a tool whose default is the side-effecting mode
+    must treat an unknown argument as a question, not as consent.**
+    """
+    known = ('--dry-run', '--check', '--help', '-h')
+    unknown = [a for a in sys.argv[1:] if a not in known]
+
+    if unknown:
+        sys.stderr.write('unrecognised: %s\n\n' % ' '.join(unknown))
+        sys.stderr.write(USAGE)
+        sys.exit(2)
+
+    if '--help' in sys.argv or '-h' in sys.argv:
+        sys.stdout.write(USAGE)
+        sys.exit(0)
+
     dry = '--dry-run' in sys.argv
     if '--check' in sys.argv:
         text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')

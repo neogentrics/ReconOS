@@ -49,9 +49,36 @@ def read(path):
 
 
 def bug_counts():
-    """How many entries the register actually holds, by prefix."""
-    heads = re.findall(r"^### (BG|KF)-\d+", read("docs/BUGS.md"), re.M)
-    return {"BG": heads.count("BG"), "KF": heads.count("KF")}
+    """How many entries the register actually holds, by prefix.
+
+    **Every prefix, discovered from the file — not a list.**
+
+    That sentence was already the comment here on 17 September 2026, and the
+    line under it read::
+
+        heads = re.findall(r"^### (BG|KF|GX)-\\d+", ...)
+
+    which is precisely a list of the prefixes that existed when it was
+    written. The comment described the property the code was supposed to have
+    and the code did not have it, so the file asserted its own correctness and
+    nothing checked the claim.
+
+    It was about to cost something real twice over: the `network` branch
+    carries eight `NW-` entries and `bluetooth` carries `BT-`, and on merge
+    both would have been counted as **zero** — a badge that goes green while
+    undercounting the register, which is the exact failure this script exists
+    to prevent. The network session spotted it from their side and said so in
+    their signals; it is fixed here rather than by adding two more names.
+
+    Two letters and a dash, taken from the register itself. A new track adds
+    entries and this counts them, with nothing to remember.
+    """
+    heads = re.findall(r"^### ([A-Z]{2})-\d+", read("docs/BUGS.md"), re.M)
+
+    out = {}
+    for p in heads:
+        out[p] = out.get(p, 0) + 1
+    return out
 
 
 def suite_count():
@@ -95,7 +122,7 @@ def main():
     fixed = readme
 
     bugs = bug_counts()
-    total = bugs["BG"] + bugs["KF"]
+    total = sum(bugs.values())
     dv = desktop_version()
 
     # --- the bug count -------------------------------------------------
@@ -103,8 +130,10 @@ def main():
     if not m:
         problems.append("no bug-count badge found; has the README changed shape?")
     elif int(m.group(1)) != total:
-        problems.append("bugs badge says %s, the register holds %d (%d BG + %d KF)"
-                        % (m.group(1), total, bugs["BG"], bugs["KF"]))
+        problems.append("bugs badge says %s, the register holds %d (%s)"
+                        % (m.group(1), total,
+                           " + ".join("%d %s" % (bugs[p], p)
+                                      for p in sorted(bugs) if bugs[p])))
         fixed = re.sub(r"(bugs_recorded-)\d+(-)", r"\g<1>%d\g<2>" % total, fixed)
 
     # --- the version, in both badges -----------------------------------

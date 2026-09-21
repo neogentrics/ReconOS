@@ -6,6 +6,7 @@
  * layers down.
  */
 #include <recon/kernel/addrspace.h>
+#include <recon/kernel/display.h>
 #include <recon/kernel/pagecache.h>
 #include <recon/kernel/wait.h>
 #include <recon/kernel/vfs.h>
@@ -572,6 +573,21 @@ void addrspace_release_page(paddr_t pa)
 	 * aarch64 panicked, because there the aperture is below RAM -- the same
 	 * code, one architecture reporting success and the other a fault.
 	 * (KF-209) */
+	/* **A page of the screen, which the allocator did hand out.**
+	 *
+	 * The check below asks whether the allocator owns this page and stops
+	 * if it does not, which was a complete answer for as long as every
+	 * framebuffer was a PCI aperture -- memory the allocator has never
+	 * heard of. virtio-gpu's framebuffer is `pmm_alloc_pages`, so it passes
+	 * that check, and the first program to map /dev/fb0 and exit gives the
+	 * live screen back to be handed out as ordinary memory (GX-001).
+	 *
+	 * Asked of the display rather than decided here: the display is the
+	 * only thing that knows which pages are pixels at this moment, and it
+	 * stays right across a mode change. */
+	if (display_owns_page(pa))
+		return;
+
 	if (!pmm_owns(pa))
 		return;
 

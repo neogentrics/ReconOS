@@ -109,7 +109,7 @@ Features, patches and releases are tracked the same way: see
 
 ---
 
-## Two prefixes, and why
+## Three prefixes, and why
 
 *(Three registers now: see `VF-` at the foot of this section.)*
 
@@ -168,11 +168,67 @@ in both tracks -- `tcp_write` reporting more bytes sent than it sent, and
 number belongs to whoever owns the file. Taking the next free one from a copy of
 this register is exactly what produced the collision above.
 
+### The network track's prefix, 16 September 2026
+
+**`NW-` is the network track's** — a session working on `network`, whose subject
+is network card drivers and the device interface underneath them.
+
+The two letters mean network to a reader who has not been told what they mean,
+which is the same argument `BT-` made for itself. What is worth recording is
+the two that were rejected, because both rejections are the rule rather than
+taste.
+
+**Not `RX` or `TX`.** A network driver prints `rx` and `tx` as counter labels,
+and it prints them *in the very summaries these numbers appear in* — the line
+above this paragraph's own driver reads `4 in, 4 out`, and the device summary
+reads `rx : 4 packets`. That is precisely the argument `KF-` made against
+`KB-`: this kernel prints KB for kilobytes. A prefix that is also a unit or a
+label in the same output is a prefix that stops being a name.
+
+**Not `NF`.** It is one character from `KF`, and both would appear in the same
+file and in the same kernel-branch commit messages, because this track merges
+into `kernel`. This register already carries one deliberate renumbering —
+BG-082 through BG-093 became KF-114 through KF-125 — caused by two tracks whose
+numbers could not be told apart. `NF-201` and `KF-201` would be two different
+real faults separated by one keystroke, which is that same hazard reintroduced
+with a typo in place of a merge. The lesson of the renumbering was not "do not
+renumber"; it was that a name has to be unambiguous at the point it is read.
+
+Network faults from here take the next free `NW-` number.
+
+**A note on the scripts, and it is deliberate that they are untouched.**
+`scripts/make-issues.py` and `scripts/check-readme-badges.py` carried the
+prefix in five separate regexes each, so every session claiming one edited the
+same five lines and conflicted with every other session doing the same. The
+Bluetooth track lifted that into a single `PREFIXES` constant. `NW` is
+therefore **not added here** — it goes in one place, once that refactor reaches
+this branch, and adding it the old way in the meantime would create exactly the
+five-line conflict the refactor exists to remove. `docs/SIGNALS.md` carries the
+one-line instruction and the badge arithmetic that goes with it.
+### A third prefix, 15 September 2026
+
+**`GX-` is the graphics track's** -- a fourth session, working on `graphics`,
+whose subject is the display layer and the drivers under it.
+
+`GX` rather than `DP` or `VD` because `D` already opens too many things in this
+tree -- the display summary, `/dev/`, the device tree -- and a prefix is only
+worth having if it cannot be misread at a glance. `GX` is not a word, which is
+the point: nothing else in the register or the sources looks like it.
+
+Taken before the first fault was recorded rather than when one was needed. The
+lesson of the two renumberings above is not about which numbers were chosen, it
+is that **a prefix claimed after the work has started is claimed against a
+register somebody else has already written into.** `GX-001` was reserved on the
+branch's first day, with `BG-` and `KF-` checked on every branch first.
+
+The server role is expected to take one of its own. It has not posted one here
+yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
+
 ---
 
 ## Open
 
-8, and each entry says why. They are listed because a register that only
+18, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -184,11 +240,1090 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-150** — About one boot in sixty, a user program does not finish, and nothing says why
 - **KF-154** — The page allocator scans, and a terabyte is a billion pages
 - **KF-192** — The kernel boots from a disk over BIOS and then cannot see it
-- **KF-187** — Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
+- **KF-232** — Three timers did not fire, once, on one path of twenty-eight
+- **KF-237** — A power cut inside a rename left no valid superblock, once
+- **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
+- **NW-004** — Network cards are bound from a file called storage.c, once per architecture
+- **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
+- **KF-249** — Plug in a USB keyboard and the machine can never idle again
+- **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
+- **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
+- **KF-257** — The handshake completes on the wire and `connect` never hears about it
+- **KF-258** — A thread that sleeps once wakes; a thread that sleeps twice does not
+- **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
 
 ---
 
 ## Fixed
+
+### The network track's first eight, 16 September 2026
+
+All eight below were found in one pass: writing a **second** driver behind
+`net.h`, which had exactly one. They are numbered in the order they were
+written up rather than the order they surfaced, because they were registered in
+a single commit and no number has ever been quoted anywhere else. From NW-009
+on, a number is taken when the fault is found.
+
+Four are fixed, four are open, and the open ones are open because **the fix is
+an interface decision that belongs to the kernel session**, not because nobody
+got to them.
+
+The common shape, and it is the reason this was worth doing at all: an
+interface with one implementation cannot tell which of its choices were about
+networking and which were about virtio. Every entry here is a place where that
+turned out to be true.
+
+### NW-001 — A card's interrupt had no way to ask to be collected from
+
+[#519](https://github.com/neogentrics/ReconOS/issues/519)
+
+- **Found in** kernel 0.2.46, by the network session, writing the interrupt
+  handler for the first card that has one.
+- **Was** `netdev_service()` — the function that drains the receive queue — had
+  four callers, and every one of them was inside a loop that was *already
+  waiting* for a packet: DHCP's wait, the boot echo's wait, a socket read, a
+  socket accept. The fifth was `rx_work_fn`, scheduled only by
+  `netdev_receive`, which a driver can only call once it holds a `netbuf`.
+
+  `irq.h` forbids a handler from allocating. So an interrupt handler could not
+  build a buffer, could not call `netdev_receive`, and could not reach
+  `work_schedule` — there was no path at all from "the card says it has a
+  frame" to "the worker thread runs". There is no timer driving it either, and
+  the idle loop does not touch it.
+- **Why it survived** virtio-net sets `enable_interrupts` to null and is
+  polled, and every path that needs it to receive is a loop that calls
+  `netdev_service()` itself. The only driver there was never needed the door,
+  so nobody noticed the door was missing.
+- **Fixed in** kernel 0.2.46 on `network`, by `netdev_wake()`: schedules the
+  drain and does nothing else, which is all a handler is allowed to do.
+  Asserted by `nic_self_test`, and the assertion was **broken on purpose and
+  watched go red** — see NW-008 for what that first attempt was worth.
+
+### NW-002 — Two drivers, and both of them called their first card eth0
+
+[#520](https://github.com/neogentrics/ReconOS/issues/520)
+
+- **Found in** kernel 0.2.46, by the network session, the moment a second
+  driver registered a device.
+- **Was** every driver composed its own name from a count of its own cards —
+  `virtio_net.c` does `name[3] = '0' + device_count`. That is correct while
+  there is one driver, because then a driver's count of its cards *is* the
+  machine's count of its cards. With two drivers both start at zero, and
+  `netdev_register` only copied the string: it asked nothing.
+
+  The result is two devices answering to `eth0`, `netdev_by_name` returning
+  whichever registered first, and a boot summary printing one name twice with
+  two different sets of counters under it.
+- **Fixed in** kernel 0.2.46 on `network`. The name is the device layer's to
+  issue — `netdev_name()` hands back the next unused one, because the device
+  layer is the only thing that can see all the devices — and
+  `netdev_register` refuses a duplicate rather than accepting it. Both halves
+  are asserted, and both assertions were broken on purpose and seen to fail.
+
+### NW-003 — A field for what the cable is doing that nothing ever read
+
+[#521](https://github.com/neogentrics/ReconOS/issues/521)
+
+- **Found in** kernel 0.2.46, by the network session, by grep, before a line of
+  driver was written.
+- **Was** `struct net_device` carries `bool link`, commented *"what the device
+  says about the cable"*. It is assigned in exactly one place in the whole
+  kernel — `virtio_net.c` setting it to `true` at attach — and read in none.
+  Nothing prints it, nothing routes on it, nothing re-runs DHCP when it
+  changes.
+- **Why it survived** it is not a field about a cable, it is a field about
+  virtio-net, and for virtio-net the honest value is a constant. A card with a
+  PHY has a link that genuinely comes and goes, and "the device is up" and
+  "there is a cable in it" are two different facts about a real machine.
+- **Fixed in** kernel 0.3.5 on `network`, in two halves a day apart.
+
+  **The writing half:** both new drivers read the real state out of the silicon,
+  report it at attach in either direction, and report every change. So the field
+  holds a fact.
+
+  **The reading half:** `netdev_route` now skips a device whose cable is out, on
+  both the unicast and the broadcast path, and `net_bring_up` says *"`eth0` has
+  no cable; not asking for an address"* instead of spending two and a half
+  seconds on DHCP and reporting that nothing offered one. Those are different
+  problems — a wire somebody can plug in, and a server somebody has to go and
+  look at — and reporting the wrong one of them after a timeout reads like an
+  answer.
+
+  **The default had to change with it.** `netdev_register` now sets `link` true,
+  because three devices in this tree never set it and all three are test devices
+  with no cable to have an opinion about; defaulting to false would have made
+  them unroutable and taken the stack self-test down. True is also the honest
+  default for a driver that cannot read a PHY: *"I do not know"* and *"there is
+  no cable"* are different answers.
+- **And the test for it could not fail, twice over.** The unicast assertion was
+  sound. The broadcast one was not: the broadcast path returns the *first*
+  qualifying device, the test's device registers last, so on a machine with a
+  real card the answer was that card no matter what the test did. Removing the
+  link check from the broadcast path on purpose left the run green. It puts
+  every other device down for the length of that assertion now, and carries a
+  control that fails if broadcasts route nowhere at all.
+
+  Worth recording because of where it happened: directly beneath a comment in
+  the same file about checks that cannot fail.
+
+### NW-004 — Open — Network cards are bound from a file called storage.c
+
+[#522](https://github.com/neogentrics/ReconOS/issues/522)
+
+- **Found in** kernel 0.2.46, by the network session, looking for where to put
+  a probe.
+- **Is** there is no device-probe layer. `arch_storage_probe()` in
+  `arch/x86_64/storage.c` and `arch/aarch64/storage.c` is the whole of device
+  binding, it exists once per architecture, and it is where network cards are
+  attached — so a driver that lives in portable `core/` and contains nothing
+  about any machine cannot be reached without editing two `arch/` files.
+- **Open because** the fix is a driver registry, and building one to hold three
+  drivers would be an interface designed before anything measured what it
+  needs — which is the fault this whole set of entries is about. Adding two
+  lines to a list is cheap and honest; the entry exists so the cost is
+  recorded rather than absorbed silently each time.
+
+### NW-005 — Open — A PCI device without MSI-X cannot be given an interrupt at all
+
+[#523](https://github.com/neogentrics/ReconOS/issues/523)
+
+- **Found in** kernel 0.2.46, by the network session, when the emulated Intel
+  card was refused a vector and fell back to polling.
+- **Is** `arch_pci_request_interrupt()` returns false for any device with no
+  MSI-X capability, and there is no other path: the PCI interrupt-line and
+  interrupt-pin registers at configuration offsets 0x3C and 0x3D are **never
+  read anywhere in the kernel**, and nothing maps a PCI interrupt pin to a
+  legacy line. `arch/x86_64/msi.c` says plain MSI "goes in beside the first
+  device that needs it"; nothing has needed it yet, and the 82540EM offers
+  neither, so it is polled.
+
+  Measured rather than assumed, and the measurement corrected a guess: the
+  RTL8168s in the server offer **both** MSI and MSI-X (capability 0x50 and
+  capability 0xb0, count 4), so that card does get a vector. It is the
+  emulated Intel that gets none.
+- **Why it matters more than it looks** the fallback is silent and polling
+  works. A driver that believes it is interrupt-driven and is being carried
+  entirely by a poll loop is indistinguishable from one that is not — so both
+  new drivers print which one is in force, and print it again in the summary
+  if a card holds a vector and has never been interrupted.
+- **Open because** whether to add legacy INTx routing, plain MSI, or neither is
+  a decision about the interrupt layer, which is the kernel session's.
+
+### NW-006 — A receive ring handed the card a buffer the stack was reading
+
+[#524](https://github.com/neogentrics/ReconOS/issues/524)
+
+- **Found in** kernel 0.2.46, by the network session, reading the boot summary
+  it had just added. Before it could ever have fired.
+- **Was** the Intel driver's receive tail register names the last descriptor the
+  card may write, and everything from the card's head up to it is available. The
+  first version advanced it to the last descriptor it had *successfully*
+  re-stocked — which under memory pressure can be a later index than one whose
+  allocation failed. Slot 1 fails, slot 2 succeeds, the tail goes to 2, and the
+  card is now free to write descriptor 1, which still holds the physical
+  address of the buffer just handed up to IP.
+
+  That is not a dropped packet. It is a card writing a new frame into one the
+  stack is parsing.
+- **Why it is worth an entry despite never running** because the Realtek
+  **cannot have this fault**, and the contrast is the finding. That card has no
+  tail register: a descriptor is available if and only if its ownership bit is
+  set, and the only place that bit is set is after an allocation succeeded — so
+  availability and having-a-buffer are one fact. On the Intel they are two
+  facts kept in step by hand, and hands slip.
+- **Fixed in** kernel 0.2.46 on `network`: the tail is computed by walking the
+  run of descriptors that all have a buffer, and stops at the first that does
+  not.
+
+  **And it has a check in front of it now**, which it did not when it was first
+  written up. The walk lives in `rx_available`, which `e1000_poll` calls, so
+  the test drives the running code rather than a copy of it -- and it can be
+  handed a ring with a hole punched in it, which is the situation the fault
+  needs and which a self-test must not create for real by exhausting the page
+  allocator. Breaking the walk so it ignores the hole is caught, and so is
+  removing the cap that keeps the tail from meeting the head. Both of those
+  broken kernels still take a DHCP lease and answer a ping.
+
+### NW-007 — The boot test caught the length mistake nobody makes
+
+[#525](https://github.com/neogentrics/ReconOS/issues/525)
+
+- **Found in** kernel 0.2.46, by the network session, breaking its own driver
+  on purpose to find out what the test could see.
+- **Is** a received frame's length is the one number the two cards disagree
+  about: the Realtek's includes the four-byte frame check sequence and the
+  Intel's does not, because the Intel is told to strip it. Getting it wrong is
+  the likeliest single fault in either driver.
+
+  Booting with the card was assumed to cover it. **It covers half.** Measured,
+  by breaking the length in each direction and booting each one:
+
+  | the receive length | result |
+  |---|---|
+  | correct | DHCP lease, ping answered |
+  | four bytes too short | no lease, no ping — caught at once |
+  | four bytes too long | lease and ping, indistinguishable from correct |
+
+  Too short fails UDP's checksum, so DHCP's reply is discarded. Too long is
+  invisible because every layer reads its own length field and ignores whatever
+  trails it — Ethernet has no length at all, IP and UDP have their own, and
+  four stray bytes of somebody's CRC sit past the end where nothing looks.
+
+  **And too long is the direction a driver errs in**, because it is what
+  forgetting the subtraction looks like.
+- **Fixed in** kernel 0.2.48 on `network`, by `r8169_self_test` and
+  `e1000_self_test`.
+
+  Each drives **the real receive loop** against a page of memory standing in
+  for the register window. Nothing is lifted out into a testable copy — that
+  objection was the whole reason this stayed open, and the two places where a
+  helper *was* extracted (`rx_available`) are called by the loop, so what the
+  test exercises is what runs.
+
+  **Thirteen faults introduced on purpose, thirteen caught**, and the column
+  that matters is the third:
+
+  | driver | break | boot said |
+  |---|---|---|
+  | r8169 | the subtraction removed | lease ✓ ping ✓ |
+  | r8169 | end-of-ring taken from the card, not the index | lease ✓ ping ✓ |
+  | r8169 | the short-length guard removed | lease ✓ ping ✓ |
+  | r8169 | a frame the card marked bad accepted | lease ✓ ping ✓ |
+  | r8169 | half of a split frame accepted | lease ✓ ping ✓ |
+  | e1000 | the Realtek's subtraction copied in | lease ✗ ping ✗ |
+  | e1000 | four bytes **too long** | lease ✓ ping ✓ |
+  | e1000 | the tail walks past a hole (NW-006) | lease ✓ ping ✓ |
+  | e1000 | the tail offers the whole ring | lease ✓ ping ✓ |
+  | e1000 | end-of-packet ignored | lease ✓ ping ✓ |
+  | e1000 | the error byte ignored | lease ✓ ping ✓ |
+  | e1000 | an empty frame accepted | lease ✓ ping ✓ |
+  | e1000 | a jumbo frame accepted | lease ✓ ping ✓ |
+
+  **Twelve of the thirteen boot perfectly** — a DHCP lease and a ping answered
+  in about 300 microseconds — while doing the wrong thing.
+
+  **That column means two different things and the difference is worth being
+  exact about**, because stating it as one claim overstates the Realtek's half.
+
+  For the **e1000** rows it is the strong statement: that card *is* the one
+  carrying the boot's traffic, so a broken driver that still gets a lease and a
+  ping is a fault a running machine genuinely cannot show you. Seven of its
+  eight breaks are that.
+
+  For the **r8169** rows it is weaker and more basic: the rig emulates no
+  Realtek part, so that driver is not on the boot path at all. A green boot
+  there does not mean the fault slipped past a running machine — it means no
+  running machine ever touched the code. Which is the reason the test had to
+  exist, but it is not the same evidence and should not be counted as though
+  it were.
+
+  A fourteenth break did not compile: removing the error-byte test entirely
+  leaves the variable unused and `-Werror=unused-but-set-variable` refuses it.
+  Worth recording as the one case where the toolchain is the check.
+
+  **One break found a fault in the test rather than the driver**, which is the
+  same shape as everything else here. The Realtek's assertions measured
+  `rx_bytes` alone, so removing the short-length guard — which turns a
+  four-byte descriptor into a frame of length **zero**, passed up the stack —
+  moved no bytes and read exactly like a correct refusal. Both tests count
+  frames as well as bytes now. Found by breaking the guard and watching the
+  test stay green.
+
+  **And one break was wrong rather than uncaught**, separated from that because
+  the difference matters: or-ing `DESC_OWN` into a Realtek descriptor instead
+  of rebuilding it does *not* lose the end-of-ring bit, because that driver
+  re-derives the bit from the index every time. The break that loses it is
+  taking the bit from what the card left — which is what Linux's driver does —
+  and the simulated card here clears it deliberately so the difference is
+  testable at all.
+
+  **The transmit side is covered too**, which it was not when this entry was
+  first closed. Both drivers now assert the descriptor they actually build —
+  length, address, the flags, the doorbell, and who owns the buffer — against
+  the same fake register window. Ten more breaks, ten more caught:
+
+  | driver | break | boot said |
+  |---|---|---|
+  | r8169 | the doorbell never rung | lease ✓ ping ✓ |
+  | r8169 | the buffer freed at send time | lease ✓ ping ✓ |
+  | r8169 | a full ring not checked | lease ✓ ping ✓ |
+  | r8169 | completed buffers never freed | lease ✓ ping ✓ |
+  | r8169 | the sent length four bytes too long | lease ✓ ping ✓ |
+  | e1000 | completion never requested (`RS`) | lease ✓ ping ✓ |
+  | e1000 | the transmit tail off by one | lease ✓ ping ✗ |
+  | e1000 | no check sequence appended (`IFCS`) | lease ✓ ping ✓ |
+  | e1000 | not marked end-of-packet | lease ✗ ping ✗ |
+  | e1000 | a full ring not checked | lease ✓ ping ✓ |
+
+  **The `RS` one is the entry's whole argument in miniature.** Without that bit
+  the card is never asked to report completion, so the status byte is never
+  written, so nothing is ever reclaimed — and the machine gets a DHCP lease,
+  answers pings in 300 microseconds, and leaks a page per frame until it dies
+  hours later with nothing to point at. A far end that replies cannot see it,
+  because the parts of a frame a far end validates are not the parts a driver
+  gets wrong.
+
+  **What is still not covered, so that it is not assumed:** a simulated card
+  cannot say that the real chip behaves the way the simulation pretends.
+  Register offsets, the reset sequence, and the meaning of every bit are proved
+  by booting with the card and nowhere else — which for the Realtek has not
+  happened at all.
+
+### NW-009 — A script that writes to a public tracker treated an unknown argument as consent
+
+[#527](https://github.com/neogentrics/ReconOS/issues/527)
+
+- **Found in** the tooling, on 17 September 2026, by the network session, by
+  running `python scripts/make-issues.py --help` to find out what the options
+  were.
+- **Was** `make-issues.py` has three modes. `--check` and `--dry-run` are
+  read-only; the default **creates issues on GitHub, closes them and edits
+  their labels**. It parsed its arguments by asking whether each known flag was
+  present and doing the default otherwise — so an argument it did not
+  recognise, including `--help`, which it never implemented, selected the one
+  mode that changes something outside the repository.
+
+  Eight issues were created — #519 to #526, the whole `NW-` set — by a command
+  typed to ask a question.
+- **Why it is worth an entry even though the result was right.** The issues are
+  correct: right titles, bodies straight from the register, and states that
+  match it — the four fixed entries closed, the four open ones open. `--check`
+  went from `8 entries unlinked` to `0 entries unlinked`. It is exactly what the
+  project's own process says must happen, and the kernel session would have run
+  it on merge.
+
+  **That is what makes it dangerous rather than harmless.** A mistake that
+  produces the right answer leaves nothing to notice and no reason to change
+  anything, so it waits. The next time the register is half-written, or the
+  argument is `--dry-run` misspelt, the same path runs against a public tracker
+  with nobody having decided to.
+- **Fixed in** kernel 0.2.49 on `network`. An unrecognised argument now prints
+  the usage and exits 2 without touching anything, `--help` exists and is
+  read-only, and the docstring states the rule it settles: *a tool whose
+  default is the side-effecting mode must treat an unknown argument as a
+  question, not as consent.*
+
+  Checked by running `--help`, `--wat` and `--check` and confirming the first
+  two reach no network and the third is unchanged.
+- **Not reverted.** The eight issues stand, because the end state is the correct
+  one and deleting them would leave the register pointing at nothing. The fault
+  was the path, not the outcome.
+
+### NW-008 — A hook in the device interface that nothing ever called
+
+[#526](https://github.com/neogentrics/ReconOS/issues/526)
+
+- **Found in** kernel 0.2.46, by the network session, by grep, looking for how
+  to turn a card's interrupts on.
+- **Was** `struct net_device_ops` declares
+  `bool (*enable_interrupts)(struct net_device *dev)` with a paragraph of
+  comment explaining when a driver should implement it. All three
+  implementations set it to `NULL`, and **no code in the kernel ever calls
+  it** — there is no `ops->enable_interrupts` anywhere. A driver that filled it
+  in would sit there never being asked.
+- **Why it survived** it is null in every implementation, so a missing call
+  site and a correctly-skipped optional hook look identical from every angle
+  except grepping for the call.
+- **Not removed here, and that is the finding.** It is the member the interface
+  *should* have — a card's interrupts genuinely need turning on at a moment the
+  device layer chooses, which is why NW-001's `netdev_wake` exists on the
+  driver's side of the same wire. Deleting it would throw away the right idea
+  because of a missing call; wiring it up is a device-layer decision. Both new
+  drivers leave it null and arm their own interrupts at attach, and say so.
+- **Fixed in** kernel 0.3.7 on `network`. `netdev_register` calls it, after the
+  device is in the table and before the driver's attach returns. Both card
+  drivers implement it, and both now claim their interrupt vector *before*
+  registering so the hook has something to arm.
+
+  **The ordering is the reason the hook is worth having** rather than each
+  driver arming its own mask at the end of attach: an interrupt arriving the
+  instant the mask opens asks the worker thread to poll every registered
+  device, and a card that armed itself first is not on that list yet. Asserted
+  separately from "was it called at all", and broken separately to prove it —
+  moving the registration after the call makes the run red on its own.
+
+  Deleting the member was the other option and it was refused. It is the right
+  idea with a missing call site; throwing it away because nobody had wired it
+  up would have lost the design and kept the problem.
+- **What it is worth, on this rig, is nothing yet** — and that is worth saying
+  rather than leaving the fix looking bigger than it is. Both real drivers
+  return **false** from it, because `arch_pci_request_interrupt` can give them
+  no vector (NW-005). The only implementation in the tree that returns true is
+  the self-test's, which is why the test does not accept false as proof. The
+  boot now says so outright: `interrupts : 1 card(s) can raise one, 2 cannot
+  and are polled`.
+
+  This is also the entry that nearly did not get written. The first version of
+  NW-001's test **passed with `netdev_wake` gutted** — it measured whether the
+  machine was busy rather than what the call did, because the receive drain was
+  usually already queued by something else. It took breaking the function on
+  purpose to find that out, and then a second attempt at the break, because the
+  first one patched the wrong function and produced a green run that proved
+  nothing. A check that cannot fail looks exactly like one that passes, and it
+  looks that way twice.
+### GX-010 — The attach path of both hardware backends had no test, and the first test written for it could not fail
+
+[#506](https://github.com/neogentrics/ReconOS/issues/506)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by noticing that everything
+  proved about the two real-hardware backends was proved about
+  `*_display_identify`, and that nothing had ever called `*_display_attach`.
+
+  Both are wired like this:
+
+  ```c
+  m = intel_display_identify(d->vendor, d->device, d->class_code, d->subclass);
+  ```
+
+  Four fields of a `struct pci_device`, in an order nothing checked. Swapping
+  the last two, or reading the subsystem id in place of the device id, leaves
+  every recognition test passing — they call `identify` directly and never go
+  through this line — while the driver claims the wrong hardware or none.
+
+  `intel_display.c` had been committed, run through the full matrix twice, and
+  signalled as tested with the attach path never once executed on any machine
+  in it.
+
+- **And the first test written for it was itself a check that could not fail.**
+  It fed `attach` an unknown Intel display at class 3, subclass 0, and asserted
+  it was refused and counted. With the two arguments deliberately swapped in
+  `attach`, the run still said:
+
+  ```
+    graphics it knows  : pass
+  ```
+
+  because the device was unknown *either way*: class 3 subclass 0 and class 0
+  subclass 3 both fail to match a table entry, so both take the same decline
+  branch. The test exercised the line and could not see what the line did.
+
+  **That is GX-008 recurring inside the fix for GX-008** — written by somebody
+  who had just recorded the lesson, in the test written to apply it. It is put
+  in the register for that reason rather than for the defect, which is nil:
+  knowing that a check must be able to fail does not tell you whether *this*
+  check can, and only breaking it on purpose answers that.
+
+- **Was** two gaps, one inside the other: no coverage of the attach entry point
+  at all, and then coverage that did not discriminate.
+
+- **Cost** nothing. The wiring is correct in both drivers and always has been.
+  Recorded because the code was shipped and signalled as tested while a whole
+  entry point had never run, and because the second half is the more useful
+  half.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Each self-test now drives `attach`
+  twice:
+
+  1. An unknown device of the right vendor and class, which must be refused
+     **and counted** — the counter moving is what says the decline path ran
+     rather than the function returning early somewhere else.
+  2. **A device the table does know, presented at class 0 subclass 3** — the
+     reverse of a display. Read correctly it is not a display and is refused;
+     read with the two swapped it becomes the laptop's own graphics, or the
+     desktop's own card, and is claimed.
+
+  Only the refusing half can be driven from a self-test: a device that is
+  *accepted* goes into the display table, and a test that registers an imaginary
+  screen has changed the machine it was asked about.
+
+- **Shown to fail before being believed**, which is the entire point of the
+  entry. With the two arguments swapped in both drivers:
+
+  ```
+  intel-display: attach claimed a device whose class and subclass are the
+                 reverse of a display, so it is reading the two the wrong way round
+    graphics it knows  : FAIL
+  amd-display:   attach claimed a device whose class and subclass are the
+                 reverse of a display, so it is reading the two the wrong way round
+    the graphics cards it knows : FAIL
+  ```
+
+---
+
+### GX-009 — The boot report named one display on a machine with two, and contradicted itself two lines later
+
+[#507](https://github.com/neogentrics/ReconOS/issues/507)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by reading a boot report
+  that had been printed several times already without anyone looking at it
+  closely. QEMU given `-device virtio-gpu-pci` and no `-vga none` presents a
+  Bochs adapter *and* a virtio-gpu, and the kernel drives both:
+
+  ```
+    display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+    suspend      : 3 device(s) declared, and these cannot come back yet:
+                   virtio-gpu, bochs-display, input
+  ```
+
+  The display summary names one adapter. The suspend summary, two lines below,
+  names both — because `suspend_declare` is called per driver and had been
+  right the whole time.
+
+- **Was** `display_print_summary` described `primary` and returned. That is a
+  complete description of a machine with one display adapter, and it was never
+  anything else for as long as this kernel had one backend that could attach
+  once.
+
+  It is now four backends and a table of four, and **the machine this was
+  written on has two adapters**: a Radeon RX 6600 on the bus and Raphael
+  graphics in the processor package, both answering PCI class 030000. On that
+  machine the report would have named one GPU and been silent about the other,
+  while the suspend line listed both.
+
+- **Cost** nothing yet, and the entry is about the shape rather than the damage:
+  **a summary that describes the primary of a set is correct exactly while the
+  set has one member**, and nothing about its output says which case you are
+  looking at. The contradiction with the suspend line is what makes it findable
+  at all — two summaries generated from the same table disagreeing about how
+  many devices are in it.
+
+  It is the same species as GX-002, which was one driver's private state indexed
+  by a display's position in a table it did not own: both are code that is
+  correct while every entry is the same kind of thing, and both were written
+  when that was true.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Every display in the table is
+  reported. The primary keeps its line and the rest follow it, marked as not the
+  one being drawn on, and each says whether it is in a mode:
+
+  ```
+    display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+    also         : bochs-display, found and not in any mode
+  ```
+
+  On a machine with one adapter the output is unchanged, which is why this was
+  invisible in the first place.
+
+- **And the table was raised from two to four.** Two was exactly full on the
+  desktop before anything was plugged in, so a virtual machine on it with a
+  virtio-gpu would have been refused a slot by a kernel that had found every
+  adapter correctly. Sized from a machine rather than from a guess about how
+  many screens a computer has.
+
+- **Shown on a machine that really has two**, which is the matrix path added for
+  GX-002 and had been booting since — it was printing the single-adapter answer
+  the whole time and nothing asked it to print more.
+
+---
+
+### GX-008 — The vendor check in both hardware tables had no test that could fail
+
+[#508](https://github.com/neogentrics/ReconOS/issues/508)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by sabotaging a check that
+  had just been written and watching the test pass anyway.
+
+  The AMD backend's recognition rule is three parts: the vendor, the class, and
+  the identifier. Deleting the first of them:
+
+  ```c
+  /* SABOTAGE: vendor check removed */
+  ```
+
+  and the boot said:
+
+  ```
+  amd-display: 13 model(s) known, recognition and refusal both checked
+    the graphics cards it knows : pass
+  ```
+
+  The same sabotage on `core/intel_display.c` also passed. **Both drivers'
+  vendor checks were untestable, and one of them had already been committed and
+  run through the full matrix.**
+
+- **Was** the refusal cases were chosen to be *real devices*, which is normally
+  the right instinct and here quietly defeated the test. Every real cross-vendor
+  identifier collision that exists is refused by the **class** check before the
+  vendor is ever looked at:
+
+  | identifier | is | and also | refused by |
+  |---|---|---|---|
+  | `164e` | AMD Raphael | Broadcom NetXtreme II (14e4) | class — it is a network card |
+  | `73bf` | AMD Navi 21 | National Instruments FlexRay (1093) | class |
+  | `1916` | Intel Skylake GT2 | Dini Group accelerator (17df) | class |
+
+  So the table exercised the class rule three times over and the vendor rule
+  not once. Every case in it was answered before the vendor mattered.
+
+  **There is no real collision that would do the job**, and that is why the hole
+  was easy to make: display-class hardware comes from few enough vendors that no
+  cross-vendor identifier collision is *also* a display on both sides.
+
+- **Cost** nothing yet — but the Intel half had been committed, matrix-verified
+  and signalled as tested. The claim in `docs/SIGNALS.md` that recognition *and
+  refusal* were both checked was true of the class rule and false of the vendor
+  rule, and nothing in the output distinguished them.
+
+  Worth the entry for the shape rather than the damage: **a test written from
+  real examples can be strictly weaker than one written from the rule**, because
+  reality supplies the cases it happens to contain rather than the ones that
+  discriminate. GX-003 was a check that could not fail because it measured the
+  wrong side of a device; this is a check that could not fail because every
+  input to it was decided earlier.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Each table gained one case that only
+  the vendor rule can refuse — another vendor's id, carrying this driver's
+  device number, at display class — and each is **labelled in the source as
+  constructed rather than found**, with the reason, so that nobody later reads
+  it as a device somebody met.
+
+- **Shown to fail before being believed.** With the vendor check removed again,
+  both now say so by name:
+
+  ```
+  intel-display: 1002:1916 [3/0] was claimed -- AMD's vendor id carrying
+                 Intel's Skylake number at display class
+  amd-display:   8086:73ff [3/0] was claimed -- Intel's vendor id carrying
+                 the desktop card's number at display class
+    graphics it knows  : FAIL
+    the graphics cards it knows : FAIL
+  ```
+
+- **One factual error was fixed on the way.** The FlexRay controller sharing
+  `73bf` was recorded as vendor `10b5`; it is `1093`, National Instruments.
+  Corrected against `pci.ids` rather than left, because a comment citing
+  evidence is only worth what the citation is worth.
+
+---
+
+### GX-007 — A shape check that vetoed real hardware, protected nothing, and reported one number when it refused
+
+[#509](https://github.com/neogentrics/ReconOS/issues/509)
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by writing the second
+  real-hardware backend and reading the two side by side.
+
+- **Was** `intel_display_attach` refused any adapter whose first base address
+  register was smaller than sixteen megabytes:
+
+  ```c
+  if (!d->bar[GEN9_MMIO_BAR] || d->bar_is_io[GEN9_MMIO_BAR] ||
+      d->bar_size[GEN9_MMIO_BAR] < GEN9_MMIO_SIZE) {
+          kprintf("intel-display: %s has a %u MB register window where "
+                  "Gen9 has 16, so this is not the device this driver knows\n", ...);
+          return false;
+  }
+  ```
+
+  Three things wrong with it, and the first is the one that would have cost a
+  day:
+
+  1. **It vetoes on an assumption that has never been checked against the
+     hardware it is about.** The 16 MB figure came from a specification. The one
+     Gen9 machine this project owns has no serial port, so a wrong veto there
+     reports "not the device this driver knows" onto a panel and stops.
+
+  2. **The shape of a display adapter's BARs is a fact about a silicon family,
+     not about display adapters.** Read off this project's own desktop, RDNA2
+     puts its register file in a **512 KB fifth BAR**, behind a 256 MB aperture
+     onto video memory with a 2 MB doorbell between them:
+
+     ```
+     1002:73ff  Radeon RX 6600      0xFC00000000  256 MB      aperture
+                                    0x00F6B00000    2 MB      doorbell
+     1002:164e  Raphael             0xFC20000000  256 MB      aperture
+                                    0xFC30000000    2 MB      doorbell
+                                    0x00F6A00000  512 KB      registers
+     ```
+
+     A rule phrased "the first BAR, sixteen megabytes" is true of one family and
+     false of the other. There was never a reason to believe it held for the
+     real Gemini Lake either.
+
+  3. **Nothing in either driver reads a register**, so the veto guarded
+     nothing. It could only ever lose a machine.
+
+  And when it refused, it printed the one number it had judged — so the evidence
+  produced by the failure was insufficient to correct the assumption that caused
+  it. A dead end that cannot be diagnosed from its own output.
+
+- **Cost** nothing observed, and it could not have been: the hardware it would
+  have refused has not been booted yet. Recorded because it was **shipped** —
+  committed, matrix-green, and signalled — and because the fault is the kind a
+  verification matrix cannot catch, since the matrix contains no machine of
+  either family.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. `display_print_bars` prints a
+  device's base address registers as they were found, both backends call it on
+  attach, and neither refuses on the layout. The veto belongs with the first
+  register access — which is where being wrong about it would finally matter,
+  and which does not exist yet in either driver.
+
+  The observation is kept: Intel still says when the first window is not the
+  16 MB it expected, and says in the same breath that it is driving the device
+  anyway and that the expectation is unverified. **A surprise worth recording
+  is not the same as a reason to stop**, and the two had been the same line.
+
+- **What it turns the first real boot into.** A measurement. Booting either
+  machine now prints the layout the driver actually found, which is the only way
+  an assumption written from a specification ever gets corrected — and it is the
+  same reason `scripts/read-intel-display.sh` exists.
+
+---
+
+### GX-006 — A display that can be read and not set failed its own self-test, three ways
+
+[#510](https://github.com/neogentrics/ReconOS/issues/510)
+
+- **Found in** kernel 0.2.46, on 16 September 2026, **before the driver that
+  would have hit it existed.** The Intel Gen9 backend was going to be the first
+  display in this kernel that can report a mode and cannot change one — the
+  panel is lit by firmware and there is no modesetting for it yet — so the
+  question "does the display layer cope with that shape" was asked by making the
+  Bochs adapter into that shape on purpose and booting it:
+
+  ```c
+  static const struct display_ops bochs_ops = {
+          .set_mode = 0,          /* EXPERIMENT */
+  };
+  ```
+
+  Not shipped, not committed, and the answer came back in one boot:
+
+  ```
+  display: bochs-display cannot be told what mode to be in      x9
+  display: bochs-display would not take any of the 9 sizes this driver
+           knows -- it has 256 MB
+    display      : bochs-display, 0x0, pitch 0, RGBA
+  display: an oversized mode was refused and not counted as refused
+    a mode of our own  : FAIL
+  ```
+
+- **Was** three separate faults, all with the same root: every part of the
+  display layer assumed that a display which exists can be told a mode, because
+  both backends that existed could be.
+
+  1. **`display_set_mode` returned false without counting a refusal.**
+     `modes_refused` is the number of times a mode was asked for and not
+     established, and "there is no way to ask" is one of those. The self-test
+     checks that an oversized mode is *counted* as refused, so it failed on a
+     kernel behaving perfectly. This is GX-004 arriving from the opposite
+     direction: that one was a refusal counted in the wrong place, this one is a
+     refusal not counted at all.
+
+  2. **The mode ladder ran anyway and then blamed the hardware.** Nine sizes
+     asked for, nine identical lines, and a summary reading *"would not take any
+     of the 9 sizes this driver knows -- it has 256 MB"*. The memory was not the
+     reason and the adapter refused nothing; it was never asked. A diagnostic
+     that names the wrong cause is worse than none, because somebody will act on
+     it — and on the machine this was written for, that somebody would be
+     looking at a 4 GB laptop wondering why 256 MB was not enough.
+
+  3. **The summary printed `0x0, pitch 0, RGBA` for a display in no mode at
+     all.** That reads like a mode somebody chose. RGBA is not even a guess: it
+     is what the format enum happens to be at zero.
+
+- **Cost** nothing, and that is the point of the entry rather than a reason to
+  skip it. It was found by asking what the *next* backend would do to the
+  interface before writing it, which cost one boot — against finding it on a
+  laptop with no serial port, where the only instrument is a camera pointed at
+  the panel (KF-214).
+
+- **Fixed in** kernel 0.2.46 on `graphics`:
+
+  1. `display_set_mode` counts a display that cannot be told as a refusal, and
+     says so **once** rather than on every rung of the ladder.
+  2. `display_init` does not run the ladder on a backend with no `set_mode`. If
+     firmware left a mode it keeps it and says so; if firmware left none it says
+     the machine has an adapter and no screen, which is the honest outcome and a
+     different one from having no adapter.
+  3. `display_print_summary` says `found and not in any mode` rather than
+     inventing a mode of zero.
+
+- **Shown to fail before being believed**, and the experiment above *is* that
+  demonstration — it was run before the fix, produced the three failures, and
+  after the fix the same experiment produces:
+
+  ```
+  display: bochs-display cannot be told a mode and firmware left none, so
+           this machine has an adapter and no screen
+    display      : bochs-display, found and not in any mode
+    a mode of our own  : pass
+  ```
+
+  The experiment was then reverted, and both real backends re-checked: Bochs,
+  virtio-gpu and a machine with no display at all all still pass.
+
+- **What it says about the interface.** Three backends, three different answers,
+  and none of the differences was predicted:
+
+  | | `set_mode` | `preferred_mode` | `flush` |
+  |---|---|---|---|
+  | bochs | yes | no | no |
+  | virtio-gpu | yes | yes | **yes** |
+  | intel Gen9 | **no** | later | no |
+
+  `display_ops` was Bochs's shape. It is now a shape that has been made to
+  disagree with itself twice, which is the whole reason the second and third
+  backends were written in that order.
+
+---
+
+### GX-003 — Every display self-test passed against a completely black screen
+
+[#511](https://github.com/neogentrics/ReconOS/issues/511)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by the first boot that drove
+  a virtio-gpu — and *not* by any assertion in the kernel, all of which reported
+  pass. It was found by asking QEMU for a screendump and counting the pixels.
+
+  Two boots of the same binary, one per backend:
+
+  ```
+  bochs-display   33,177,600 non-black pixels
+  virtio-gpu               0 non-black pixels
+  ```
+
+  and on that second boot the kernel said:
+
+  ```
+    a mode of our own  : pass
+    a screen to draw on : pass
+    framebuffer: a program mapped 5120x2880, pitch 20480, and both markers
+                 are on the screen
+    a C program: compiled from C, loaded, and its pixels are on the screen
+  ```
+
+- **Was** every check on the display path verified its own writes. `fbcon`
+  stored characters and the tests read the framebuffer back; the framebuffer
+  self-test wrote two markers through a user mapping and read them back; the
+  paint program drew and the kernel read that back too.
+
+  On an adapter whose framebuffer is a scanned-out PCI aperture, that memory
+  **is** the screen, so a read-back that finds the right pixels has found them
+  on the glass. On virtio-gpu those pages are ordinary guest RAM that the host
+  cannot see until it is sent `TRANSFER_TO_HOST_2D` and `RESOURCE_FLUSH`. The
+  read-back returns what was just written either way.
+
+  So the assertions were not weak. **They were measuring the wrong side of the
+  device**, and had been correct for as long as there was one kind of device.
+
+- **Cost** nothing yet, because it was found on the first boot of the backend
+  that can exhibit it. Recorded at full length anyway: the shape is the
+  expensive part, and it is the shape this project keeps finding — KF-141 is a
+  driver believing its own request instead of the hardware's answer, KF-187 is a
+  sweep that skipped everything and reported green. This is the same fault in
+  the checking rather than in the code, which is worse, because it is what would
+  have hidden the other two.
+
+- **Fixed in** kernel 0.2.41 on the `graphics` branch, in three parts, and only
+  the third is a test:
+
+  1. `display_ops` gained `flush`, and `fbcon` and `/dev/fb0`'s `write` call it,
+     so the pixels genuinely reach the host.
+  2. `user_framebuffer_test` no longer claims "both markers are on the screen"
+     on a display that has to be told. It says what it actually established —
+     that the markers are in the pixels the program was given — and names where
+     the rest is checked.
+  3. `scripts/screen-has-pixels.py`, which drives QEMU's monitor, takes a
+     screendump and counts non-black pixels. Four matrix paths use it: both
+     backends on x86_64 and virtio-gpu on aarch64, plus the Bochs adapter, so
+     that a rig reporting pixels on only one backend is known to be a rig with
+     something else wrong with it.
+
+- **Shown to fail before being believed.** With `gpu_flush` stubbed to
+  `return true` without sending anything, the screendump check reports nought
+  non-black pixels and `a present that lands : FAIL`, on a kernel whose every
+  other self-test still passes. Restored, both go green. A check that cannot
+  fail looks exactly like one that passes.
+
+---
+
+### GX-001 — A program that maps the screen and exits gives the screen to the page allocator
+
+[#512](https://github.com/neogentrics/ReconOS/issues/512)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by writing the second
+  display backend and then asking what `addrspace_release_page` would do with
+  its framebuffer.
+
+- **Was** the address space tears down by walking page tables, so at that moment
+  all it holds is a physical address. The rule it applied was:
+
+  ```c
+  /* Memory the allocator never handed out is not memory it can take back. */
+  if (!pmm_owns(pa))
+          return;
+  ```
+
+  which is the fix for KF-209 and is a complete, correct answer **for a
+  framebuffer that is a PCI aperture** — memory above RAM that the allocator has
+  never heard of.
+
+  virtio-gpu's framebuffer is `pmm_alloc_pages`. It is main memory, the
+  allocator did hand it out, `pmm_owns` answers true, and the page is freed. The
+  first program to map `/dev/fb0` and exit hands the live screen back to be
+  allocated to whatever asks next.
+
+- **Why it is the same bug as KF-209 seen from the other side.** That entry
+  records x86_64 silently freeing an aperture into the allocator while aarch64
+  panicked on the identical code. The guard added then encodes *a framebuffer is
+  never allocator memory* — true of every display this kernel had. A second
+  backend makes it false, and the guard then reads as permission.
+
+- **Cost** nothing observed. **Said plainly rather than dressed up:** no boot in
+  the matrix currently tears down an address space that holds the framebuffer —
+  instrumenting `addrspace_release_page` across a full virtio-gpu boot shows
+  four calls, none of them a screen page. So this is a demonstrated defect in a
+  path that is not yet reached, not a fault anybody has been bitten by, and the
+  entry says so because the alternative is a register that overstates itself.
+
+  It is recorded as a bug rather than a note because it was *demonstrated*
+  rather than reasoned about — see the test below, which fails without the fix.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_owns_page` answers whether
+  a physical page is part of the screen in force right now, and
+  `addrspace_release_page` asks it before asking the allocator. Asked of the
+  display because the display is the only thing that knows which pages are
+  pixels *now*: a range recorded when the mapping was made would go stale the
+  next time the mode changed.
+
+- **Shown to fail before being believed**, and this is what makes it a bug
+  rather than a worry. `release_keeps_the_screen` builds two address spaces that
+  differ in exactly one thing — which physical page is mapped at the same
+  address — and destroys both. Their page tables are identical in shape, so that
+  cost cancels and what is left is the one page:
+
+  ```
+  with the guard     screen space gave back 4 pages, ordinary space gave back 5
+  without the guard  screen space gave back 5 pages, ordinary space gave back 5
+                     -- the screen is being freed with it
+  ```
+
+  The control half matters as much as the subject: a run where *neither* page
+  came back would also show a difference of zero and would mean the test had
+  stopped measuring anything. On the Bochs adapter the test says the framebuffer
+  is an aperture and that the teardown never had a decision to make, rather than
+  passing for a reason unrelated to its name.
+
+- **The general form is not fixed and is deliberately not fixed here.** The real
+  rule is that pages obtained through `file_ops.map` belong to the file and
+  never to the address space. `/dev/fb0` is the only file in this kernel with a
+  `map` operation, so a display-shaped question is complete today and will stop
+  being complete the day there is a second one. Raised in `docs/SIGNALS.md` for
+  the kernel session rather than settled by the session that happened to trip
+  over it.
+
+---
+
+### GX-004 — An oversized mode was refused and not counted as refused
+
+[#513](https://github.com/neogentrics/ReconOS/issues/513)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by `display_self_test`
+  itself, on the first boot where the primary display was not a Bochs adapter:
+
+  ```
+  virtio-gpu: 16384x16384 wants 1024 MB and this driver will spend 64
+  display: an oversized mode was refused and not counted as refused
+    a mode of our own  : FAIL
+  ```
+
+  A correct refusal, correctly printed, reported as a failure.
+
+- **Was** `modes_set` and `modes_refused` are declared in `core/display.c` and
+  were incremented inside `bochs_set_mode` — the driver, not the layer. That is
+  invisible while one backend exists, because the only path that can refuse a
+  mode is the one maintaining the counters.
+
+  `display_self_test` asks whether an oversized mode was *counted* as refused,
+  which is the right question: a driver that returns false without recording it
+  is a driver whose summary line quietly stops meaning anything. Asked of a
+  machine driven by anything else, every refusal was invisible and the check
+  failed on a kernel behaving perfectly.
+
+- **Cost** one confusing red line, immediately. Worth recording because of what
+  it is an instance of: **a counter that only one implementation of an interface
+  maintains is a counter about that implementation, however much its name and
+  its home suggest otherwise.** The summary said "1 mode(s) set, 0 refused" on a
+  boot that had just refused three.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_set_mode` counts, once, for
+  every backend; the five increments inside `bochs_set_mode` are gone. Verified
+  on both backends: the counts now move on virtio-gpu, and the Bochs path
+  reports what it always did.
+
+---
+
+### GX-005 — A 1280x800 screen driven at 5120x2880, because nothing could ask it
+
+[#514](https://github.com/neogentrics/ReconOS/issues/514)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by reading two lines of the
+  same boot next to each other:
+
+  ```
+  virtio-gpu: the host offers 1 enabled scanout(s), the first is 1280x800
+    display      : virtio-gpu, 5120x2880, pitch 20480, BGRA
+  ```
+
+  The device said what its screen was and the kernel chose something else.
+
+- **Was** `display_init` picks a mode from `MODE_LADDER`, largest first, taking
+  the first that fits in the adapter's memory. That is the best answer available
+  from hardware that cannot describe its own panel, which the Bochs adapter
+  cannot: it has a memory size and a set of mode registers, and nothing that
+  says what is plugged into it.
+
+  So the ladder was never wrong. **It was answering the only question the
+  interface could ask**, and went on answering it after a device arrived that
+  could answer a better one. `display_ops` had nowhere to put the reply.
+
+- **Cost** on the matrix, four times the pixels the display was showing and
+  **fifty-four megabytes** of main memory to hold them — 58 MB for 5120x2880
+  against 4 MB for the screen that actually existed. On a machine with a real
+  panel it is worse than wasteful: it is a mode the monitor has to scale or
+  refuse.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_ops` gained
+  `preferred_mode`, null on hardware that cannot be asked, and `display_init`
+  asks before it guesses. A device that answers and is then refused falls
+  through to the ladder rather than leaving the machine dark — knowing what it
+  wants and not getting it is a reason to try something else, not to stop.
+
+  ```
+  display: virtio-gpu reports its screen is 1280x800, and that is the mode it is in
+  ```
+
+  The Bochs path is unchanged and still lands on 7680x4320 with 256 MB of
+  adapter memory, which is correct: nothing can ask it anything.
+
+---
+
+### GX-002 — One driver's private state, addressed by another driver's position in a table
+
+[#515](https://github.com/neogentrics/ReconOS/issues/515)
+
+- **Found in** kernel 0.2.41, on 15 September 2026, while writing the second
+  display backend — by the second backend needing somewhere to keep its own
+  device pointer and finding the shelf already occupied.
+
+- **Was** `core/display.c` kept two static arrays side by side, `displays[]` and
+  `adapters[]`, and reached the second through the first's index:
+
+  ```c
+  struct bochs *b = &adapters[d - displays];
+  ```
+
+  That is exactly right while every entry in `displays[]` is a Bochs adapter,
+  and it is the shape a single-backend interface grows into naturally — nothing
+  about it looks wrong. The moment one entry is not, the expression addresses
+  another driver's device: a virtio-gpu in slot 0 and a Bochs adapter in slot 1
+  would have had the Bochs driver write mode registers through `adapters[1]`
+  while the display it was handed was the one in slot 0.
+
+- **Cost** nothing, because it was found by the change that would have triggered
+  it rather than after. Recorded because a latent fault that a second
+  implementation walks straight into is the whole reason a second implementation
+  was written first, before real hardware.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `struct display` carries
+  `ops_private`, and every backend enters the table through `display_register`
+  rather than writing into it. The Bochs driver's storage is still static — a
+  driver allocating at attach time on a path that runs before the heap is a
+  different problem and was not solved here — what changed is how it is found.
+
+---
 
 ### BG-105 — A register that says nothing until the port is already running
 
@@ -6810,6 +7945,38 @@ lands on any screen. Verified by photograph at 800x600, 1280x800 and 1920x1200.
 
 [#450](https://github.com/neogentrics/ReconOS/issues/450)
 
+> **The panel is not 1920x1080, measured 17 September 2026.** Kali on the
+> Gateway reports the connector directly:
+>
+> ```
+> [CONNECTOR:161:eDP-1]: status: connected
+>         physical dimensions: 260x140mm
+>         fixed modes:
+>                 "1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798
+>                 "1366x768": 48 56150 1366 1404 1426 1466 768 772 776 798
+> fb0  virtual_size 1366,768   stride 5504   bits_per_pixel 32
+> ```
+>
+> Two fixed modes, both 1366x768, on a panel 260 mm wide -- about 11.6
+> inches, which is the size this machine is. `B125HAN02.201` is a 12.5-inch
+> 1920x1080 part, so **the firmware's VBT names a panel this machine does not
+> have.** A VBT carries entries for every panel a board was ever built with;
+> reading one and believing it is how a driver ends up setting a mode the
+> glass cannot show.
+>
+> This does not change the entry's fault or its fix -- 800x600 was wrong
+> either way, and the loader now reports 1366x768 on that machine. It changes
+> where a driver may take the mode **from**: the connector, never the VBT.
+>
+> Two things this also confirms, and both are the kind that only real hardware
+> can give: Linux reports `stride 5504` for a 1366-pixel line, which is
+> **exactly** what ReconOS reports on the same panel -- so the pitch handling
+> is right against an independent implementation rather than against itself --
+> and `8086:3185` is the correct table entry for this machine.
+
+
+[#450](https://github.com/neogentrics/ReconOS/issues/450)
+
 - **Found:** 14 September 2026, from the firmware's own setup screen. Its VBT
   names the panel `eDP AUO B125HAN02.201` -- **1920x1080**. The loader reported
   `framebuffer : 800x600`.
@@ -6998,6 +8165,8 @@ and `slice mmc0 2 20480 53247`.
 
 ### KF-221 - The AML parser stopped at the first conditional, thirty-seven bytes into a real machine's namespace
 
+[#483](https://github.com/neogentrics/ReconOS/issues/483)
+
 - **Found:** 14 September 2026, on the Gateway:
   `aml : 0 names, 0 devices, 0 methods stepped over` and
   `aml : stopped at byte 37 on opcode a0 -- the namespace is partial`.
@@ -7036,6 +8205,8 @@ reason from a full stop into a number.
 reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
 
 ### KF-222 - The boot log went to the machine's internal disk while the stick it booted from sat beside it
+
+[#484](https://github.com/neogentrics/ReconOS/issues/484)
 
 - **Found:** 14 September 2026, on the Gateway:
   `boot log : 14586 bytes to MMC0P1:\RECONOS-BOOT.TXT`. MMC0P1 is the laptop's
@@ -7096,6 +8267,8 @@ written down here rather than done quietly.
 
 ### KF-223 - Root ports were asked what was plugged into them before they had power
 
+[#485](https://github.com/neogentrics/ReconOS/issues/485)
+
 - **Found:** 14 September 2026, on the Gateway:
   `xhci : 16 slots, 16 ports, 576 scratchpad pages, 0 connected, 0 addressed`.
   Sixteen ports, nothing on any of them, on a machine that had just booted from
@@ -7142,7 +8315,951 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-260 — A fallback that rebuilt the exact wrong number it was written to replace
+
+[#544](https://github.com/neogentrics/ReconOS/issues/544)
+
+- **Found:** 18 September 2026, auditing this tree for one shape after producing
+  it myself: **an empty capture becoming a plausible number.**
+
+- **What it was.** `install-then-boot-test.sh` looks up where the EFI partition
+  landed, because a literal 1 MiB went stale when a BIOS boot partition was put
+  in front of the ESP. The comment explaining that is still there and is good.
+  The line under it was:
+
+  ```sh
+  esp_lba=$(sgdisk -p "$W/target.img" | awk '$6 == "EF00" { print $2; exit }')
+  esp_at=$(( ${esp_lba:-2048} * 512 ))
+  ```
+
+  **2048 blocks is the stale 1 MiB.** So whenever the lookup found nothing --
+  no EF00 partition, a damaged table, `sgdisk` absent -- the fallback silently
+  reinstated the exact offset the lookup exists to replace, and the test then
+  read a BIOS boot partition as a filesystem and reported *"non DOS media"*.
+  Which the comment four lines above calls *a confusing way to be told that a
+  constant went stale.*
+
+- **Measured rather than assumed**, because the three cases behave differently
+  and only one of them is safe:
+
+  | written as | when empty |
+  |---|---|
+  | `$(( var * 512 ))` | **0**, silently |
+  | `$(( ${var:-2048} * 512 ))` | **1048576**, silently |
+  | `$(( $(cmd) * 512 ))` | **syntax error**, loudly |
+
+  `install-onto-test.sh` uses the third form and is safe by accident. This one
+  used the second.
+
+- **Why it was looked for at all.** The same shape had just produced a false
+  fact in this register: a probe reported `0 sectors written` for a deliberate
+  200 MB write, and that zero was `$((b - a))` over two empty strings after an
+  awk syntax error the author's own `2>/dev/null` had hidden. It was published
+  as *"`/proc/diskstats` is broken on this machine"* and retracted an hour
+  later. Grepping the tree for arithmetic over captured values found this in
+  two minutes.
+
+- **Fixed** by refusing instead of defaulting: an empty `esp_lba` now fails with
+  the reason, and says why it is not falling back. The dead `${esp_lba:-2048}`
+  left in the success message went too -- a default in a message implies a
+  fallback that no longer exists.
+
+- **Latent, not live.** Every image the matrix builds has an EF00 partition, so
+  this has never fired. It is recorded because the conditions that make it fire
+  -- `sgdisk` missing, a table damaged by the thing under test -- are exactly
+  the conditions under which somebody would be reading the output most closely.
+
+- **Status:** fixed, kernel 0.5.0.
+
+### KF-259 — Six paths failed about processors that had been preempted perfectly well
+
+[#540](https://github.com/neogentrics/ReconOS/issues/540)
+
+- **Found:** 18 September 2026, matrix 73, six paths red at once:
+
+  ```
+  PVH 2 processors, no ticks
+  PVH 4 processors, no ticks
+  PVH 8 processors, no ticks
+  device tree 2 processors, no ticks
+  ...
+      PVH, 2 processors    FAILED -- online, and not one of them was preempted
+        cpu 0        : online, hw 0x0, 4 ticks, 0 switches
+        cpu 1        : online, hw 0x1, 0 ticks, 0 switches
+  ```
+
+- **Six paths at once, immediately after a merge, is a story that writes
+  itself** -- and the story was wrong. The merge before it brought two network
+  drivers and an interrupt hook that claims a vector, so "the NIC drivers broke
+  SMP interrupts" was sitting there ready to be believed.
+
+  **It reproduced with no network device attached at all**, which killed that in
+  one command. Then the pre-merge kernel reproduced the same `cpu 1: 0 ticks`
+  while *passing* -- so the tick counts printed beside the failure were not the
+  failure either, and the merge was innocent.
+
+- **What it actually was.** `verify-kernel.sh` reads the preemption evidence out
+  of the boot report with an anchored expression:
+
+  ```sh
+  sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks$/\1/p'
+  ```
+
+  Note `ticks$`. **And the commit before the merge appended a field to exactly
+  that line**, for KF-258: the summary could not distinguish a thread that is
+  about to run from one that can never be chosen, so it now says which.
+
+  ```
+  thread 2     : idle-001, running, 2 ticks, idle-for-this-cpu
+  ```
+
+  The anchor stops matching, `idle_ticks` comes back empty, and the check
+  reports that nothing was preempted about a machine that preempted normally.
+
+- **A boot report is an interface.** It is read by a person, and it is also
+  parsed by seventeen sub-scripts and the run that drives them. Adding a word to
+  a line is an ABI change to every one of them, and nothing in this tree says so
+  -- there is no list of which lines are load-bearing, and the only way to find
+  out is `grep` before editing a `kprintf`.
+
+- **It failed closed, and that is the only reason this was cheap.** An anchored
+  expression that stops matching produces an empty answer, and the check treats
+  empty as failure. The same fault in the other direction -- a looser pattern
+  that matched something wrong -- would have gone on reporting `pass` about
+  preemption nobody was measuring any more, on every SMP path, indefinitely.
+  **This is the shape of KF-247 with the sign flipped**, and it is the good sign.
+
+- **Fixed:** `ticks.*$`. The expression wanted the number and had no business
+  insisting the line ended there. Verified by feeding it both the new
+  `running, ... , idle-for-this-cpu` line and the `ready` line beside it: it
+  takes the first and ignores the second, which is what it always meant.
+
+- **Status:** fixed, kernel 0.5.0. No kernel code changed -- the kernel was
+  right and its reader was not.
+
+### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
+
+[#534](https://github.com/neogentrics/ReconOS/issues/534)
+
+> ### Narrowed, 18 September 2026, and it is not the idle path
+>
+> The entry below blames the idle path. **That was wrong**, and it is left
+> standing above this note because the reasoning that produced it is the
+> reasoning somebody else would repeat.
+>
+> **The discriminator is a user program, not an idle machine.** Counting
+> completed sleeps in the same kernel, same command, one word apart:
+>
+> ```
+> with the first screen : 1
+> with noinit           : 4
+> ```
+>
+> `noinit` is the only difference, and all it does is not start `recon-init`.
+> A machine that runs no user program sleeps and wakes indefinitely; a machine
+> that starts one stops after the first sleep. So the idle path is a bystander
+> -- it was suspect only because "the machine has gone quiet" and "the first
+> program has started" happen at nearly the same moment, and I took the first.
+>
+> **The thread table at the moment it wedges**, printed from inside the
+> sleeper immediately after its first sleep returns:
+>
+> ```
+> thread 0  : boot,       ready,   188 ticks
+> thread 31 : recon-init, ready,     0 ticks
+> thread 30 : logport,    running,   0 ticks
+> thread 2  : kworker,    finished,  1 ticks
+> thread 1  : idle-000,   ready,     4 ticks
+> ```
+>
+> **`recon-init` is READY and has had zero ticks.** It has never been given the
+> processor. `pick_next` takes a thread only when
+> `t->state == THREAD_READY && t->off_cpu` and its `idle_for` and `pinned_to`
+> allow this processor -- so a thread that is READY and never picked is either
+> not `off_cpu`, or is being passed over for a reason the summary does not
+> show. Both the boot thread and `idle-000` are marked idle-for-this-processor
+> and are last resorts, so with a program *ready*, the picker believes there is
+> work and the two waiters are skipped.
+>
+> That is a **scheduling** fault, and it is a much better place to look than
+> the timer wheel: the sleeper's timer fires correctly (`timer_next_deadline`
+> was observed returning the right deadline, 107 ms out, and the idle path
+> armed it).
+>
+> **Adding a `kprintf` to `power_idle_wait` makes it go away** -- four sleeps
+> complete instead of one. So it is timing-sensitive, which is consistent with
+> a race around a thread becoming runnable rather than with a wrong constant.
+>
+> **Its likely relative is KF-150** -- *about one boot in sixty, a user program
+> does not finish, and nothing says why* -- which has been open since before
+> any of this and is a user program not being run. That is the same sentence.
+>
+> **Deliberately not patched.** The fix belongs in `pick_next` or in whatever
+> sets `off_cpu`, and the scheduler is the one file in this tree where a wrong
+> guess produces intermittent faults nobody can attribute -- KF-150 may already
+> be one. The evidence above is worth more than a patch written from it in the
+> same hour.
+>
+> **That next step is done, and it eliminated its own hypothesis.**
+> `sched_print_summary` now prints whether a READY thread is actually pickable
+> and whether it is an idle thread, and the wedge re-run says:
+>
+> ```
+> thread 0  : boot,       ready,  195 ticks, idle-for-this-cpu
+> thread 31 : recon-init, ready,    0 ticks
+> thread 30 : logport,    running,  0 ticks
+> thread 1  : idle-000,   ready,    4 ticks, idle-for-this-cpu
+> ```
+>
+> `recon-init` carries **neither** marker: it is READY, it *is* `off_cpu`, and
+> it is not an idle thread. So it is fully eligible and `pick_next` should
+> return it on the next call. **It is not a picker-eligibility fault**, which
+> was the leading candidate an hour ago and is now ruled out by one word of
+> output.
+>
+> What remains is the program's **lifetime**: `noinit` -- which differs only by
+> not starting it -- sleeps indefinitely, so it is `recon-init` running and
+> exiting that breaks the sleeper, not its existing. The next thing to look at
+> is teardown: `timer_sleep_ns` keeps its `struct sleeper` and `struct timer`
+> **on the caller's stack**, and a timer still filed against freed or corrupted
+> memory is a callback writing somewhere it does not own. KF-209 was a teardown
+> freeing pages it should not have, in this same path.
+>
+> Then re-measure KF-150 -- *about one boot in sixty, a user program does not
+> finish* -- against whatever it turns out to be.
+
+
+[#534](https://github.com/neogentrics/ReconOS/issues/534)
+
+- **Found:** 17 September 2026, building the log port, and found because the
+  thing being built stopped after two turns of its loop.
+
+- **Measured, and the measurement is the entry.** A kernel thread looping on
+  `socket_accept` and `timer_sleep_ns(100 ms)`, instrumented either side of the
+  sleep:
+
+  ```
+  logport: turn 1, about to accept
+  logport: turn 1, sleeping
+  logport: turn 1, woke (slept)
+  logport: turn 2, about to accept
+  logport: turn 2, sleeping
+  ```
+
+  **Turn 2 never wakes.** The machine runs on — the boot continues, the first
+  screen paints, the heap test prints — and that thread is gone for the life of
+  the boot. A tenth of a second became forever.
+
+- **What is different between turn 1 and turn 2.** At turn 1 the machine is
+  still busy: the first program is starting and the boot is finishing. By turn 2
+  everything else has ended, and the only thing left is a processor with nothing
+  to run — so the idle path is entered for the first time. **The sleep that
+  fails is the first one taken on an idle machine.**
+
+- **Every part of the chain reads correctly in isolation, which is why this
+  needs a number rather than a patch.**
+
+  - `timer_sleep_ns` files a timer and loops on `wait_sleep` until the callback
+    sets its flag. Correct.
+  - `timer_next_deadline` walks every level of the wheel and returns the
+    smallest `expires`. It would find this timer.
+  - `power_idle_wait` asks for that deadline, converts ticks to nanoseconds,
+    takes it over the ceiling when it is sooner, and calls
+    `arch_wait_tickless`. Then turns the wheel with `timer_tick()` on waking.
+  - `idle_loop` calls `power_idle_wait` and then `sched_yield`.
+
+  Four correct-looking pieces and a thread that does not wake. The fault is in
+  how they meet, and finding it needs the idle path instrumented rather than
+  read — which is what this entry is for.
+
+- **What it costs, beyond the log port.** Anything in this kernel that sleeps
+  and expects to be woken is unreliable the moment the machine goes quiet. That
+  is every poller, every retry, every timeout that sleeps rather than spins.
+  **A busy machine hides it completely**, which is why twenty-eight matrix paths
+  and 2,119 self-tests do not show it: every one of them is doing something.
+
+- **Its likely relatives.** KF-232 -- *three timers did not fire, once, on one
+  path of twenty-eight* -- is a filed timer that did not arrive, and is still
+  open. KF-257's six-second gap is an arriving segment not acted on until the
+  peer retransmitted. Neither is proven to be this; both are the same shape, and
+  a fix here is the first thing to re-measure them against.
+
+- **Worked around, not fixed, in one place.** `logport.c` yields instead of
+  sleeping, and says so at the line, with the cost stated: a machine with that
+  port open does not idle properly. That is acceptable for a diagnostic that is
+  off unless asked for, and it is **not** acceptable as a general answer — the
+  general answer is this entry.
+
+- **Status:** open. Reproducible in one command on any machine:
+  `qemu-system-x86_64 -kernel ... -append logport` with a network, and watch the
+  accept loop stop.
+
+### KF-257 — The handshake completes on the wire and `connect` never hears about it
+
+[#529](https://github.com/neogentrics/ReconOS/issues/529)
+
+- **Found:** 17 September 2026, by the **server session**, with a packet capture
+  on the virtual NIC. Handed here because it is kernel code and they cannot push
+  to this branch.
+
+- **What they measured**, relative to boot:
+
+  ```
+  + 2.047s  SYN -> :9        RST+ACK back 1 ms later
+  + 6.023s  SYN -> :8099     SYN+ACK back 1 ms later     <- not acted on
+  +12.008s                   SYN+ACK retransmitted by the peer
+  +12.041s  ACK ->           this machine finally answers
+  ```
+
+  Replies arrive in about a millisecond and nothing happens for six seconds,
+  until the far end gives up waiting and retransmits. The program polls
+  throughout -- **7,848,406 attempts** against a thirty-second deadline -- and
+  every one answers `SYS_EAGAIN`. A connection the host had already accepted was
+  never reported to the program that opened it.
+
+- **So `c->state = TCP_ESTABLISHED` in the `TCP_SYN_SENT` case does run** -- the
+  ACK at +12.041s is sent from that branch and proves it -- and
+  `tcp_state_of(s->conn)` does not return it to the caller.
+
+- **What they ruled out, and each with a control:** not a timeout (thirty
+  seconds and 7.8 million polls give the same answer as two); not the poll loop
+  starving the stack (`SYS_YIELD` between attempts, and the DNS resolver polls in
+  exactly the same shape and gets its reply in about 2,600 tries); not inbound
+  (`GET /api/status` answers 200 throughout).
+
+- **What reading the code here ruled out**, so the next person does not repeat
+  it: `tcp_open` returns `(int)(c - conns)` and `tcp_state_of` indexes `conns`
+  with it, so the index convention agrees. `find_conn` matches all four of the
+  tuple before it considers a listener. `sys_connect` asks
+  `socket_connect_progress` and maps its three answers correctly.
+  **Every layer reads correctly in isolation, which is why this needs a live
+  reproduction rather than more reading.**
+
+- **The six-second gap is the sharper clue and is worth chasing first.** The
+  first SYN+ACK arrived and was not acted on at all; only the peer's retransmit
+  was. Something is delivering inbound segments late or not at all, and the
+  state machine is downstream of that.
+
+- **Status:** open, and it blocks the server branch's entire client half.
+  `server/dial.c` is written and waiting with 38 checks.
+
+### KF-256 — One failed transfer wedges the endpoint for the rest of the boot
+
+[#530](https://github.com/neogentrics/ReconOS/issues/530)
+
+- **Found:** 17 September 2026, **reproduced on this desktop** rather than on the
+  Gateway, by handing QEMU the physical stick with `usb-host` passthrough so the
+  real device's firmware answers this kernel's driver.
+
+  ```
+  usb-storage : reading 8 block(s) at 2048 failed -- the device sent no data (0 of 4096 bytes moved)
+  usb-storage : reading 8 block(s) at 2176 failed -- the device sent no data (0 of 4096 bytes moved)
+  usb-storage : reading 8 block(s) at 4096 failed -- the command wrapper was not accepted (0 of 4096 bytes moved)
+  usb-storage : reading 2 block(s) at 2    failed -- the command wrapper was not accepted (0 of 1024 bytes moved)
+  usb-storage : reading 32 block(s) at 30277600 failed -- the command wrapper was not accepted (0 of 16384 bytes moved)
+  ```
+
+- **Two faults, and this entry is the second one.** The first read fails in the
+  **data** phase -- the device accepts the command and sends nothing. Every read
+  after it fails in the **command** phase, which means the bulk OUT endpoint is
+  halted and stays halted. One transient failure turns into a dead device for the
+  rest of the boot.
+
+- **Nothing in this driver clears a halt.** Bulk-Only Transport says what to do
+  and it is not optional: a Clear-Feature(ENDPOINT_HALT) on the stalled endpoint,
+  and a Bulk-Only Mass Storage Reset when both are stuck. This kernel does
+  neither, so `command()` retries into an endpoint that can only refuse.
+
+- **This is what the Gateway's screen was showing.** `storage: no volume this
+  kernel can read` and the missing `RECONOS-BOOT.TXT` are not separate faults --
+  they are this one, cascading. Once the endpoint wedged, the partition scan's
+  later reads, the filesystem probe and the log write could not succeed.
+
+- **The partition scan works because it reads one or two blocks at a time and
+  gets in before the first failure**, which is why `usb0p1` and `usb0p2` appear
+  on the screen while nothing can be read from them.
+
+- **Status:** open, reproducible on this desk in one command, no laptop needed.
+
+### KF-255 — Every outbound SYN carried a wrong TCP checksum, and always had
+
+[#531](https://github.com/neogentrics/ReconOS/issues/531)
+
+- **Found:** 17 September 2026, by the **server session**, from a packet capture
+  rather than from reading the code. Fix written by them; taken here because it
+  is kernel code.
+
+- **What it was.** `socket_connect` calls `socket_bind(s, IPV4_ANY, 0)`, so
+  `s->local_ip` was `0.0.0.0` when handed to `tcp_open`. TCP's checksum covers a
+  pseudo-header containing the source address; it was summed over that zero while
+  the IP layer wrote the device's real address into the header on the way out.
+  The two disagreed on every segment this machine ever originated.
+
+- **The evidence is what makes it certain.** The IP checksum was correct and the
+  TCP one wrong **by the same `0x0C0F` on every packet** -- which is
+  `0x0A00 + 0x020F`, the two halves of `10.0.2.15`, the machine's own address,
+  missing from the sum.
+
+  ```
+  before   SYN, then silence, for every target -- no SYN+ACK, and no RST
+           even from a port with nothing listening
+  after    SYN -> RST+ACK from the closed port
+           SYN -> SYN+ACK -> ACK, handshake complete
+  ```
+
+- **Why a working TCP stack and a full self-test suite never saw it.** An
+  accepted connection takes its local address from the packet that arrived, so
+  **inbound has always been correct and outbound never has.** Every test in this
+  kernel that exercises TCP does it by listening.
+
+- **Status:** fixed, kernel 0.3.2. The route is looked up before `tcp_open`
+  and the device's address filled in when the socket bound to `IPV4_ANY`.
+
+### KF-254 — `connect` on a datagram socket answers `SYS_EIO` every time
+
+[#532](https://github.com/neogentrics/ReconOS/issues/532)
+
+- **Found:** 17 September 2026, by the **server session**, on their DNS resolver:
+  `resolved:false` on the first boot after merging kernel 0.2.48, where it had
+  worked before.
+
+- **What it was, and it is mine.** KF-244 gave `socket_connect_progress` this
+  opening line:
+
+  ```c
+  if (!s || s->type != SOCK_STREAM || s->conn < 0)
+          return SOCKET_PROGRESS_FAILED;
+  ```
+
+  One condition said two different things. *This socket cannot be asked* and
+  *this socket was asked and failed* are not the same fact, and folding them
+  together made every datagram socket report as having lost -- taking
+  `SYS_CONNECT` away from the only shape of UDP a program can use, which
+  `socket_file.c` says itself.
+
+- **A fix that broke the neighbouring case.** KF-244 was about `connect`
+  reporting success before a handshake finished; it was right about streams and
+  silently wrong about datagrams, because a datagram has no handshake to wait
+  for and `connected` was already the whole answer.
+
+- **Three controls separated it from a network fault**, which is why the report
+  could be acted on without re-deriving it: inbound TCP still answered 200, the
+  kernel's own DHCP still completed, and the address came up identically on both
+  boots.
+
+- **Status:** fixed, kernel 0.3.2. A datagram reports DONE when connected and
+  FAILED when not, before the stream logic is reached.
+
+### KF-253 — The byte count in a failure report was left over from the transfer before
+
+[#533](https://github.com/neogentrics/ReconOS/issues/533)
+
+- **Found:** 17 September 2026, on the **first real outing of KF-246's
+  diagnostic** -- which reported:
+
+  ```
+  usb-storage : reading 8 block(s) at 2048 failed -- the device sent no data (31 of 4096 bytes moved)
+  ```
+
+  Thirty-one bytes of four thousand is a strange number, and it is `CBW_LENGTH`:
+  the command wrapper that had just succeeded. **Nothing had moved at all.**
+
+- **What it was.** `xhci_bulk_transfer` wrote `*transferred` only where a
+  completion arrived. Every other exit -- not configured, no endpoint, an
+  unmappable buffer, and above all the timeout -- returned false leaving the
+  caller's variable holding whatever the previous call had put there. `command()`
+  reuses one `moved` across all three phases of a request, so a data phase that
+  moved nothing reported the command phase's 31.
+
+- **The diagnostic reproduced, inside itself, the exact fault it was built to
+  end.** KF-246 exists because six different failures wore one sentence; its
+  first real answer carried a number that was not a measurement. A stale number
+  is worse than an absent one for the same reason a wrong answer is: it is
+  actionable and it is false.
+
+- **Status:** fixed, kernel 0.3.2. Answered before anything can fail:
+  `*transferred` is set to zero at entry, so no exit can leave a previous
+  call's value standing.
+
+- **Verified by re-running the same reproduction**, which now reads
+  `0 of 4096 bytes moved`.
+
+### KF-252 — The command ring takes whatever completion arrives, and nothing serialises it
+
+[#528](https://github.com/neogentrics/ReconOS/issues/528)
+
+- **Found:** 17 September 2026, by applying a rule the **Bluetooth session**
+  stated. They had written three matching checks at three layers and only
+  noticed the third time that they were the same check:
+
+  > An answer that does not name what it is answering must not be taken as the
+  > answer to whatever happens to be outstanding.
+
+  That is KF-248 stated better than KF-248 states it. Going looking for a fourth
+  instance found one in ten minutes — **and it was found by disproving a claim I
+  had already written down.** The signal to them said `command()` was the *right*
+  shape, a place the kernel already followed the rule. It is the opposite.
+
+- **What it is**, and it is three gaps in one function.
+
+  ```c
+  if (TRB_TYPE_OF(e.control) == TRB_COMMAND_COMPLETE) {
+          if (result)
+                  *result = e;
+          return ((e.status >> 24) & 0xFF) == COMP_SUCCESS;
+  }
+  ```
+
+  1. **The completion is not matched.** A Command Completion Event carries the
+     physical address of the command TRB it answers, in its parameter field.
+     That field is copied into `result` and never compared with what was posted.
+     The first completion of the right *type* is taken as the answer.
+  2. **Nothing serialises the ring.** `transfer_lock` guards transfers.
+     `command()` holds nothing, and `x->cmd_index` is advanced unprotected — so
+     two callers can be handed the same ring slot.
+  3. **So the two faults compound.** Two commands in flight means two writers to
+     one slot and two waiters racing for one completion, and the completion says
+     which command it belongs to.
+
+- **What it would look like.** `enable slot`, `address device` and `configure
+  endpoint` all go through here, and each reports success on `COMP_SUCCESS`. A
+  caller taking another command's completion is told its own command succeeded —
+  so a device is "addressed" when what actually succeeded was a different
+  device's slot allocation. The failure arrives later, somewhere else, as a
+  device that does not answer.
+
+- **Reachability is not proven and the entry says so.** Enumeration runs from
+  the boot thread; hot-plug (KF-199) and the HID poller run from others. Whether
+  two of them can be inside `command()` at once has **not** been demonstrated
+  here, and the honest statement is that the code does nothing to prevent it
+  rather than that it has been seen to happen. The same was true of KF-248 until
+  a Bluetooth adapter turned out to be the device that breaks it.
+
+- **The fix is one lock and one comparison**, and it belongs with KF-248: both
+  are "the event names its owner and the code ignores it", one on the command
+  ring and one on the transfer rings. Building them separately means writing the
+  same argument twice.
+
+- **Status:** open. Found by rule rather than by failure, which is the cheapest
+  way this project has found anything.
+
+### KF-251 — `SYS_WALLTIME` is declared in nanoseconds and moves once a second
+
+[#518](https://github.com/neogentrics/ReconOS/issues/518)
+
+- **Found:** 17 September 2026, by the **server session**, building an NTP
+  client — which needs two of this machine's timestamps to compute a round
+  trip. Measured rather than reasoned about: five reads with twenty thousand
+  yields between each.
+
+  ```
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  clock probe: walltime ns = 1789646397000000000
+  ```
+
+  The low nine digits are zero every time, and over 200,000 yields the value
+  moved by exactly 1000 ms.
+
+- **What it is.** `sys_walltime` returns `time_wall_ns`, which prefers
+  `arch_wall_ns` — and on x86_64 that reads the CMOS RTC, whose finest field is
+  **seconds**. So the number is a whole second multiplied by a billion. The
+  signature promises nanoseconds and the clock behind it has never had them.
+
+- **What it costs, in their words and they are right.** An NTP round trip
+  cannot be measured at all: both local timestamps land in the same second, the
+  delay computes to zero, and `round trip 0 ms` to a server across the internet
+  is *quantisation wearing the clothes of a measurement*. Their client refuses
+  to print it, which is the correct response to a number that would be a lie.
+
+  It is wider than NTP. **Any** duration measured with the wall clock is rounded
+  to a second, and nothing in the interface says so.
+
+- **The mechanism to fix it already exists in the same function.** When
+  `arch_wall_ns` returns zero — a machine with no CMOS — `time_wall_ns` falls
+  back to the time the firmware gave once, plus the monotonic counter since.
+  That path has exactly the resolution the interface promises. **The coarse
+  clock is preferred over the fine one whenever a coarse clock is present.**
+
+- **The fix, and the part that needs care.** Latch the CMOS reading against the
+  monotonic counter once and serve `latched + (monotonic now − monotonic then)`.
+  That makes *differences* correct immediately, which is what the round trip
+  needs.
+
+  The absolute offset keeps up to a second of error, because latching at an
+  arbitrary moment says nothing about where in the second it happened. Chasing
+  the edge at boot would cost up to a second of every boot. The cheap answer is
+  to keep sampling the seconds field and **snap the phase the first time it
+  changes** — that observation *is* the edge, it costs two port reads, and it
+  self-corrects within a second of the first sample. It must only ever move the
+  clock forward: a wall clock that goes backwards is a worse fault than the one
+  being fixed.
+
+- **Nothing on the server branch is blocked by it** — they said so, their clock
+  service reports honestly, and the console line states the uncertainty rather
+  than implying accuracy it does not have.
+
+- **Fixed**, kernel 0.3.1. The RTC stops being the clock and becomes the thing
+  that *sets* it: one reading latched against the monotonic counter, and the
+  answer served as `latched + (counter now − counter then)`.
+
+- **Not read on every call, and that matters for the use that found it.**
+  `arch_wall_ns` spins while the RTC's update-in-progress bit is set — up to two
+  milliseconds by specification — then does seven port reads. A program timing a
+  round trip calls this twice in quick succession, and *a clock that costs two
+  milliseconds to read cannot measure anything shorter than that.* The RTC is
+  consulted at most every 250 ms; between probes the answer is a counter read.
+
+- **How the phase is found, without paying for it at boot.** Waiting for the
+  seconds field to change would cost up to a second of every boot. Instead each
+  probe notices whether it changed since the last one, and **this clock is
+  always late, never early** — a reading says which second it is and nothing
+  about where in it, so the first latch starts behind by the fraction it could
+  not see and the monotonic delta preserves exactly that lateness. Every later
+  observation offers a different lateness. Keeping the one that is furthest
+  forward keeps the least-late estimate, and refusing the others is what makes
+  the clock monotonic by construction rather than by a clamp somebody could
+  remove.
+
+- **A counter reading zero, which was very nearly misread.** `time_wall_fixups`
+  reported **0** on a boot, and a counter that is always zero looks exactly like
+  a branch that never runs. Instrumented rather than assumed: over 1600 ms
+  `arch_wall_ns` was read 1,548,460 times, its value changed **twice**, and
+  **one** of those two changes improved the phase. The other was offered and
+  correctly refused for being further from the turn than the estimate already in
+  hand. So zero means *no observation beat the first latch*, which is a normal
+  and correct outcome — and the accessor now says so in as many words, because
+  the next person to read a zero there will make the same inference.
+
+- **Tested by putting the old clock back.** The new self-test asserts that the
+  low nine digits are not zero across eight reads — a property of one reading,
+  not a difference between two, because a test comparing two readings passes on
+  the broken clock whenever the machine is slow enough, which is a test that
+  measures the host. With the coarse RTC restored it reports *"its low nine
+  digits were zero on eight reads — it is counting whole seconds"*; with the fix
+  it is silent. Red on the old, green on the new.
+
+- **And the resolution is now measured on every boot rather than declared**:
+  `resolution : two reads apart by 21048 ns, phase corrected 0 time(s)`. The
+  line above it printed a perfectly plausible date for as long as this fault
+  existed. A resolution nobody measures is a resolution nobody can be wrong
+  about.
+
+- **What it does not give.** The absolute offset keeps up to the probe interval
+  of error and the clock is still always late, so this is not a reason to trust
+  the date to better than a fraction of a second. NTP is the right thing to hold
+  the remainder, and that is what the server session is building.
+
+- **Status:** fixed, kernel 0.3.1.
+
+### KF-250 — The network stack failed once, on the installed-disk boot, and has not failed since
+
+[#516](https://github.com/neogentrics/ReconOS/issues/516)
+
+- **Found:** 17 September 2026, matrix 67, on one path of twenty-eight:
+
+  ```
+    installs from media, and the disk boots     FAILED
+      and its own tests pass, with a volume under them  FAILED
+            the network stack  : FAIL
+      1 of 9 failed
+  ```
+
+  Every other step of that path passed either side of it — the install, the
+  loader on the target, the disk booting on its own, BIOS boot, seven
+  partitions found, and 73 checks passing on the second boot of the same
+  volume.
+
+- **What is known, which is less than it looks.** `net_self_test` runs eight
+  sub-tests and a packet round trip, and **each prints its own diagnostic**.
+  None of them reached the log: `verify-kernel.sh` reports a failed path with
+  `head -16`, and the failure was further down than that. So the register
+  records *the network stack* and not which part of it, which is the same
+  compression KF-238 and KF-246 were about, one level up.
+
+- **Not reproduced, and the attempts are the entry:**
+
+  | what was run | result |
+  |---|---|
+  | the same path alone | 9 of 9 |
+  | the same path, twice, six CPU spinners running | 9 of 9, both |
+  | twelve plain kernel boots, six at a time | no failure |
+
+  **The load I reproduced was the wrong load, and that is worth saying rather
+  than filing this as flaky.** A matrix run is four sub-scripts booting guests
+  that format and write disk images, alongside the main sequence. Spinning CPUs
+  is not that: the contention that matters here may be disk, and a test about
+  a network stack failing under disk contention would be a real fault about
+  timing, not a tired machine.
+
+- **Two readings, and nothing yet separates them.** Either a sub-test has a
+  deadline that a loaded machine misses — the shape KF-201 had, and KF-205, and
+  KF-235 — or something in the stack genuinely fails about one boot in many. The
+  first is a fault in a test; the second is a fault in the kernel. They are not
+  close, and one observation cannot choose.
+
+- **What would settle it**, in order of cost: raise the reporter's `head -16` so
+  a failed path carries its own diagnostics — that alone turns the next
+  occurrence into an answer instead of another entry like this one. Then, if it
+  recurs, the sub-test that failed names itself.
+
+- **Status:** open, seen once, unreproduced in fifteen further boots. Recorded
+  rather than dismissed because *rare* and *absent* look identical from one
+  green run, and this project has KF-232 and KF-237 already sitting in exactly
+  this state.
+
+### KF-249 — Plug in a USB keyboard and the machine can never idle again
+
+[#517](https://github.com/neogentrics/ReconOS/issues/517)
+
+- **Found:** 17 September 2026, booting a machine with USB input attached to
+  check that lifting the boot decoders out of `usb_hid.c` had broken nothing.
+  It had not. This was already there.
+
+  ```
+  $ qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+        -device qemu-xhci -device usb-kbd -device usb-mouse \
+        -kernel kernel/build/x86_64/reconos-kernel.elf
+
+    power: 11 wakeup(s) in 204 ms, against 20 a fixed tick would have cost
+    power: the tick was suspended and cost no fewer wakeups, which means it
+           did not stay suspended
+    a tick that stops  : FAIL
+  ```
+
+- **What it is.** `usb_hid.c`'s poller queues an interrupt transfer, asks
+  whether it completed, and when nothing has arrived sleeps **4 ms** and asks
+  again. The comment says why it sleeps rather than yields, and that reasoning
+  is right as far as it goes. But a thread that wakes every 4 ms is a machine
+  that wakes every 4 ms, so the tickless idle this kernel went to some trouble
+  to build is switched off by the presence of a keyboard.
+
+  The measurement is the entry: 11 wakeups where a fully suspended tick would
+  be a handful and a fixed 100 Hz tick would be 20. The idle path is working —
+  it halved the wakeups — and then the poller put most of them back.
+
+- **An interrupt endpoint is called that because it interrupts.** The xHCI
+  driver reads its event ring by polling it, so every transfer on every device
+  is discovered by somebody asking. The fix is to let the controller raise an
+  interrupt and have the poller wait on that instead of on a timer — which is
+  the same machinery KF-248 wants for per-endpoint completions, and is the
+  reason these two should be built together rather than one after the other.
+
+- **The cost is a laptop's battery**, on the one machine this project is
+  actually aimed at. The Gateway is a fanless Celeron; waking 250 times a
+  second to ask a keyboard whether anything happened is exactly the thing
+  tickless idle exists to avoid.
+
+- **Why nothing caught it, and this is the part that matters.** The kernel's
+  own `power_idle_self_test` detects it perfectly, prints the numbers, and fails
+  — it needed no new instrument at all. **No path in the matrix attaches a USB
+  input device.** `grep -c 'usb-kbd\|usb-mouse' scripts/*.sh` finds nothing, so
+  twenty-eight boots all report `a tick that stops : pass` about machines that
+  have no keyboard, which is the one kind of machine nobody uses.
+
+  A check that runs on every path and is never given the input that breaks it
+  is a check that cannot fail, and it looks exactly like one that passes.
+
+- **The path is deliberately not added yet, and that is a choice worth
+  recording.** Adding it turns the matrix red immediately and blocks every
+  session's pushes on a fault none of them introduced. So the configuration is
+  written down here with the command that reproduces it, and the matrix path
+  goes in **with** the fix rather than before it — the only case in this
+  project where a missing test is left missing on purpose, and it is on the
+  condition that it is not left that way quietly.
+
+- **Status:** open. Measured, reproducible in one command, and not a
+  regression: the same boot on `6c93dae`, the commit before the graphics merge,
+  fails identically.
+
+### KF-248 — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
+
+[#505](https://github.com/neogentrics/ReconOS/issues/505)
+
+- **Found:** 16 September 2026, working out how to give `struct usb_device` the
+  second IN endpoint the Bluetooth session asked for. The change they asked for
+  is a field; this is what is underneath it.
+
+- **What the Bluetooth session found, which is real and is the smaller half.**
+  `read_interface` keeps **one** IN endpoint. An adapter's interface 0 offers
+  three -- an interrupt IN for HCI events, a bulk IN for ACL data, and a bulk
+  OUT -- and the loop takes the interrupt one, then **overwrites it** when the
+  bulk IN arrives later in the same descriptor. The comment says this is
+  deliberate, and for a card reader offering both it is: *"so a device offering
+  both still looks like the storage device it is."* Right for storage, and it
+  silently discards the endpoint every HCI command completion arrives on.
+
+- **What is underneath it.** `route_completion` files a transfer event by
+  **slot** -- by device -- into one `have_completion` / `completion_bytes` /
+  `completion_ok` trio per device. The event TRB carries the endpoint ID and the
+  router ignores it.
+
+  That is correct today by accident: every device this kernel drives has at most
+  one transfer outstanding. Storage runs command, data and status strictly one
+  at a time under `transfer_lock`; HID has an IN endpoint and nothing else. So
+  no two endpoints have ever been in flight on one device.
+
+  **A Bluetooth adapter is exactly the device that breaks it** -- an interrupt
+  IN sits permanently queued for events while ACL data moves on the bulk
+  endpoints. The event completion lands in the same slot the bulk waiter reads,
+  and that waiter takes it as its own: `*transferred = length -
+  completion_bytes`, computed from another endpoint's residue. **A wrong byte
+  count reported as success**, which is the failure the parked-completion
+  comment was written to prevent, one level down from where it was applied.
+
+- **So adding a second IN field and stopping there produces a driver that
+  reports another endpoint's answer as its own.** The field is not the fix; it
+  is the thing that makes the fix necessary.
+
+- **The shape, again.** `struct usb_device` holds one IN endpoint because the
+  one device it was written for needed one. *An interface with one
+  implementation cannot tell its requirements from its accidents* -- the same
+  sentence as `display_ops` before virtio-gpu existed, and it was true here for
+  as long as USB had only disks and keyboards on it.
+
+- **The fix, and why it is not being done today.** Endpoints become a small
+  array carrying address, packet size, type, interval, its own ring **and its
+  own parked completion**, looked up by DCI -- which is how the hardware indexes
+  them, and the reason `route_completion` can file correctly with no new
+  bookkeeping. Callers stop asking for *in* or *out* and ask for a pipe.
+
+  Deliberately **not** landed beside KF-246. USB storage is the one subsystem
+  that just started working on the Gateway, and the next boot of that machine
+  exists to read KF-246's diagnostic and settle whether multi-block reads fail
+  generally. Refactoring the driver underneath that boot would mean reading the
+  answer through a driver that changed in the same breath.
+
+- **Status:** open. Designed, not built. Blocks the Bluetooth session, which has
+  been told the shape rather than the field so nothing is built against a
+  structure that is about to change.
+
+### KF-247 — Twenty-one bugs were fixed and none of them reached the track record
+
+[#486](https://github.com/neogentrics/ReconOS/issues/486)
+
+- **Found:** 16 September 2026, filing KF-245 and KF-246. The script printed
+  `302 entries, 353 issues already there`. The register has **323**.
+
+- **What it was.** `make-issues.py` splits the register on a heading whose
+  separator is an em dash, an en dash or `--`. Every entry from **KF-221**
+  onward was typed with a single `-`, so the filer did not see any of them:
+  not skipped with a warning, not counted as unparsed, not mentioned. Twenty-one
+  entries, covering the whole USB enumeration chain (KF-238 to KF-243), the
+  timer work, the AML parser and both of today's fixes.
+
+  So the GitHub issue list -- which exists because Joshua asked for a visible
+  track record, *"not just random commits"* -- has been missing the most
+  active three weeks of kernel work, and every run said it was up to date.
+
+- **This is the same fault as before KF-200**, when fourteen `--` entries were
+  invisible to a parser that demanded an em dash. That was fixed by widening
+  the pattern, and widening the pattern is what let it happen again: the next
+  spelling nobody anticipated vanishes exactly as quietly.
+
+- **Why nothing caught it, which is the part worth keeping.** The filer
+  reported the number **its own parser had produced**. `302 entries` was a true
+  statement about the parser and a false one about the file, and no green run
+  could have contradicted it -- the count and the thing being counted came from
+  the same place. Identical in shape to KF-187, where a boot that skipped five
+  self-tests and a boot that passed them printed the same total.
+
+  And the evidence was inside the one file the whole time: `check_open` splits
+  on `^### (BG|KF)-` with **no separator at all**, so it has always seen 323.
+  Two functions in the same script have disagreed about what an entry is for as
+  long as both have existed, and neither could see the other.
+
+- **Fixed** in two parts, and the second is the one that matters. The pattern
+  now accepts a bare `-` -- and both halves of the script take it from one
+  named constant, so they cannot drift apart again. Then `parse` counts the
+  headings a **second way**, with a deliberately looser pattern, and **refuses
+  the run** when the two counts differ, naming every entry it could not read.
+
+  Refuses rather than warns: a warning inside a run that prints three hundred
+  lines is a warning nobody reads.
+
+- **Verified by breaking it.** With the bare `-` removed from the pattern
+  again, the script stops and names all twenty-one. A check that has never been
+  seen to fail looks exactly like one that passes.
+
+- **Status:** fixed, and the twenty-one entries are filed and closed.
+
+### KF-246 - Six ways a disk request can fail, one word for all of them
+
+[#487](https://github.com/neogentrics/ReconOS/issues/487)
+
+- **Found:** 16 September 2026, reading for the cause of
+  `block: could not read the last 32 blocks of usb0: the hardware did not
+  answer` -- which has failed on every Gateway boot since the stick first
+  appeared as a disk.
+
+- **What it was.** `command()` in `usb_storage.c` returns -1 from **six**
+  places and the caller turns every one into `BLOCK_ERR_TIMEOUT`. So one
+  sentence covered: the command wrapper not accepted; accepted short; the data
+  phase never completing; the status wrapper never arriving; arriving with the
+  wrong signature; and arriving carrying another command's tag.
+
+  **Those are not variations of one fault.** A failed command phase means the
+  endpoint is wedged and the read is uninteresting. A failed data phase means
+  the device accepted a READ(10) it could not satisfy. A failed *status* phase
+  means the data already moved and only the acknowledgement was lost -- a
+  request that arguably worked.
+
+- **And nothing reported the LBA, the count, or how many bytes moved.** `moved`
+  is captured at every step and discarded on failure, though a short transfer
+  and a silent one are different facts.
+
+- **It misled.** The message names "the last 32 blocks", so the obvious reading
+  is a problem at the end of a 14.4 GB disk -- a truncated LBA, sign extension,
+  a 32-bit limit. The LBA is 30,277,600, which fits in 32 bits, and the CDB is
+  correct. The other reading is that **any multi-block read fails** and the
+  partition scan only ever succeeded because it reads one block at a time. One
+  boot with this entry's output tells the two apart; reasoning could not.
+
+- **Fixed:** each exit records which phase and how far it got, and the caller
+  prints that beside the block count and LBA it already knows. Same shape as
+  KF-238 and KF-242 -- a number or a word compressed to the point of
+  uselessness, un-compressed.
+
+- **Status:** fixed, kernel 0.2.49. The underlying read failure is still open
+  and is now diagnosable in one boot.
+
+### KF-245 - The boot menu clears the whole screen to change one digit
+
+[#488](https://github.com/neogentrics/ReconOS/issues/488)
+
+- **Found:** 16 September 2026, by Joshua watching the Gateway's boot menu and
+  asking whether the flashing was normal. It was not.
+
+- **What it was.** `gfx_menu_draw` opens with
+  `fill(0, 0, width, height, paper)` -- it clears the entire framebuffer and
+  redraws every element -- and the countdown called it **once a second** to
+  change one digit. Over an uncached framebuffer that clear is slow enough to
+  see, so the panel blinked black between the wipe and the redraw, on every
+  tick, on the one screen a person looks at while deciding what to boot.
+
+- **Its own comment argued for it**, and the argument was sound: *drawn in full
+  each time rather than patched, because a partial redraw that gets its
+  arithmetic wrong leaves the previous frame's text underneath the new one.*
+  True -- and applied too widely. That hazard is about the **layout** changing;
+  the countdown changes a **digit**.
+
+- **Fixed** with `gfx_menu_countdown`, which answers the objection rather than
+  ignoring it: it computes no layout of its own but uses the one `gfx_menu_draw`
+  recorded, and clears the full width of the content block so no digit of a
+  longer number survives a shorter one. The stale comment is corrected in place
+  rather than deleted -- it now says which case each path is for.
+
+- **Nothing could have caught this but a person looking at it.** It is invisible
+  on a serial console, invisible in a screendump, and every self-test passes on
+  a menu that flashes.
+
+- **Status:** fixed, loader 0.2.49.
+
 ### KF-244 - Connect reports success while the handshake is still in flight
+
+[#489](https://github.com/neogentrics/ReconOS/issues/489)
 
 - **Asked for** by the server session, 16 September 2026, and they were right
   to call it the highest-value fix available: it is the whole client half of
@@ -7178,6 +9295,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.48.
 
 ### KF-243 - The scratchpad pointer array is also scratchpad buffer zero
+
+[#490](https://github.com/neogentrics/ReconOS/issues/490)
 
 - **Found:** 16 September 2026, on the Gateway, by the diagnostic added one
   boot earlier:
@@ -7228,6 +9347,8 @@ boot log.
 
 ### KF-242 - A failed command cannot say whether it was refused or ignored
 
+[#491](https://github.com/neogentrics/ReconOS/issues/491)
+
 - **Found:** 15 September 2026, by reading for the cause of
   `xhci: port 7 would not give up a slot` -- the last USB fault standing after
   KF-238 to KF-241.
@@ -7267,6 +9388,8 @@ boot log.
   and is now diagnosable in one boot instead of none.
 
 ### KF-241 - A disk that arrives late is never read
+
+[#492](https://github.com/neogentrics/ReconOS/issues/492)
 
 - **Found:** 15 September 2026, on the Gateway, in the boot after KF-240:
 
@@ -7314,6 +9437,8 @@ boot log.
 
 ### KF-240 - A device is addressed before it is allowed to answer
 
+[#493](https://github.com/neogentrics/ReconOS/issues/493)
+
 - **Found:** 15 September 2026, the moment KF-239 let a root port reach the
   enabled state: `xhci: port 6 would not take an address (completion code 4)`.
 
@@ -7346,6 +9471,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-239 - The port reset disables the port it has just enabled
+
+[#494](https://github.com/neogentrics/ReconOS/issues/494)
 
 - **Found:** 15 September 2026, by printing the raw port registers on the
   Gateway -- three snapshots in one boot, against Linux reading the same
@@ -7397,6 +9524,8 @@ boot log.
 
 ### KF-238 - The USB summary counts enabled ports and calls them connected
 
+[#495](https://github.com/neogentrics/ReconOS/issues/495)
+
 - **Found:** 15 September 2026, while failing to explain KF-239.
 
 - **What it was.** One line:
@@ -7425,6 +9554,328 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
+
+> ### A third sighting, 18 September 2026 — and it stops being "intermittent"
+>
+> Reported by the **graphics session**, from their own matrix run, on a branch
+> whose only changes are `intel_modeset.c`, a script, docs and a badge. They
+> took no number because the prefix is this track's, and they were right to
+> report it rather than sit on it.
+>
+> ```
+> a rename survives the power going out       FAILED
+>       proving the checker first:
+>           checksum: caught
+>           unallocated: caught
+>           torn: caught
+>
+>       round 1 (cut at 271ms):
+>           unreadable no valid superblock
+>
+>     6 cuts inside a rename on x86_64: 1 inconsistent.
+> ```
+>
+> **The checker proved itself on all three fault shapes in the same run**, so
+> this is not a broken reader — which is the first thing that would have to be
+> ruled out and was, without being asked.
+>
+> Three sightings, three different cut moments: **1115 ms** (matrix 57),
+> **904 ms** (matrix 70), **271 ms** (theirs). One round of six each time. That
+> is not one unlucky instant; it is a window that exists across the whole write
+> sequence.
+>
+> #### The argument that changes what this entry is
+>
+> All three happened on a **contended machine**. Theirs had four
+> `verify-kernel.sh` processes from the `ReconOS-matrix` worktree running
+> against it — this session's — and its first attempt failed `clock and tick`
+> at **14 Hz against an expected 100**, which is the starvation signature.
+>
+> The easy conclusion is *the harness is flaky under load*. They refused it, and
+> the refusal is the most useful sentence anybody has written about this bug:
+>
+> > **A window that only opens under load is still a window.** A real power cut
+> > does not wait for the machine to be idle. If anything, a starved host is a
+> > better model of a laptop losing power mid-save than an idle one is.
+>
+> That is correct and it inverts the reading. Contention is not an excuse for
+> the failure; **contention is the test condition that finds it.** A filesystem
+> whose crash consistency holds only when nothing else is happening is a
+> filesystem that has not been tested, and this rig has been quietly grading it
+> on the easy case.
+>
+> #### And it explains why two reproduction attempts failed
+>
+> KF-250 records the same caveat from the other side: *the load I reproduced was
+> the wrong load.* Six CPU spinners were run against `install-then-boot-test.sh`
+> and it passed twice; twelve plain boots six at a time found nothing. **Spinning
+> CPUs is not disk contention**, and four concurrent matrices — each formatting
+> and writing disk images — is.
+>
+> So the reproduction to attempt is not "a busy machine" but **"a machine whose
+> disk is busy"**, and the cheapest version of it is to run
+> `rename-crash-test.sh` beside something doing heavy I/O rather than beside
+> something burning CPU.
+>
+> #### One operational fact this surfaced — and the first version of it, written here, was wrong
+>
+> Three matrices were running at once when the graphics session saw 14 Hz. I
+> wrote that `RECON_TREE_LOCK` makes the lock per-worktree and that its
+> granularity is wrong for the scarce resource. **That is backwards**, and the
+> graphics session corrected it with the line itself:
+>
+> ```sh
+> LOCKFILE=${RECON_TREE_LOCK:-/tmp/reconos-kernel-tree.lock}
+> ```
+>
+> **The default is one path for the whole machine.** A session that leaves the
+> variable alone serialises with every other session that leaves it alone. The
+> granularity is right by design; it is being *overridden* — and this session
+> is one of the two overriding it:
+>
+> ```
+> ReconOS-matrix    RECON_TREE_LOCK=/tmp/reconos-matrix-tree.lock   <- mine
+> ReconOS-network   RECON_TREE_LOCK=/tmp/reconos-network-tree.lock
+> ReconOS-graphics  unset -> the shared default
+> ```
+>
+> So the starvation is not a missing mechanism somebody has to build. It is two
+> sessions opting out of one that already works, and the fix is a line each
+> rather than a design.
+>
+> **Why this session set it** is in `reference-reconos-matrix-worktree`: so a
+> matrix could run while the other session edited the kernel worktree. That
+> reason is still sound for *trees* — two worktrees genuinely are two trees —
+> and it silently gave up the machine-wide serialisation that came free with the
+> default. The cost was recorded as "processor contention"; the bill is a
+> filesystem test failing on a starved host.
+>
+> Their failure images are kept at
+> `/home/neoge/reconos-verify-failures/20260918-054447`.
+>
+> #### The first hunt with the right idea and the wrong instrument
+>
+> 18 September, acting on the reading above: ten rounds of six cuts, run
+> deliberately while the graphics session's matrix held the machine. Every round
+> printed `contended=yes`, taken from `fuser` on the shared lock. All sixty cuts
+> came back clean.
+>
+> **The result is worthless and the reason is the entry.** Load average during
+> those sixty cuts was **1.78 on sixteen cores** -- about eleven per cent. Their
+> run was in a serial phase with one guest, so the lock was held and the machine
+> was idle.
+>
+> **A held lock means a matrix is running. It says nothing about whether the
+> machine is busy**, and an entire experiment was built on the two being the
+> same thing. So that is three failed reproductions on quiet machines, two of
+> them believed to be loaded at the time: six CPU spinners, twelve parallel
+> boots, and a lock file.
+>
+> This bug keeps producing the same fault in the people hunting it -- **a test
+> that reports the condition it wanted rather than the condition it had**, which
+> is the shape of KF-247, KF-250 and KF-259 in a different costume.
+>
+> #### The dose indicator was in the report all along
+>
+> The graphics session's failing run said `clock and tick` was running at
+> **14 Hz against an expected 100**. That is the kernel measuring its own
+> starvation, and it answers exactly the question the lock check was pretending
+> to: *is this machine actually starved?* It went unread twice.
+>
+> **So the condition to reproduce is not "another matrix is running" but "the
+> guest's own tick rate has collapsed"**, and any future attempt should establish
+> that before it starts cutting -- otherwise a clean sweep says nothing except
+> that the load was never built.
+>
+> #### The second hunt, and why this line of attack is closed for now
+>
+> The graphics session read the plan before the data and caught the same error
+> one level up: **14 Hz is a CPU-starvation number, measured inside the guest,
+> and the plan was to apply disk load.** An indicator on one axis and a variable
+> on another -- a mirror of the lock column. They were right, and the reality
+> turned out worse than their prediction in two further ways.
+>
+> **The load generator was CPU, not disk.** Eight `dd if=/dev/urandom ...
+> conv=fsync` writers sat at about 25 per cent CPU each. Generating sixty-four
+> megabytes of randomness is expensive; the write is cheap. So the second hunt
+> was a **CPU** load built by someone who had, minutes earlier, thrown out an
+> experiment for confusing two conditions.
+>
+> **And then I claimed the instrument was broken, which was false.** Retracted
+> in full, because it is the one conclusion here that would have cost somebody
+> else something: it removes a working gauge from everyone who reads this.
+>
+> The claim was that `/proc/diskstats` does not advance for writes under WSL2,
+> from this probe:
+>
+> ```
+> sectors written during a deliberate 200 MB fsync write: 0
+> ```
+>
+> **It advances perfectly well.** Measured properly, with the whole line printed
+> before and after rather than one field picked in advance:
+>
+> ```
+> $10 sectors_written   788942992 -> 789353000   delta 410008
+> ```
+>
+> 410,008 sectors of 512 bytes is 209.9 MB, which is the 200 MiB that was
+> written. `writes_completed` moved by 207, `ms_writing` by 173, `io_ticks` by
+> 88.
+>
+> **What produced the zero is the part worth keeping.** The awk program never
+> ran. Passed through `wsl.exe` into `bash -c "..."`, the field references were
+> consumed by the outer shells before awk saw them, and what arrived was:
+>
+> ```
+> awk: cmd. line:1: =="sdd"{print 0}
+> awk: cmd. line:1: ^ syntax error
+> ```
+>
+> `$3` became empty and `$10` became `0`. awk exited with a syntax error, the
+> command substitution captured an empty string, `$((b-a))` subtracted two empty
+> strings and produced **0** -- and the error itself went to `/dev/null`, by a
+> redirect I had written into the same line.
+>
+> So the figure was not a measurement of an idle disk. **It was a failed command,
+> silenced by its own author, whose empty output became a plausible number.**
+> That is the shape of KF-247, KF-250 and KF-259, produced by the person who had
+> written all three up the same day.
+>
+> Caught by the graphics session, who were right that the instrument works and
+> wrong about why -- they diagnosed an off-by-three field index, and the actual
+> cause was shell quoting eating the references. **Their conclusion was right and
+> their reasoning was not, which is why it still had to be measured rather than
+> accepted.**
+>
+> Two caveats on the gauge, theirs and worth keeping: `io_ticks` is coarse under
+> a virtual disk -- 88 ms of busy for a write that took far longer in wall clock
+> -- so it is usable as a *relative* dose between rounds and not as an absolute
+> utilisation. And it is the host's view of the virtual disk; what a guest
+> experiences is a layer further down. `sectors_written` is the trustworthy
+> field.
+>
+> #### Four instruments, four failures, in one hour
+>
+> | instrument | what it was believed to say | what it said |
+> |---|---|---|
+> | `fuser` on the shared lock | the machine is busy | a matrix process exists |
+> | `dd if=/dev/urandom` | disk load | CPU load |
+> | `/proc/diskstats` io_ticks | disk utilisation | it works -- my *reading* of it was a silenced syntax error |
+> | guest tick at 14 Hz | (correct, but) CPU starvation | measured on the wrong axis for this plan |
+>
+> **Every one was caught by measuring rather than by reasoning**, and three of
+> the four were caught only because somebody asked the next question instead of
+> accepting the previous answer. That is the whole method, and this bug keeps
+> finding people who stop one question early -- including, three times in one
+> hour, the person hunting it.
+>
+> #### What is actually established
+>
+> **Nothing about the bug.** Sixty cuts on a quiet machine and an aborted sweep
+> on a CPU-loaded one say only that the condition was never built. The three
+> sightings stand; the four reproduction attempts say nothing about them.
+>
+> #### What the experiment would have to be
+>
+> The graphics session's proposal, and it is the right one because it is the
+> only condition ever observed to produce this:
+>
+> **Run two or three matrices concurrently and sweep the cuts under them.** All
+> three sightings happened with three running. That saturates every axis at once
+> -- CPU, disk, and the I/O *pattern* that matters, which is many small metadata
+> commits with barriers rather than one sequential stream. It also cannot be
+> faked on this host, because the only workload whose disk load can be confirmed
+> is one whose effects are visible in the guests themselves.
+>
+> **Cost: roughly an hour of the machine, and it starves every other session
+> while it runs.** That is a decision about somebody's computer rather than a
+> technical call, so it waits to be asked for rather than being taken.
+>
+> One measured aside: `lsblk` reports `ROTA=1` for every disk here, including
+> the 1 TB. If that is real rather than a virtualisation artefact, seek time is
+> a variable and scattered concurrent commits contend far more sharply than one
+> stream -- which would help explain why several guests doing small commits
+> reproduce this and one process writing hard does not.
+>
+> #### A fourth sweep, sampled rather than assumed — and it is a quiet-machine sample too
+>
+> The graphics session's matrix ran the rename path on 18 September and came
+> back `6 cuts inside a rename on x86_64: 0 inconsistent`. Their run was holding
+> the shared lock throughout, so it would have been filed as *"clean under
+> contention, one matrix"* — which is the first hunt's error exactly.
+>
+> **They sampled instead of assuming**, every five seconds for the last eight
+> minutes of the run:
+>
+> ```
+> 93 samples   load: mean 0.59, max 0.98 on 16 cores  (~4%)
+>              disk: 780 MB written over the window, one 485 MB burst,
+>                    the rest near zero
+> reconfs section:  load 0.21..0.37, sectors_delta mostly 0-184
+> ```
+>
+> **So the fourth sweep is a fourth quiet-machine sweep**, not a fifth data
+> point at a different dose. It joins the pile rather than adding to it. Five
+> attempts now, all at roughly the same condition, and the three sightings stand
+> where they were.
+>
+> #### The finding that actually matters, and it is about the experiment rather than the bug
+>
+> **A single matrix writes 780 MB in eight minutes and almost all of it in one
+> 485 MB burst.** The load average across the same window averaged four per cent
+> of sixteen cores.
+>
+> That kills a design assumption nobody had stated. *"Run three matrices and
+> sweep the cuts under them"* sounds like applying a dose; it is really three
+> bursty sources that may or may not overlap, separated by long quiet gaps. A
+> sweep of sixty cuts under three concurrent matrices could easily place most of
+> its cuts **in the gaps** and come back clean for a reason having nothing to do
+> with whether the window exists.
+>
+> **So the concurrent-matrix run is only worth doing with per-cut instrumentation**:
+> record the `sectors_written` delta and the load across each individual cut, and
+> label every round by what it actually coincided with. Without that it is an
+> expensive way to generate another ambiguous clean sweep, and this entry already
+> has five of those.
+>
+> And read by address, with the field escaped for both shells, so it cannot
+> degrade into the silent zero that produced the retracted claim above:
+>
+> ```sh
+> awk -v d=sdd "\$3==d {print \$10}" /proc/diskstats
+> ```
+
+
+
+
+[#496](https://github.com/neogentrics/ReconOS/issues/496)
+
+> **Seen a second time, 17 September 2026, matrix 70** -- and the heading's
+> *once* is now wrong, which is left standing rather than edited so the change
+> in what is known is visible:
+>
+> ```
+> round 4 (cut at 904ms):
+>       unreadable no valid superblock
+> 6 cuts inside a rename on x86_64: 1 inconsistent.
+> ```
+>
+> Same signature, same shape, a different cut time (904 ms against matrix 57's
+> 1115 ms). **Two occurrences, each one round of six, is a rate rather than an
+> anomaly** -- roughly one run in six will turn red on this, which is enough to
+> hunt with and was not before.
+>
+> It also means any matrix run can go red on a fault nobody introduced. That is
+> recorded here rather than absorbed, because a re-run that goes green is
+> evidence about the second run and not about the first.
+>
+> **The line was only visible because of KF-250's fix.** The failure reporter
+> truncated at twenty lines until this morning, and the round and cut time are
+> below that. The previous version of this run would have said
+> `rename under a power cut FAILED` and stopped.
+
+[#496](https://github.com/neogentrics/ReconOS/issues/496)
 
 - **Found:** 15 September 2026, matrix 57, one round of six:
 
@@ -7469,6 +9920,8 @@ boot log.
 
 ### KF-236 - Every PCI address is printed in a form nobody can look up
 
+[#497](https://github.com/neogentrics/ReconOS/issues/497)
+
 - **Found:** 15 September 2026, by holding the Gateway's boot report beside
   `lspci` on the same machine, minutes apart, over SSH.
 
@@ -7502,6 +9955,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.41.
 
 ### KF-235 - The check that the tick arrives at the rate the kernel assumes cannot fail
+
+[#498](https://github.com/neogentrics/ReconOS/issues/498)
 
 - **Found:** 15 September 2026, by reading `time_self_test` while looking for
   KF-232's mechanism. Not by a failure: this check has never failed and cannot.
@@ -7553,6 +10008,8 @@ boot log.
 - **Status:** fixed, kernel 0.2.40.
 
 ### KF-234 - A timer is due before the instant it was asked for
+
+[#499](https://github.com/neogentrics/ReconOS/issues/499)
 
 - **Found:** 15 September 2026, by reading `timer_start` while looking for
   KF-232's mechanism -- and it turned out to *be* KF-232's mechanism, or half
@@ -7652,6 +10109,8 @@ boot log.
 
 ### KF-233 - Recovery is offered on every boot, except the boots that go wrong
 
+[#500](https://github.com/neogentrics/ReconOS/issues/500)
+
 - **Found:** 14 September 2026, by reading the loader after Joshua reported that
   the Gateway's menu "only shows Recon OS. It doesn't even show Recon OS
   recovery." Whether this is what that machine hit is **not yet known** -- see
@@ -7737,6 +10196,8 @@ boot log.
 - **Status:** fixed, loader 0.2.38. The Gateway's menu is still unexplained.
 
 ### KF-232 - Three timers did not fire, once, on one path of twenty-eight
+
+[#501](https://github.com/neogentrics/ReconOS/issues/501)
 
 - **Renumbered on the merge**, from KF-227. Both sessions reached
   KF-225 on 14 September without being able to see the other's
@@ -7933,6 +10394,8 @@ and this entry was two bugs wearing one number.
 
 ### KF-231 - kprintf reads the width on a number and throws it away
 
+[#502](https://github.com/neogentrics/ReconOS/issues/502)
+
 - **Renumbered on the merge**, from KF-226. Both sessions reached
   KF-225 on 14 September without being able to see the other's
   register. The rule applied was that what is already on the shared
@@ -8009,6 +10472,8 @@ and this entry was two bugs wearing one number.
   own commit; see the note on KF-230.)
 
 ### KF-230 - The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen
+
+[#503](https://github.com/neogentrics/ReconOS/issues/503)
 
 - **Renumbered on the merge**, from KF-225. Both sessions reached
   KF-225 on 14 September without being able to see the other's
@@ -8087,6 +10552,8 @@ and this entry was two bugs wearing one number.
 
 ### KF-224 - The machine reported six gigabytes of memory and has four
 
+[#504](https://github.com/neogentrics/ReconOS/issues/504)
+
 - **Found:** 14 September 2026, by a C program drawing it on the laptop's panel:
   `memory  6.0 GiB, 3.8 GiB free`. The firmware's own setup says
   `Total Memory 4096 MB`, and `Max TOLUD [2 GB]` -- so that machine's RAM sits
@@ -8153,6 +10620,11 @@ saved.
 draws it last on purpose; printing more text after it would paint over the
 program instead, which is the same fight from the other side. That one belongs in
 `KERNEL-WANTS.md`, where it already is.
+
+- **Status:** not a bug. Recorded because the question was asked and the answer
+  is worth not re-deriving -- but nothing here is broken, so it does not belong
+  in the Open list. Said in a Status line rather than only in the heading,
+  because the heading is prose and the checker reads Status lines.
 
 ### KF-226 — The boot thread never stopped being work, so every drive completion waited for a timer
 
@@ -8255,6 +10727,8 @@ program instead, which is the same fight from the other side. That one belongs i
 - **Fixed in** kernel 0.2.33. The shared mapping, like its two neighbours.
 
 ### KF-229 — Five self-tests pass exactly once per volume, inside the check written to catch that
+
+[#464](https://github.com/neogentrics/ReconOS/issues/464)
 
 > **It was six, and the sixth was written the same day.** The kernel session
 > added a directory self-test creating `/selftest-dir` and

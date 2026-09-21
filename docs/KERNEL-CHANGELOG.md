@@ -88,6 +88,87 @@ look exactly the same when it is.
 
 ---
 
+## Unreleased, on `graphics` -- 15 September 2026 -- a second display, and what it disagreed with
+
+**The version is deliberately not bumped here.** This branch merges into
+`kernel`, and the number is the merging session's call. A new backend is a
+capability rather than a fix, so the argument is for a minor bump.
+
+**virtio-gpu, the second display backend.** `core/virtio_gpu.c` drives it in 2D
+through the virtio transport layer that virtio-blk and virtio-net already use,
+and it works on x86_64 over PCI, on aarch64 over PCI, and on aarch64 over the
+memory-mapped transport -- three combinations, one driver, no per-combination
+code, and `make check-portable` still reports `core/` clean.
+
+It was chosen ahead of real hardware on purpose. QEMU runs it, so
+`scripts/verify-kernel.sh` exercises it on every change; an Intel Gen9 can only
+be tested by writing a USB stick and rebooting a laptop. **The point of a second
+backend is not the second device.** `display_ops` was shaped entirely by the
+Bochs/VBE adapter, and one implementation of an interface cannot show whether
+the interface abstracts anything. This one was written to disagree with it, and
+it did, five times.
+
+**`display_ops` grew two operations and lost an assumption.**
+
+`flush` is the one that matters. The Bochs adapter's framebuffer is a PCI
+aperture being scanned out continuously, so a store *is* a pixel appearing --
+and every consumer in this kernel was written against that without anyone having
+to say so. virtio-gpu keeps its pixels in guest RAM the host cannot see until it
+is sent `TRANSFER_TO_HOST_2D` and `RESOURCE_FLUSH`. Null means "no such step
+here", the Bochs driver is unchanged, and `fbcon` and `/dev/fb0`'s `write` call
+it.
+
+`preferred_mode` is the other. `display_init` chose a mode from a ladder of
+sizes, largest first, by what the *adapter* could hold -- the best answer
+available from hardware that cannot describe its own panel. A virtio-gpu host
+reporting a 1280x800 screen was being driven at 5120x2880 (GX-005).
+
+**GX-003 is the entry to read.** Every display self-test in this kernel passed
+against a completely black screen. Same binary, two backends:
+
+```
+bochs-display   33,177,600 non-black pixels
+virtio-gpu               0 non-black pixels
+```
+
+and the black one reported `a mode of our own : pass`, `a screen to draw on :
+pass`, and `a C program ... its pixels are on the screen`. The assertions were
+not weak -- they read the framebuffer back through the kernel's own eyes, which
+is a real check when that memory is the scanned-out aperture and no check at all
+when it is guest RAM nobody has shown the host.
+
+So `scripts/screen-has-pixels.py` exists now: it drives QEMU's monitor, takes a
+screendump and counts non-black pixels, and it is the one display check in the
+matrix the kernel cannot perform on itself. Four paths use it, the Bochs adapter
+included, so that a rig reporting pixels on only one backend is known to be a
+rig with something else wrong with it. With the driver's flush stubbed to report
+success without sending anything, it reports nought.
+
+**GX-001, and it is KF-209 read from the other side.** `addrspace_release_page`
+refuses to free a page the allocator never handed out, which is the correct and
+complete answer for a framebuffer that is a PCI aperture. virtio-gpu's
+framebuffer is `pmm_alloc_pages`, so it passes that check and gets freed: the
+first program to map `/dev/fb0` and exit hands the live screen back to be
+allocated to somebody else. `display_owns_page` answers it now. No boot in the
+matrix currently reaches that path, and the entry says so.
+
+**GX-004 and GX-002** are both the same species. The mode counters were
+incremented inside `bochs_set_mode` rather than in the layer that declares them,
+so on any other backend every refusal was invisible and a correct kernel failed
+its own self-test. And the display table kept one driver's private state in a
+parallel array indexed by a display's position (`&adapters[d - displays]`),
+which addresses another driver's device the moment two kinds share the table.
+
+**What is not built, and is the open question:** a program cannot ask the kernel
+to present what it drew. The console works, `write` works, and a program drawing
+through its own mapping draws into memory nobody presents -- which on this
+device and on every real GPU is the difference between a screen and a black
+rectangle. It needs either a system call, which is an ABI two other sessions
+own, or dirty-bit tracking on the mapping. Raised in `docs/SIGNALS.md` rather
+than decided from this branch.
+
+---
+
 ## 0.2.40 -- 15 September 2026 -- two faults found by reading, one of them in a test
 
 **KF-234: a timer was due before the instant it was asked for.** `timer_start`

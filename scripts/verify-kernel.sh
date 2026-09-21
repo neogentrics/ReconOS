@@ -83,6 +83,53 @@ sub_out() {
 	cat "$WORK/sub/$tag.out"
 	return "$(cat "$WORK/sub/$tag.rc")"
 }
+
+# --- showing why a path failed, without showing all of it ---------------------
+#
+# Every failure report here used to be `head -N`: the first dozen or twenty
+# lines of a sub-script's output, indented. That is the right idea and it drops
+# the answer whenever the failure is further down than N.
+#
+# **KF-250 is what that costs.** An installed-disk boot reported
+# `the network stack : FAIL` and nothing else. `net_self_test` runs eight
+# sub-tests and each prints its own diagnostic; every one of them was below the
+# cut. So the register carries an entry saying the network stack failed, with no
+# way to know which part, and fifteen further boots have not reproduced it. The
+# one occurrence that could have answered it was truncated.
+#
+# So: the first N lines for context, **and then every line below that names a
+# failure**, which is the half that was being thrown away. Still bounded -- a
+# broken guest that prints failures for ever is capped -- but bounded on the
+# lines that matter rather than on position.
+#
+#   show_failure "<output>" <context lines>
+#
+show_failure() {
+	local out=$1 n=${2:-16}
+
+	echo "$out" | head -"$n" | sed 's/^/      /'
+
+	# Below the cut, the verdicts **and the lines above each one**.
+	#
+	# The first version of this took only lines matching FAIL and friends,
+	# and on a worked example it surfaced `the network stack : FAIL` while
+	# still dropping `net: udp checksum mismatch, wanted ... saw ...` on the
+	# line under it -- so it recovered the summary that was already known
+	# and lost the diagnostic that was the entire point.
+	#
+	# The kernel prints a sub-test's reason *before* the line that reports
+	# the verdict, so context-before is the half that carries the answer.
+	# `tail -n +N` starts after what was already shown, so nothing repeats.
+	local rest
+	rest=$(echo "$out" | tail -n +"$((n + 1))" |
+	       grep -a -B 6 -E 'FAIL|FAILED|panic|refused|could not|did not' |
+	       head -40)
+
+	if [ -n "$rest" ]; then
+		echo "      ... and below the first $n lines:"
+		echo "$rest" | sed 's/^/      /'
+	fi
+}
 # --- what a failing run leaves behind -----------------------------------------
 #
 # The work directory used to be deleted unconditionally, and with it every
@@ -229,6 +276,33 @@ check_for() {
 	check "$@"
 }
 
+# Whether anything is actually on the screen, asked of QEMU rather than of the
+# kernel.
+#
+# Every other display assertion here reads a line the kernel printed, and the
+# kernel's own view of its framebuffer is exactly what cannot be trusted on a
+# display whose pixels are guest memory: it wrote them, it read them back, they
+# were there, and the host had never been told to look (GX-003).
+#
+# `scripts/screen-has-pixels.py` drives QEMU's monitor and counts non-black
+# pixels in a screendump. It adds its own -serial, -monitor and -display, so the
+# command passed in must not carry them.
+check_screen() {
+	local name=$1; shift
+	local log="$WORK/$(echo "$name" | tr ' /' '__').screen.log"
+
+	printf '%-46s' "$name"
+
+	if python3 "$ROOT/scripts/screen-has-pixels.py" --marker "first screen" \
+			--min-pixels 1000 -- "$@" >"$log" 2>&1; then
+		echo "ok -- $(tail -n 1 "$log")"
+	else
+		echo "FAILED -- $log"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$name")
+	fi
+}
+
 # --- every processor, on both architectures ---------------------------------
 #
 # Asserted by the *count*, not by the machine booting. A kernel that starts none
@@ -259,7 +333,7 @@ check_cpus() {
 
 	local found
 	found=$(sed -e 's/\r$//' "$log" |
-		sed -n 's/^  found *: \([0-9]*\), \([0-9]*\) online$/\1 \2/p' |
+		sed -n 's/^  found *: \([0-9]*\), \([0-9]*\) online.*$/\1 \2/p' |
 		head -1)
 
 	if [ "$found" != "$n $n" ]; then
@@ -274,8 +348,31 @@ check_cpus() {
 	# summary is printed late, after the self-tests, so an idle processor has
 	# had a hundred ticks' worth of opportunity.
 	local idle_ticks
+	# **Anything may follow the value.** (KF-259)
+	#
+	# Three expressions in this file read a number out of the boot report and
+	# two others were anchored the same way -- the processor count and the
+	# shootdown count. All three are loosened together, because the fault was
+	# never about the tick line: it is that **a boot report is an interface**,
+	# read by a person and parsed by seventeen sub-scripts, and adding a word
+	# to a kprintf is an ABI change to every one of them.
+	#
+	# Nothing in this tree says which lines are load-bearing. Until something
+	# does, the cheap defence is to capture what is wanted and stop caring
+	# what follows it.
+	#
+	# This was anchored `ticks$`, which is the same thing as saying "the
+	# kernel may never add a word to this line" -- and on 18 September the
+	# kernel added `, idle-for-this-cpu` to exactly this line, for a good
+	# reason: the summary could not distinguish a thread about to run from
+	# one that can never be chosen, which had made a scheduling fault look
+	# like a timer fault for a day.
+	#
+	# Six SMP paths then failed with "not one of them was preempted" about
+	# processors that had been preempted perfectly well. The anchor was
+	# right about what it wanted and wrong to insist the line end there.
 	idle_ticks=$(sed -e 's/\r$//' "$log" |
-		sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks$/\1/p' |
+		sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks.*$/\1/p' |
 		sort -n | head -1)
 
 	if [ "$n" -gt 1 ] && { [ -z "$idle_ticks" ] || [ "$idle_ticks" -eq 0 ]; }; then
@@ -304,7 +401,7 @@ check_cpus() {
 	sent=$(tr -d '\r' < "$log" |
 		sed -n 's/^  shootdowns *: [0-9]* live invalidations, \([0-9]*\) sent.*/\1/p' | head -1)
 	unanswered=$(tr -d '\r' < "$log" |
-		sed -n 's/^  shootdowns *: .*, \([0-9]*\) unanswered$/\1/p' | head -1)
+		sed -n 's/^  shootdowns *: .*, \([0-9]*\) unanswered.*$/\1/p' | head -1)
 
 	if [ -n "$sent" ] && [ "$n" -gt 1 ]; then
 		if [ "$sent" -eq 0 ] || [ "${unanswered:-1}" -ne 0 ]; then
@@ -789,6 +886,109 @@ check_for "both markers are on the screen" \
 	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
 		-device VGA,vgamem_mb=256 -kernel "$X64_ELF"
 
+# --- the second display backend ---------------------------------------------
+#
+# virtio-gpu, and these paths exist because one backend cannot show whether an
+# interface abstracts anything.
+#
+# `display_ops` was shaped entirely by the Bochs adapter, whose framebuffer is a
+# PCI aperture being scanned out continuously -- so a store is a pixel appearing
+# and every consumer in the kernel was written on that assumption. virtio-gpu
+# keeps its pixels in guest RAM the host cannot see until it is told, which made
+# the assumption visible by breaking it.
+#
+# `-vga none` matters and is not tidiness: QEMU puts a Bochs adapter on the bus
+# by default, so without it the kernel finds that one, drives it perfectly, and
+# this path tests the backend it was meant to replace.
+check_for "virtio-gpu" \
+	"  PVH, virtio-gpu" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-vga none -device virtio-gpu-pci -kernel "$X64_ELF"
+
+# That the mode came from the *device* rather than from a ladder of guesses.
+#
+# The Bochs adapter cannot be asked what its panel is, so `display_init` picks
+# the largest size the adapter's memory can hold. That was the only answer
+# available until a device could give a better one -- and then it went on being
+# used, driving a host reporting 1280x800 at 5120x2880 and spending sixty
+# megabytes to do it (GX-005). Asserted on the size, because "a mode was set" is
+# satisfied by the wrong one.
+check_for "reports its screen is 1280x800, and that is the mode it is in" \
+	"  PVH, virtio-gpu takes the host's size" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-vga none -device virtio-gpu-pci -kernel "$X64_ELF"
+
+# **And whether any of it is actually on the glass.**
+#
+# This is the one check in the matrix that the kernel cannot perform on itself,
+# and the reason it exists is GX-003: on the first boot that drove a virtio-gpu,
+# `a mode of our own`, `a screen to draw on` and `a C program ... its pixels are
+# on the screen` all reported pass against a screen that was entirely black.
+# Every one of them read the framebuffer back through the kernel's own eyes, and
+# on this device those pages are ordinary memory -- so the read-back returned
+# what had just been written whether or not the host had ever seen it.
+#
+# A check that cannot fail looks exactly like one that passes. This one asks
+# QEMU instead, and it has been shown to fail: with the driver's flush stubbed
+# to report success without sending anything, it reports nought non-black pixels
+# on a kernel whose own self-tests all pass.
+check_screen "  PVH, virtio-gpu really shows pixels" \
+	qemu-system-x86_64 -m 1024M -vga none -device virtio-gpu-pci \
+		-kernel "$X64_ELF"
+
+# The same assertion for the adapter that was always here, so that the check
+# above is known to be measuring the display rather than the device: a rig that
+# reports pixels only on the new backend is a rig with something else wrong
+# with it.
+check_screen "  PVH, the Bochs adapter really shows pixels" \
+	qemu-system-x86_64 -m 1024M -device VGA,vgamem_mb=256 \
+		-kernel "$X64_ELF"
+
+# The table that recognises real graphics hardware, checked on a machine that
+# has none.
+#
+# `core/intel_display.c` cannot be exercised against a Gen9 here -- QEMU
+# emulates no Intel display engine -- so what runs in this matrix is the
+# recognition: the ids it must claim, and the ids it must refuse. The refusals
+# are the half worth asserting. Among them is the Gemini Lake host bridge, which
+# sits in the same package as the graphics and in the same numbering.
+#
+# **Asserted on the count, not on the word pass.** The self-test returns true
+# after checking nothing if the table is empty, exactly as a mode sweep that
+# skips every shape reports green (KF-187). Eighteen models is the claim.
+check_for "18 model(s) known, recognition and refusal both checked" \
+	"  PVH, the graphics it can recognise" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
+# And the AMD table, which is the one written against hardware in the room.
+#
+# 1002:73ff and 1002:164e are the two adapters in this project's desktop -- a
+# Radeon RX 6600 on the bus and Raphael graphics in the processor package --
+# read off that machine rather than recalled. The refusals include the USB
+# controllers AMD puts on its own graphics cards, and a case that only the
+# vendor rule can catch, which had to be constructed because every real
+# identifier collision is refused by the class check first (GX-008).
+check_for "13 model(s) known, recognition and refusal both checked" \
+	"  PVH, the graphics cards it can recognise" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
+# Two display adapters in one machine, and the report naming both.
+#
+# QEMU with `-device virtio-gpu-pci` and no `-vga none` gives a Bochs adapter
+# *and* a virtio-gpu, which is the arrangement GX-002's parallel private-state
+# array would have mis-addressed -- and it is the shape of this project's own
+# desktop, which has a Radeon RX 6600 on the bus and Raphael graphics in the
+# processor package.
+#
+# Asserted on the second adapter's line rather than on the boot succeeding: the
+# summary named only the primary for as long as nobody looked, while the suspend
+# line two rows below listed both (GX-009). A boot with one adapter satisfies
+# every other question this rig asks.
+check_for "also         : bochs-display" \
+	"  PVH, two display adapters at once" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-device virtio-gpu-pci -kernel "$X64_ELF"
+
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had
@@ -947,6 +1147,44 @@ check_for "both markers are on the screen" \
 	"  device tree, a program draws on the screen" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M -nographic \
 		-no-reboot -device bochs-display -kernel "$ARM_IMG"
+
+# virtio-gpu on the other architecture, over PCI.
+#
+# The same driver, unchanged, on a machine with a different page size story, a
+# different interrupt controller and a framebuffer allocated from a different
+# part of the map. A display driver that works on one architecture has shown
+# that it works on one architecture.
+check_for "virtio-gpu" \
+	"  device tree, virtio-gpu over PCI" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M -nographic \
+		-no-reboot -device virtio-gpu-pci -kernel "$ARM_IMG"
+
+# And over the memory-mapped transport, which is the point of having two.
+#
+# The virtio transport table exists so that a driver does not know whether its
+# device was found on a bus or listed by firmware. virtio-blk and virtio-net
+# have always been driven both ways; this is the display saying the same thing.
+#
+# `force-legacy=false` is required and is not a workaround: QEMU's `virt`
+# machine presents memory-mapped virtio as version 1 by default, which is the
+# pre-1.0 register layout this kernel deliberately does not implement -- it says
+# so by name on every such boot rather than failing quietly. Asking for the
+# modern layout is asking for the device this driver actually supports.
+check_for "virtio-gpu" \
+	"  device tree, virtio-gpu, memory-mapped" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M -nographic \
+		-no-reboot -global virtio-mmio.force-legacy=false \
+		-device virtio-gpu-device -kernel "$ARM_IMG"
+
+# That the pixels reach the glass on this architecture too.
+#
+# Worth its own path for the same reason the bochs-display one above it is: the
+# aarch64 framebuffer is allocated from a different region, and this is the
+# architecture where KF-209 failed loudly while x86_64 reported success doing
+# the identical wrong thing.
+check_screen "  device tree, virtio-gpu really shows pixels" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M \
+		-device virtio-gpu-pci -kernel "$ARM_IMG"
 
 check_for sata0 "  device tree, AHCI" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
@@ -1246,7 +1484,10 @@ for a in x86_64 aarch64; do
 	else
 		echo "FAILED"
 		echo "$fs_out" | grep -aE 'files carry a mode|rootfs:' | sed 's/^/      /'
-		echo "$fs_out" | sed -n '/reconfs:/,$p' | head -20 | sed 's/^/      /'
+		# Already a targeted slice rather than a blind cut, but it can
+		# still end above the verdict -- so it goes through the same
+		# helper as everything else.
+		show_failure "$(echo "$fs_out" | sed -n '/reconfs:/,$p')" 20
 		failures=$((failures + 1))
 		FAILED_PATHS+=("reconfs ($a)")
 	fi
@@ -1266,7 +1507,7 @@ if rn_out=$(sub_out rename); then
 	passes=$((passes + 1))
 else
 	echo "FAILED"
-	echo "$rn_out" | sed 's/^/      /' | head -20
+	show_failure "$rn_out" 20
 	failures=$((failures + 1))
 	FAILED_PATHS+=("reconfs: rename under a power cut")
 fi
@@ -1291,7 +1532,7 @@ elif [ "$beside_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$beside_out" | sed 's/^/      /' | head -14
+	show_failure "$beside_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("reconfs beside another partition")
 fi
@@ -1319,7 +1560,7 @@ for a in x86_64 aarch64; do
 		passes=$((passes + 1))
 	else
 		echo "FAILED"
-		echo "$fat_out" | sed 's/^/      /' | head -16
+		show_failure "$fat_out" 16
 		failures=$((failures + 1))
 		FAILED_PATHS+=("fat32 reads ($a)")
 	fi
@@ -1343,7 +1584,7 @@ for a in x86_64 aarch64; do
 		skipped=$((skipped + 1))
 	else
 		echo "FAILED"
-		echo "$fw_out" | sed 's/^/      /' | head -16
+		show_failure "$fw_out" 16
 		failures=$((failures + 1))
 		FAILED_PATHS+=("fat32 writes ($a)")
 	fi
@@ -1373,7 +1614,7 @@ elif [ "$plan_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$plan_out" | sed 's/^/      /' | head -18
+	show_failure "$plan_out" 18
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install planner")
 fi
@@ -1395,7 +1636,7 @@ elif [ "$onto_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$onto_out" | sed 's/^/      /' | head -20
+	show_failure "$onto_out" 20
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install onto")
 fi
@@ -1418,7 +1659,7 @@ elif [ "$e2e_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$e2e_out" | sed 's/^/      /' | head -20
+	show_failure "$e2e_out" 20
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install then boot")
 fi
@@ -1441,7 +1682,7 @@ elif [ "$menu_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$menu_out" | sed 's/^/      /' | head -14
+	show_failure "$menu_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("boot menu")
 fi
@@ -1469,7 +1710,7 @@ elif [ "$sig_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$sig_out" | sed 's/^/      /' | head -14
+	show_failure "$sig_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("signed kernel")
 fi
@@ -1492,7 +1733,7 @@ elif [ "$rec_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$rec_out" | sed 's/^/      /' | head -16
+	show_failure "$rec_out" 16
 	failures=$((failures + 1))
 	FAILED_PATHS+=("recovery")
 fi
@@ -1517,7 +1758,7 @@ elif [ "$med_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$med_out" | sed 's/^/      /' | head -12
+	show_failure "$med_out" 12
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install medium")
 fi
@@ -1542,7 +1783,7 @@ elif [ "$disc_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$disc_out" | sed 's/^/      /' | head -14
+	show_failure "$disc_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("install disc")
 fi
@@ -1569,7 +1810,7 @@ elif [ "$usb_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$usb_out" | sed 's/^/      /' | head -12
+	show_failure "$usb_out" 12
 	failures=$((failures + 1))
 	FAILED_PATHS+=("usb storage")
 fi
@@ -1638,7 +1879,7 @@ elif [ "$bios_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$bios_out" | sed 's/^/      /' | head -16
+	show_failure "$bios_out" 16
 	failures=$((failures + 1))
 	FAILED_PATHS+=("bios loader")
 fi
@@ -1659,7 +1900,7 @@ elif [ "$bsig_rc" -eq 2 ]; then
 	skipped=$((skipped + 1))
 else
 	echo "FAILED"
-	echo "$bsig_out" | sed 's/^/      /' | head -14
+	show_failure "$bsig_out" 14
 	failures=$((failures + 1))
 	FAILED_PATHS+=("bios signature")
 fi

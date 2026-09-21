@@ -63,6 +63,28 @@ static void rx_hold_drain(bool held)
 	spin_unlock_irq(&rx_lock, flags);
 }
 static u64 rx_serviced;
+
+/* How many times a driver said it had something, whether or not a drain was
+ * already queued. Printed, because a card whose interrupt never arrives and a
+ * card that is simply quiet produce identical frame counts -- and this is the
+ * only number that tells the two apart. */
+static u64 rx_wakes;
+
+/* How many registered devices said they could raise an interrupt, and how many
+ * said they could not. Both printed: a machine where every card is polled is a
+ * machine with a whole class of driver path never exercised, and that is worth
+ * seeing rather than inferring from the absence of a line. */
+static unsigned interrupt_capable;
+static unsigned interrupt_refused;
+
+/* How many registrations were refused for a name already in use, and how many
+ * of those the self-test asked for on purpose. Both, for the reason the
+ * interrupt layer keeps both: a number that is never zero stops being read,
+ * and a suppressed message that is never counted stops being a fact. */
+static u64 name_refusals;
+static u64 suppressed_refusals;
+static unsigned expected_name_refusals;
+
 static bool initialised;
 
 void netdev_init(void)
@@ -88,6 +110,39 @@ struct net_device *netdev_register(const char *name,
 		return NULL;
 	}
 
+	/* Refused rather than accepted as a second device with the same name.
+	 *
+	 * This used to copy the string and ask nothing, which was correct for
+	 * as long as there was one driver -- a driver numbering its own cards
+	 * from zero is numbering every card on the machine. The second driver
+	 * makes that false, and the failure is quiet: two `eth0`s in the
+	 * device table, `netdev_by_name` answering with whichever registered
+	 * first, and a summary that prints one name twice with two different
+	 * sets of counters under it. NW-002.
+	 *
+	 * Refusing is the right half of the fix and `netdev_name` is the
+	 * other: a driver that asks for a name it cannot be given should be
+	 * told, not quietly given a name that already means something else. */
+	if (netdev_by_name(name)) {
+		name_refusals++;
+
+		/* The self-test registers a duplicate on purpose -- that is
+		 * the assertion -- so without this every boot prints a line
+		 * that reads like a collision and is not one. A message that
+		 * is always there is a message a reader stops seeing, and the
+		 * one that mattered would go past with it. Same bargain as
+		 * `irq_note_expected_refusals`, and deliberately the same
+		 * shape so there is one idiom for this and not two. */
+		if (expected_name_refusals) {
+			expected_name_refusals--;
+			suppressed_refusals++;
+			return NULL;
+		}
+
+		kprintf("net: %s is already registered; refused\n", name);
+		return NULL;
+	}
+
 	d = &devices[device_count++];
 	kmemset(d, 0, sizeof(*d));
 
@@ -96,6 +151,21 @@ struct net_device *netdev_register(const char *name,
 	d->driver = driver;
 	d->mtu = NET_MTU;
 	d->up = true;
+
+	/* Connected until a driver says otherwise.
+	 *
+	 * `link` is now consulted by `netdev_route`, so the default decides what
+	 * happens to every device whose driver never sets it -- and three of
+	 * those exist in this tree, all of them test devices with no cable to
+	 * have an opinion about. Defaulting to false would make them unroutable
+	 * and take the whole stack self-test down with them.
+	 *
+	 * True is also the honest default for a real driver that cannot read a
+	 * PHY: "I do not know" and "there is no cable" are different answers, and
+	 * routing round a card that is actually fine is worse than trying and
+	 * failing. A driver that *can* tell overwrites this at attach and on
+	 * every change. */
+	d->link = true;
 
 	if (mac)
 		d->mac = *mac;
@@ -107,7 +177,70 @@ struct net_device *netdev_register(const char *name,
 	 * the machine. */
 	suspend_declare(d->name, 0);
 
+	/* And now the card may interrupt, if it can.
+	 *
+	 * This call is NW-008. `enable_interrupts` has been declared in
+	 * `net_device_ops` with a paragraph of comment explaining when a driver
+	 * should implement it, and **nothing in the kernel called it** -- there
+	 * was no `ops->enable_interrupts` anywhere. All three implementations
+	 * were null, so a missing call site and a correctly-skipped optional
+	 * hook looked identical from every angle except grepping for the call.
+	 *
+	 * **Here rather than at the end of a driver's attach**, and the ordering
+	 * is the reason the hook is worth having at all: the device is in the
+	 * table before anything is allowed to interrupt about it. A driver that
+	 * armed its own mask first can take an interrupt for a device the stack
+	 * has not been told about, and the handler's first act is to ask the
+	 * worker thread to go and poll every registered device -- which is a
+	 * list this one is not on yet.
+	 *
+	 * False is not a failure. It means the card cannot, and the polling path
+	 * carries it; `netdev_service` calls every device's `poll` whether or not
+	 * it interrupts, for exactly this reason. */
+	if (d->ops && d->ops->enable_interrupts) {
+		if (d->ops->enable_interrupts(d))
+			interrupt_capable++;
+		else
+			interrupt_refused++;
+	}
+
 	return d;
+}
+
+void netdev_note_expected_refusal(void)
+{
+	expected_name_refusals++;
+}
+
+bool netdev_name(const char *prefix, char *out, unsigned len)
+{
+	unsigned n;
+	unsigned plen = 0;
+
+	if (!prefix || !out || len < 3)
+		return false;
+
+	while (prefix[plen])
+		plen++;
+
+	/* Room for the prefix, one digit and the terminator. Checked rather
+	 * than assumed: kstrlcpy would truncate the prefix and then every
+	 * candidate would collide with the one before it, and the loop below
+	 * would report that every index is taken on a machine with one card. */
+	if (plen + 2 > len)
+		return false;
+
+	for (n = 0; n < NET_MAX_DEVICES; n++) {
+		kstrlcpy(out, prefix, len);
+		out[plen] = (char)('0' + n);
+		out[plen + 1] = 0;
+
+		if (!netdev_by_name(out))
+			return true;
+	}
+
+	out[0] = 0;
+	return false;
 }
 
 void netdev_forget_last(void)
@@ -160,7 +293,7 @@ struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop)
 	 * every test above configures its device by hand first. */
 	if (dst == IPV4_BROADCAST) {
 		for (i = 0; i < device_count; i++) {
-			if (!devices[i].up)
+			if (!devices[i].up || !devices[i].link)
 				continue;
 
 			if (next_hop)
@@ -175,7 +308,21 @@ struct net_device *netdev_route(ipv4_addr dst, ipv4_addr *next_hop)
 	for (i = 0; i < device_count; i++) {
 		struct net_device *d = &devices[i];
 
-		if (!d->up || !d->ip)
+		/* `link` as well as `up`, and they are different questions.
+		 *
+		 * `up` is whether the kernel is willing to use the card; `link`
+		 * is whether there is a cable in it. A card that is up with
+		 * nothing plugged in will accept a frame, count it as sent, and
+		 * drop it on the floor -- so routing to it is how a machine
+		 * with two cards sends everything out of the dead one.
+		 *
+		 * This field existed and nothing read it, which is NW-003. It
+		 * was written once by virtio-net as a constant `true`, which is
+		 * the honest value for a card that has no cable to have an
+		 * opinion about -- and that is exactly why the gap was
+		 * invisible: with one driver, the field could not disagree with
+		 * anything. */
+		if (!d->up || !d->link || !d->ip)
 			continue;
 
 		/* On the same wire: the frame goes straight to the host. */
@@ -303,6 +450,23 @@ static void rx_work_fn(void *arg)
 	netdev_service();
 }
 
+void netdev_wake(void)
+{
+	/* Counted before the refusal, not after.
+	 *
+	 * The number worth having is "how many times did a card say it had
+	 * something", and `work_schedule` returns false for a drain already
+	 * queued -- which is the common case under load and is not a failure.
+	 * Counting only the successes would make a busy card look like a
+	 * silent one, which is the exact reading this counter exists to
+	 * prevent: a machine whose interrupt never fires must not look like a
+	 * machine whose interrupt fires constantly. */
+	rx_wakes++;
+
+	if (rx_work_ready)
+		work_schedule(&rx_work);
+}
+
 bool netdev_transmit(struct net_device *dev, struct netbuf *b)
 {
 	if (!dev || !dev->up || !dev->ops->transmit) {
@@ -368,8 +532,38 @@ void netdev_print_summary(void)
 			(unsigned)d->tx_dropped, (unsigned)d->tx_errors);
 	}
 
-	kprintf("  queue        : %u waiting, %u serviced, %u overflowed\n",
-		rx_queued, (unsigned)rx_serviced, (unsigned)rx_overflow);
+	kprintf("  queue        : %u waiting, %u serviced, %u overflowed, "
+		"%u woken by a card\n",
+		rx_queued, (unsigned)rx_serviced, (unsigned)rx_overflow,
+		(unsigned)rx_wakes);
+
+	/* Said only when there were any, and said differently depending on
+	 * whether any were real. A refusal the test asked for is not news; one
+	 * it did not is two cards claiming one name, which is NW-002 coming
+	 * back. */
+	if (interrupt_capable || interrupt_refused)
+		kprintf("  interrupts   : %u card(s) can raise one, %u cannot "
+			"and are polled\n",
+			interrupt_capable, interrupt_refused);
+
+	if (name_refusals) {
+		kprintf("  names        : %u refused as already taken",
+			(unsigned)name_refusals);
+
+		/* The two are counted separately rather than one being
+		 * inferred from the other. "Every refusal was expected" and
+		 * "the expected budget is spent" are different statements, and
+		 * they stop agreeing the moment a real collision happens after
+		 * the test has run -- which is exactly the case this line
+		 * exists to report. */
+		if (suppressed_refusals == name_refusals)
+			kputs(" -- every one the self-test proving a "
+			      "duplicate is refused\n");
+		else
+			kprintf(", %u of them a real collision\n",
+				(unsigned)(name_refusals -
+					   suppressed_refusals));
+	}
 }
 
 void net_init(void)
