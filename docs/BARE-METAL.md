@@ -415,19 +415,23 @@ by measurement rather than by reading.
 | `R_RDSAR` | 0xE4 | Rx Ring Addr, 64-bit | ✔ |
 | `R_MTPS` | 0xEC | Early Tx threshold | ✔ |
 
-**Fourteen agreements out of fifteen rows, none of them previously run against
-hardware.**
+**Fourteen agreements out of fifteen offsets, none of them previously run
+against hardware — and the fifteenth is the one it hurts to be missing.**
 
-**This said "fifteen offsets, fifteen agreements" and that was wrong**, for
-twelve lines, directly beneath a table whose own `R_TPPOLL` row reads
-*unlabelled in this dump*. That offset had nothing to agree with, so the count
-was of rows rather than of confirmations — a tally that included the line it
-could not check.
-
-Corrected with the reason attached rather than the number quietly changed,
-because the shape has now appeared four times in this project (KF-187, KF-247,
-KF-261 and here) and this is the first time in a document rather than a script.
-The session that wrote it had just written the disclaimer standing beside it.
+> **Corrected 20 September 2026, by the network session, and the evidence
+> was twelve lines above the claim.** This read *"fifteen offsets, fifteen
+> agreements"*. The row for `R_TPPOLL` in the table above says
+> *unlabelled in this dump* — so that offset had nothing to agree with, and
+> the count was of rows rather than of confirmations. **A tally that
+> includes the row it could not check is the shape this register keeps
+> finding** (KF-187, KF-247, KF-261), arriving this time in a document
+> rather than in a script, written by the session that had just written
+> the disclaimer beside it.
+>
+> **`R_TPPOLL` is the worst of the fifteen to be left holding.** It is the
+> write that tells the card to look at the transmit ring, so a wrong offset
+> means nothing is ever sent and nothing says so — and DHCP then reports
+> the line a dead network produces.
 
 **And the kernel session's own caution, which belongs next to the table rather
 than after it:** *fifteen offsets from one part in one firmware state at one

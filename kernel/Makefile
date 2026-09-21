@@ -385,7 +385,39 @@
 # NW-013 and NW-015 add nothing here. NW-013 is open, and it is the boot track's
 # file to change. NW-015 changed `README.md` alone, so the binary was identical
 # and a number would have implied a difference that was not there.
-VERSION := 0.5.6
+#
+# **0.5.8 on 20 September 2026: eight fixes on 0.5.0, four from each branch.**
+#
+# The kernel session predicted this number before either of us could see the
+# merged tree, and the arithmetic is theirs: *union of eight distinct fixes, not
+# ten, since your six already counts my two.* Exactly so.
+#
+# Mine: NW-010, NW-011, NW-012, NW-014.
+# Theirs: KF-258, KF-259, KF-260, KF-261.
+#
+# KF-259 and KF-260 were already counted here at 0.5.6, which is the whole
+# reason the union is eight and not ten -- this branch merged them before they
+# had numbers of their own, and counting them twice would inflate the line by
+# exactly the amount of the overlap.
+#
+# **NW-013, NW-015 and NW-016 add nothing.** NW-013 is open and is the boot
+# track's to close. NW-016 is open and was theirs to correct, which they have.
+# NW-015 changed `README.md` alone, so the binary was identical and a number
+# would have named a difference that does not exist.
+#
+# **0.5.9: NW-017, which the merge above uncovered rather than caused.**
+#
+# `check_versions` could not see a version set by a merge commit, because
+# `git log -p` shows no diff for one unless asked. On a project where every
+# session resolves `VERSION` inside a merge, that is most of them — 0.5.4, 0.5.6
+# and 0.5.8 were all set that way.
+#
+# It is in this commit rather than beside it because separating the two cost a
+# near-miss: reaching for the merge's own copy of `make-issues.py` to split them
+# took the *other* branch's whole file and dropped `check_versions` with it. The
+# split was not worth a second attempt. Eight from the merge, one from NW-017,
+# and the line says nine.
+VERSION := 0.5.9
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

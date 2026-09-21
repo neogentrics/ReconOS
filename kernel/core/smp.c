@@ -49,15 +49,31 @@ unsigned smp_cpus_online(void) { return online_count; }
 static void idle_loop(void *arg)
 {
 	for (;;) {
+		/* **Asked first, halted second.** (KF-258)
+		 *
+		 * These two were the other way round, and the order is not a
+		 * matter of taste. `power_idle_wait` suspends this processor's
+		 * tick, so nothing can preempt it while it is halted; asking
+		 * afterwards means a thread that was already runnable when this
+		 * loop was entered waits out a whole idle ceiling -- one full
+		 * second -- before anybody offers it the processor.
+		 *
+		 * Measured on the boot processor, whose idle loop had no yield
+		 * at all: a thread created and then not run for three seconds
+		 * on an empty machine, the delay quantised to the ceiling.
+		 * This loop's version of the same fault was bounded at one
+		 * ceiling rather than unbounded, which is why it had never been
+		 * noticed.
+		 *
+		 * `sched_yield` returns immediately when nothing else wants the
+		 * processor, so the cost of asking first is a ring walk. */
+		sched_yield();
+
 		/* With this processor's tick suspended where the machine can
 		 * do it. A processor with nothing to run has nothing to be
 		 * preempted from, so the hundred wakeups a second the tick
 		 * would cost it buy nothing at all. */
 		power_idle_wait();
-
-		/* The tick woke us. If there is real work now, take it; if not,
-		 * this returns immediately and we wait again. */
-		sched_yield();
 	}
 }
 

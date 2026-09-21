@@ -543,6 +543,79 @@ check_acpi() {
 	passes=$((passes + 1))
 }
 
+# Does a thread that becomes runnable actually get the processor? (KF-258)
+#
+# Two assertions, and they are separate on purpose because they fail for
+# different reasons and the difference is the whole diagnosis:
+#
+#   1. **It starts.** The probe thread is created by the boot thread on the
+#      tick before that thread goes idle, so it should first run on that same
+#      tick. KF-258 was three seconds -- quantised to the one-second idle
+#      ceiling, because the only thing that ever offered it the processor was
+#      an idle wait timing out.
+#
+#   2. **Its sleeps return.** Eight of them, 50 ms apart. A sleep that does not
+#      come back is the symptom the entry was opened for; a thread that never
+#      started would also report zero returned, which is why the first
+#      assertion is asked first and separately.
+#
+# Run on the architecture whose idle path masks its own tick. `noinit` is
+# deliberately *not* passed: the fault was visible in both conditions and the
+# one with a user program running is the one it was found in.
+check_sleep_probe() {
+	printf '%-46s' "  a new thread gets the processor"
+
+	timeout 30 qemu-system-x86_64 -m 512M -nographic -no-reboot \
+		-kernel "$X64_ELF" -append sleepprobe \
+		>"$WORK/probe.log" 2>&1
+
+	local report
+	report=$(tr -d '\r' < "$WORK/probe.log" | grep -a "started      :")
+
+	if [ -z "$report" ]; then
+		echo "FAILED -- the probe never reported at all"
+		show_failure "$(tr -d '\r' < "$WORK/probe.log")" 6
+		failures=$((failures + 1))
+		FAILED_PATHS+=("sleep probe")
+		return
+	fi
+
+	# "started : tick 333, first ran on tick 333" -- the two numbers, read by
+	# position rather than by a pattern that assumes they differ.
+	local made ran
+	made=$(echo "$report" | sed 's/.*tick \([0-9]*\),.*/\1/')
+	ran=$(echo "$report" | sed 's/.*first ran on tick \([0-9]*\).*/\1/')
+
+	# One tick of slack and no more. The probe is created and the boot thread
+	# goes idle within a few instructions, so a thread that has to wait for
+	# anything at all shows up here immediately -- the fault this is for was
+	# three hundred ticks, so a threshold of one is not a fine judgement.
+	if [ "$((ran - made))" -gt 1 ]; then
+		echo "FAILED -- made on tick $made, first ran on $ran"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("sleep probe: start")
+		return
+	fi
+
+	echo "on the tick it was made"
+	passes=$((passes + 1))
+
+	printf '%-46s' "  and its sleeps all return"
+
+	if ! tr -d '\r' < "$WORK/probe.log" |
+	     grep -qa "verdict      : every sleep returned"; then
+		echo "FAILED"
+		show_failure "$(tr -d '\r' < "$WORK/probe.log" |
+				grep -a -A 12 'Sleep probe')" 14
+		failures=$((failures + 1))
+		FAILED_PATHS+=("sleep probe: sleeps")
+		return
+	fi
+
+	echo "8 of 8"
+	passes=$((passes + 1))
+}
+
 check_power_off() {
 	printf '%-46s' "  and can turn the machine off"
 
@@ -1267,6 +1340,7 @@ echo
 echo "the machine, described"
 
 check_acpi
+check_sleep_probe
 check_power_off
 check_restart "and can restart itself" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot \

@@ -180,30 +180,22 @@ static void logport_thread(void *arg)
 			continue;
 		}
 
-		/* **Yielding rather than sleeping, and that is a workaround for
-		 * KF-258 rather than a preference.**
+		/* **A sleep again, which is what this always wanted to be.**
 		 *
-		 * The obvious shape here is `timer_sleep_ns(100 ms)` -- a
-		 * tenth of a second is far longer than a connection can wait
-		 * for, and it costs the machine nothing. It does not work:
-		 * the first sleep in this thread returns and the second never
-		 * does, because by then the machine has gone idle and a
-		 * sleeping thread's deadline does not bring it back. That is a
-		 * fault in the idle path, measured and recorded, not in this
-		 * file.
+		 * It was a `sched_yield()` between 17 and 20 September, because
+		 * the first sleep in this thread returned and the second never
+		 * did -- KF-258. The cost of the workaround was stated where it
+		 * was made and is worth repeating now that it is gone: a machine
+		 * with this port open did not idle properly, so a diagnostic
+		 * changed the thing it was there to observe.
 		 *
-		 * So this yields instead, which keeps a runnable thread in the
-		 * round and the processor out of deep idle. **The cost is
-		 * real**: a machine with this port open does not idle properly,
-		 * which is KF-249's fault arriving by a second road. It is
-		 * accepted here only because this is a diagnostic that is off
-		 * unless somebody asks for it, and a debugging aid that keeps
-		 * the machine awake while it is running is a trade a person can
-		 * make knowingly.
-		 *
-		 * **When KF-258 is fixed this becomes a sleep again**, and the
-		 * line above is how the next reader knows that is possible. */
-		sched_yield();
+		 * The fault was not in the sleep. Both idle loops halted the
+		 * processor before asking the scheduler whether anything had
+		 * become runnable, so a woken thread waited out an idle ceiling
+		 * -- and on the boot processor, whose loop never asked at all,
+		 * it waited indefinitely. A tenth of a second is far longer than
+		 * a connection can wait for, and it costs the machine nothing. */
+		timer_sleep_ns(100000000ull);
 	}
 }
 
