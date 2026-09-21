@@ -260,6 +260,23 @@ real:
    Two independent reasons for one cable is the strongest form that conclusion
    can take. Do not treat this step as a nice-to-have.
 
+   **Reason two has a date on it, and is expected to expire.** It is true of
+   kernel **0.5.10**, the version this document was last checked against. The
+   kernel session is fixing NW-013 now — both loaders, with the length check
+   from KF-262 folded in — and when it lands, `logport` becomes askable on this
+   machine and the log port becomes a real second channel.
+
+   **That does not make the cable optional**, because reason one is untouched:
+   nothing is written to the medium, so there is still no log file afterwards.
+   And the log port only helps once the network is up, which on this machine is
+   the thing under test — it cannot report the failure of the card it needs.
+   The cable reports from the first line of the boot.
+
+   This paragraph is dated rather than absolute on purpose. A procedure that
+   says *"cannot"* about something somebody is actively fixing is a document
+   that will be wrong without anybody editing it, which is the failure this
+   branch has now recorded four times under other names.
+
 4. **Confirm physical access.** Somebody must be able to reach the machine's
    power button and plug in a keyboard. Without a BMC there is no substitute.
 
