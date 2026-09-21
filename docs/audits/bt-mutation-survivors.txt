@@ -1,0 +1,165 @@
+--- 82 survived, read them ------------------------------
+bluetooth.c:110  and->or
+    if (plen && params)
+bluetooth.c:186  lt->le
+    if (len < HCI_EVENT_HEADER)
+bluetooth.c:276  lt->le
+    for (tries = 0; tries < budget; tries++) {
+bt_link.c:70  lt->le
+    if (len < 3 || ev[0] != HCI_EV_INQUIRY_RESULT)
+bt_link.c:70  or->and
+    if (len < 3 || ev[0] != HCI_EV_INQUIRY_RESULT)
+bt_link.c:71  ret false->true
+    return false;
+bt_link.c:141  eq->ne
+    if (opcode == HCI_OP_INQUIRY && status) {
+bt_link.c:141  and->or
+    if (opcode == HCI_OP_INQUIRY && status) {
+bt_link.c:184  lt->le
+    if (outmax < 3 + 13)
+bt_link.c:240  and->or
+    if (l->state == BT_LINK_UP &&
+bt_pair.c:128  lt->le
+    if (len < HCI_EVENT_HEADER)
+bt_pair.c:133  or->and
+    if (len < 2 + BT_ADDR_LEN || outmax < 3 + 22)
+bt_pair.c:133  lt->le
+    if (len < 2 + BT_ADDR_LEN || outmax < 3 + 22)
+bt_pair.c:162  or->and
+    if (len < 2 + BT_ADDR_LEN || outmax < 3 + 9)
+bt_pair.c:162  lt->le
+    if (len < 2 + BT_ADDR_LEN || outmax < 3 + 9)
+bt_pair.c:181  or->and
+    if (len < 2 + BT_ADDR_LEN + 4 || outmax < 3 + BT_ADDR_LEN)
+bt_pair.c:181  lt->le
+    if (len < 2 + BT_ADDR_LEN + 4 || outmax < 3 + BT_ADDR_LEN)
+bt_pair.c:207  or->and
+    if (len < 2 + BT_ADDR_LEN || outmax < 3 + (u32)sizeof(body))
+bt_pair.c:207  lt->le
+    if (len < 2 + BT_ADDR_LEN || outmax < 3 + (u32)sizeof(body))
+bt_pair.c:279  lt->le
+    if (len < 2 + 3)
+bt_stack.c:39  lt->le
+    if (outmax < 8)
+bt_stack.c:64  lt->le
+    if (outmax < 8)
+bt_stack.c:98  and->or
+    if (ev[0] == HCI_EV_COMMAND_COMPLETE && s->state == BT_ST_RESETTING) {
+bt_stack.c:102  and->or
+    if (hci_event_command_result(ev, len, &opcode, &status) &&
+bt_stack.c:163  gt->ge
+    if (s->state > BT_ST_CONNECTING && s->state != BT_ST_FAILED &&
+bt_stack.c:189  eq->ne
+    if (s->link.state == BT_LINK_NEEDS_PAIRING &&
+bt_stack.c:189  and->or
+    if (s->link.state == BT_LINK_NEEDS_PAIRING &&
+bt_stack.c:198  and->or
+    if (s->link.state == BT_LINK_UP && s->state == BT_ST_CONNECTING) {
+bt_stack.c:212  lt->le
+    if (outmax < L2CAP_HEADER + len)
+bt_stack.c:268  and->or
+    if (hdr.cid == BT_CID_CONTROL && s->state == BT_ST_SETTING_PROTOCOL) {
+bt_stack.c:343  and->or
+    if (s->state == BT_ST_OPENING_INTERRUPT &&
+hid_report.c:139  ret false->true
+    return false;
+hid_report.c:145  lt->le
+    if (n < l->usage_count) {
+hid_report.c:177  gt->ge
+    if (at + 3 > len)
+hid_report.c:178  ret false->true
+    return false;
+hid_report.c:182  gt->ge
+    if (at + 3u + dlen > len)
+hid_report.c:215  lt->le
+    else if (local.usage_count < HID_MAX_FIELDS)
+hid_report.c:304  ge->gt
+    if (info->field_count >=
+hid_report.c:341  gt->ge
+    if (depth > info->collection_depth_max)
+hid_report.c:418  or->and
+    if (!info->fields_usable || !info->field_count)
+hid_report.c:432  lt->le
+    for (i = 0; i < info->field_count; i++) {
+hid_report.c:444  gt->ge
+    if (f->bit_offset + f->bit_size > end_bits)
+hid_report.c:542  gt->ge
+    if (!bit_size || bit_size > 32)
+hid_report.c:552  gt->ge
+    if (bit_offset > 0xFFFFFF00u)
+hid_report.c:574  lt->le
+    if (is_signed && bit_size < 32) {
+hid_report.c:599  lt->le
+    for (i = 0; i < m->buttons_count; i++) {
+hid_report.c:604  ret false->true
+    return false;
+hid_report.c:613  ret false->true
+    return false;
+hid_report.c:617  ret false->true
+    return false;
+hid_report.c:622  ret false->true
+    return false;
+l2cap.c:90  ge->gt
+    if (r->active && r->want && r->have >= r->want)
+l2cap.c:94  ret false->true
+    return false;
+l2cap.c:124  and->or
+    if (r->active && r->have < r->want) {
+l2cap.c:124  lt->le
+    if (r->active && r->have < r->want) {
+l2cap.c:140  gt->ge
+    if (len > sizeof(r->buf) - r->have) {
+l2cap.c:172  gt->ge
+    if (r->want > sizeof(r->buf)) {
+l2cap.c:190  ret false->true
+    return false;
+l2cap.c:203  lt->le
+    if (len < L2CAP_SIG_HEADER)
+l2cap.c:228  and->or
+    if (dlen && data)
+l2cap.c:293  le->lt
+    while (at + 2 <= len) {
+l2cap.c:403  lt->le
+    if (outmax < 12)
+l2cap.c:482  lt->le
+    if (outmax < 10)
+l2cap.c:525  lt->le
+    if (outmax < 8)
+sdp.c:46  ret false->true
+    return false;
+sdp.c:122  ret false->true
+    return false;
+sdp.c:156  lt->le
+    while (at < len) {
+sdp.c:161  ret false->true
+    return false;
+sdp.c:167  ret false->true
+    return false;
+sdp.c:173  ge->gt
+    if (at >= len)
+sdp.c:174  ret false->true
+    return false;
+sdp.c:177  ret false->true
+    return false;
+sdp.c:216  ret false->true
+    return false;
+sdp.c:220  ret false->true
+    return false;
+sdp.c:223  ret false->true
+    return false;
+sdp.c:228  lt->le
+    for (at = 0; at < list.data_len; ) {
+sdp.c:234  ret false->true
+    return false;
+sdp.c:244  or->and
+    if (!sdp_uint(&kind, &got) || got != SDP_HID_DESC_TYPE_REPORT)
+sdp.c:260  ret false->true
+    return false;
+sdp.c:270  ret false->true
+    return false;
+sdp.c:274  ret false->true
+    return false;
+sdp.c:276  or->and
+    if (e.type != SDP_DE_BOOL || e.data_len != 1)
+sdp.c:277  ret false->true
+    return false;

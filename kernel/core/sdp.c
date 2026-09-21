@@ -829,5 +829,112 @@ bool sdp_self_test(void)
 		}
 	}
 
+	/* --- a four-byte integer, which is where the byte order lives ----
+	 *
+	 * `get_be32` had **no test at all**, and it was not obvious: the one
+	 * place a test reached it was the wrap case, which reads
+	 * `FF FF FF FF`. That value is the same read either way round, so it
+	 * exercises the arithmetic and says nothing whatever about the byte
+	 * order -- and SDP is the one big-endian protocol in this stack,
+	 * sitting a few bytes from two little-endian ones.
+	 *
+	 * Found by `scripts/mutate-bluetooth.py`: turning `case 4:`'s
+	 * `return true` into `return false` in `sdp_uint` changed no result
+	 * anywhere, which is what an unreachable success path looks like.
+	 *
+	 * 01 02 03 04 is deliberately asymmetric. Read the wrong way round it
+	 * is 0x04030201, which is a plausible number rather than an error --
+	 * the same failure shape as the BD_ADDR byte order in `bt_link.h`.
+	 */
+	{
+		static const u8 u32_element[] = {
+			0x0A,			/* UINT, size index 2: 4 bytes */
+			0x01, 0x02, 0x03, 0x04
+		};
+		struct sdp_element e;
+		u32 v = 0;
+
+		if (!sdp_element_parse(u32_element, sizeof(u32_element), &e)) {
+			kputs("  sdp: a four-byte UINT element did not "
+			      "parse\n");
+			ok = false;
+		} else if (e.type != SDP_DE_UINT || e.data_len != 4) {
+			kprintf("  sdp: a four-byte UINT read as type %u with "
+				"%u bytes, expected type %u with 4\n", e.type,
+				e.data_len, (unsigned)SDP_DE_UINT);
+			ok = false;
+		} else if (!sdp_uint(&e, &v)) {
+			kputs("  sdp: a four-byte UINT was refused by "
+			      "sdp_uint, so the 32-bit path is unreachable\n");
+			ok = false;
+		} else if (v != 0x01020304u) {
+			kprintf("  sdp: 01 02 03 04 read as %08x, expected "
+				"01020304 -- SDP is big-endian and everything "
+				"beneath it is not\n", v);
+			ok = false;
+		}
+	}
+
+	/* --- the smallest buffer each header length fits in ---------------
+	 *
+	 * Three size indices put the length in the bytes after the
+	 * descriptor: one byte, two, or four. Each has a guard refusing a
+	 * buffer too short to hold that length, and each guard was tested
+	 * only with buffers well clear of the boundary -- so `len < 2` could
+	 * have been `len <= 2` in all three places and nothing would have
+	 * said so.
+	 *
+	 * What that costs is not a crash. It is an element at the very end of
+	 * a record being refused, and the walk above it then reporting the
+	 * record as malformed. A 701-byte record whose last attribute happens
+	 * to end flush would be thrown away whole.
+	 *
+	 * Each of these is an empty sequence, which is the shortest thing the
+	 * encoding can express at that header size, and `header_len > len` in
+	 * the shared bounds check is on the same boundary.
+	 */
+	{
+		static const u8 seq8[]  = { 0x35, 0x00 };
+		static const u8 seq16[] = { 0x36, 0x00, 0x00 };
+		static const u8 seq32[] = { 0x37, 0x00, 0x00, 0x00, 0x00 };
+		struct sdp_element e;
+		unsigned i;
+
+		const u8 *bufs[3];
+		u32 lens[3];
+		u32 heads[3];
+
+		bufs[0] = seq8;  lens[0] = sizeof(seq8);  heads[0] = 2;
+		bufs[1] = seq16; lens[1] = sizeof(seq16); heads[1] = 3;
+		bufs[2] = seq32; lens[2] = sizeof(seq32); heads[2] = 5;
+
+		for (i = 0; i < 3; i++) {
+			if (!sdp_element_parse(bufs[i], lens[i], &e)) {
+				kprintf("  sdp: an empty sequence in exactly "
+					"its %u header bytes was refused\n",
+					heads[i]);
+				ok = false;
+				continue;
+			}
+
+			if (e.header_len != heads[i] || e.data_len != 0) {
+				kprintf("  sdp: an empty sequence read as %u "
+					"header bytes and %u of data, "
+					"expected %u and 0\n", e.header_len,
+					e.data_len, heads[i]);
+				ok = false;
+			}
+
+			/* And one byte short of it must still be refused, or
+			 * the guard has moved rather than gone. */
+			if (sdp_element_parse(bufs[i], lens[i] - 1, &e)) {
+				kprintf("  sdp: an element needing %u header "
+					"bytes parsed out of %u\n", heads[i],
+					lens[i] - 1);
+				ok = false;
+			}
+		}
+	}
+
 	return ok;
 }

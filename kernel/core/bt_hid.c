@@ -348,6 +348,38 @@ bool bt_hid_self_test(void)
 			      "produced a report with no bytes in it\n");
 			ok = false;
 		}
+
+		/* And one byte more, which is the smallest thing that **is** a
+		 * report. Both sides of that boundary are here because only
+		 * one of them was, and the refusal above is satisfied by a
+		 * check that refuses one byte too many. A mutation run turned
+		 * `length < 2` into `length <= 2` and nothing went red: a
+		 * device sending one-byte reports behind a report id would
+		 * have had every one of them dropped in silence.
+		 *
+		 * That is not hypothetical for the shape this branch is aimed
+		 * at -- a report id plus a byte of buttons is what a
+		 * multi-report device's keyboard-ish collection looks like. */
+		pdu[0] = HIDP_INPUT_DATA_HEADER;
+		pdu[1] = 0x02;			/* the id */
+		pdu[2] = 0x41;			/* one byte of report */
+
+		if (!bt_hid_parse(pdu, 3, &m)) {
+			kputs("  bthid: a three-byte message was refused\n");
+			ok = false;
+		} else if (!bt_hid_input_report(&m, true, &rep)) {
+			kputs("  bthid: a report id followed by a single "
+			      "byte produced no report, though that byte is "
+			      "a report\n");
+			ok = false;
+		} else if (!rep.have_id || rep.id != 0x02 || rep.length != 1 ||
+			   rep.data[0] != 0x41) {
+			kprintf("  bthid: the smallest report with an id came "
+				"back id %02x, %u bytes starting %02x, "
+				"expected id 02, 1 byte, 41\n", rep.id,
+				rep.length, rep.data[0]);
+			ok = false;
+		}
 	}
 
 	/* --- nothing at all ---------------------------------------------- */

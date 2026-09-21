@@ -1323,6 +1323,58 @@ bool hid_report_self_test(void)
 		}
 	}
 
+	/* --- and one axis, which the case above cannot tell apart ---------
+	 *
+	 * `if (!have_x || !have_y)` refuses a device missing either axis, and
+	 * the buttons-only case above satisfies it whichever way round the
+	 * operator is: with `&&`, neither axis is present, so both sides are
+	 * true and it still refuses. **The test looked like it was about the
+	 * rule and was about the easy half of it.**
+	 *
+	 * Found by `scripts/mutate-bluetooth.py`, which turned that `||` into
+	 * `&&` and watched every test pass. What it costs is a device with
+	 * one axis -- a scroll wheel, a jog dial, a single-axis slider --
+	 * accepted as a mouse, with `layout.y` left at whatever
+	 * `hid_report_mouse_layout` had not written.
+	 */
+	{
+		static const u8 one_axis[] = {
+			0xA1, 0x01,		/* Collection (Application) */
+			0x05, 0x09,		/* Usage Page (Button) */
+			0x19, 0x01,
+			0x29, 0x03,
+			0x95, 0x03,
+			0x75, 0x01,
+			0x81, 0x02,
+			0x95, 0x01,
+			0x75, 0x05,
+			0x81, 0x01,		/* padding to a byte */
+			0x05, 0x01,		/* Usage Page (Generic) */
+			0x09, 0x30,		/* Usage (X), and no Y */
+			0x95, 0x01,
+			0x75, 0x08,
+			0x81, 0x06,		/* Input (Data,Var,Rel) */
+			0xC0
+		};
+		struct hid_mouse_layout m;
+
+		if (!hid_report_parse(one_axis, sizeof(one_axis), &info)) {
+			kputs("  hidrep: a one-axis descriptor was refused "
+			      "outright\n");
+			ok = false;
+		} else if (!info.fields_usable) {
+			kputs("  hidrep: a one-axis descriptor had its field "
+			      "map withheld, so this case proves nothing "
+			      "about the axis rule\n");
+			ok = false;
+		} else if (hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: buttons and a single X axis was "
+			      "read as a mouse, so Y would be decoded from a "
+			      "field the descriptor never declared\n");
+			ok = false;
+		}
+	}
+
 	/* --- pulling a value out of a field ------------------------------ */
 	{
 		i32 v;

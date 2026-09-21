@@ -132,6 +132,20 @@ AREA = {
     'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
     'GX-004': 'display', 'GX-005': 'display', 'GX-006': 'display',
     'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display', 'GX-010': 'display',
+
+    # The Bluetooth track. `kernel`, not a new `bluetooth` label, for two
+    # reasons: every one of these is a fault in a file under `kernel/core/`,
+    # and `gh issue create --label` fails on a label the repository does not
+    # have, so inventing one here would break the creation run rather than
+    # label anything. BT-014 is `build` because it is a fault in a script,
+    # which is what NW-009 used for the same thing.
+    'BT-001': 'kernel', 'BT-002': 'kernel', 'BT-003': 'kernel',
+    'BT-004': 'kernel', 'BT-005': 'kernel', 'BT-006': 'kernel',
+    'BT-007': 'kernel', 'BT-008': 'kernel', 'BT-009': 'kernel',
+    'BT-010': 'kernel', 'BT-011': 'kernel', 'BT-012': 'kernel',
+    'BT-013': 'kernel', 'BT-014': 'build',
+    'BT-015': 'kernel', 'BT-016': 'kernel', 'BT-017': 'kernel',
+
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',
@@ -563,9 +577,27 @@ def check_open(text):
         print('  %s is open and the Open section does not say so' % b)
     for b in extra:
         print('  %s is named as open and its own entry says otherwise' % b)
-    if not missing and not extra:
-        print('  Open names all %d open entries and no others' % len(open_now))
-    return 1 if (missing or extra) else 0
+
+    # And the number the section opens with, which is the one thing here
+    # that was written rather than derived -- so it is the one thing that
+    # drifted. It said 18 over a list of 17 for long enough that nobody
+    # knows when it started, with this function running clean the whole
+    # time, because comparing the set says nothing about the count beside
+    # it. Same fault as the sentence this function was written to catch,
+    # one line higher up.
+    stated = re.match(r'\s*(\d+)', head.group(1))
+    counted = False
+    if not stated:
+        print('  the Open section does not open with a count')
+        counted = True
+    elif int(stated.group(1)) != len(open_now):
+        print('  Open says %s and lists %d' % (stated.group(1), len(open_now)))
+        counted = True
+
+    if not missing and not extra and not counted:
+        print('  Open says %d, names all %d open entries and no others'
+              % (len(open_now), len(open_now)))
+    return 1 if (missing or extra or counted) else 0
 
 
 USAGE = """usage: make-issues.py [--dry-run | --check]

@@ -638,10 +638,69 @@ bool bt_pairing_self_test(void)
 			ok = false;
 		}
 
-		/* The setter refused, so the length must be the old one. */
+		/* Two refusals just happened, so the length must be the one
+		 * from before them. Checked here rather than further down,
+		 * because the block below sets a PIN successfully and this
+		 * assertion means nothing on the far side of that. */
 		if (p.pin_len != 4) {
 			kprintf("  btpair: a refused PIN still changed the "
 				"length to %u\n", p.pin_len);
+			ok = false;
+		}
+
+		/* **And exactly the maximum, which is the length the guard is
+		 * about and the one nothing had tried.**
+		 *
+		 * Too long and too short were both covered; the boundary
+		 * itself was not, so `len > BT_PIN_MAX` could have been
+		 * `len >= BT_PIN_MAX` with every test still green. Sixteen
+		 * characters is a legal PIN -- it is the longest the
+		 * specification allows -- and refusing it means a device that
+		 * wants one can never be paired with, for a reason that
+		 * prints nothing. Found by `scripts/mutate-bluetooth.py`. */
+		if (!bt_pairing_set_pin(&p, big, BT_PIN_MAX) ||
+		    p.pin_len != BT_PIN_MAX) {
+			kprintf("  btpair: a PIN of exactly %u characters was "
+				"refused, and %u is the longest the "
+				"specification allows\n",
+				(unsigned)BT_PIN_MAX, (unsigned)BT_PIN_MAX);
+			ok = false;
+		}
+
+		/* The copy has the same boundary, and the same consequence if
+		 * it moves: a maximum-length PIN must draw the *positive*
+		 * reply, carrying all sixteen characters. */
+		{
+			u8 maxreq[8];
+
+			maxreq[0] = HCI_EV_PIN_CODE_REQ;
+			maxreq[1] = BT_ADDR_LEN;
+			kmemcpy(maxreq + 2, addr, BT_ADDR_LEN);
+
+			bt_pairing_allow(&p, addr);
+			n = bt_pairing_event(&p, maxreq, sizeof(maxreq), out,
+					     sizeof(out));
+
+			if (n != 3 + BT_ADDR_LEN + 1 + BT_PIN_MAX ||
+			    out[0] != (u8)(HCI_OP_PIN_CODE_REPLY & 0xFF)) {
+				kprintf("  btpair: a %u-character PIN drew %u "
+					"bytes of opcode %02x, expected the "
+					"positive reply\n",
+					(unsigned)BT_PIN_MAX, n, out[0]);
+				ok = false;
+			} else if (out[3 + BT_ADDR_LEN] != BT_PIN_MAX) {
+				kprintf("  btpair: the reply declared a PIN "
+					"length of %u, expected %u\n",
+					out[3 + BT_ADDR_LEN],
+					(unsigned)BT_PIN_MAX);
+				ok = false;
+			}
+		}
+
+		/* Put the four back, because the blocks below assume it. */
+		if (!bt_pairing_set_pin(&p, four, 4) || p.pin_len != 4) {
+			kputs("  btpair: the four-character PIN could not be "
+			      "set again\n");
 			ok = false;
 		}
 

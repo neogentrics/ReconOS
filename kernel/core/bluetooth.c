@@ -597,6 +597,39 @@ static void fake_reset(struct fake_controller *c)
 	c->chunk = 16;			/* what the real endpoint carries */
 }
 
+/* A `usb_device` as the enumeration would leave a working adapter.
+ *
+ * The identifiers are real: `0e8d:0616` is the MediaTek RZ616 in the desktop,
+ * whose configuration descriptor was read out of the hub driver, and the
+ * Realtek on the Gateway is `0bda:d723`. Both report class 224, subclass 1,
+ * protocol 1 on interface 0. A fixture invented here would have been checked
+ * against the same reading that produced the driver.
+ *
+ * Rebuilt for each case rather than edited between them, because the cases
+ * differ in one field each and a leftover from the previous one is exactly
+ * the coupling BT-012 was about. */
+static void attach_fixture(struct usb_device *ud)
+{
+	kmemset(ud, 0, sizeof(*ud));
+
+	ud->slot            = 1;
+	ud->port            = 7;
+	ud->vendor          = 0x0E8D;
+	ud->product         = 0x0616;
+	ud->interface       = 0;
+
+	ud->usb_class       = BT_USB_CLASS;
+	ud->usb_subclass    = BT_USB_SUBCLASS;
+	ud->usb_protocol    = BT_USB_PROTOCOL;
+
+	ud->configured      = true;
+	ud->in_ep           = 0x81;
+	ud->in_is_interrupt = true;
+	ud->in_packet       = 16;
+	ud->out_ep          = 0x02;
+	ud->out_packet      = 64;
+}
+
 bool bt_hci_self_test(void)
 {
 	struct hci_event_reassembly r;
@@ -1198,6 +1231,260 @@ bool bt_hci_self_test(void)
 			      "had not arrived\n");
 			ok = false;
 		}
+	}
+
+	/* --- the three things a mutation run found nothing looking at ----
+	 *
+	 * Every test above was written by choosing something worth breaking.
+	 * `scripts/mutate-bluetooth.py` instead breaks every comparison and
+	 * every boolean return in this file in turn and reports the ones
+	 * nothing noticed. These three are from that list, and the first is
+	 * the one that matters.
+	 */
+
+	/* A transfer that carried nothing. USB really does deliver
+	 * zero-length packets, and `hci_event_feed`'s guard against one had
+	 * no test: turning `return false` into `return true` there reports a
+	 * complete event to a caller who then reads whatever the *last* event
+	 * left in the buffer. */
+	{
+		struct hci_event_reassembly z;
+
+		hci_reassembly_reset(&z);
+
+		if (hci_event_feed(&z, ev, 0)) {
+			kputs("  bluetooth: a zero-length transfer was "
+			      "reported as a complete event, so the caller "
+			      "would read the previous one again\n");
+			ok = false;
+		}
+
+		if (z.have) {
+			kprintf("  bluetooth: a zero-length transfer left %u "
+				"bytes in the buffer\n", z.have);
+			ok = false;
+		}
+	}
+
+	/* The smallest event there is: a code and a zero parameter length.
+	 * Two bytes, and complete. Nothing here had fed one, so the guard
+	 * that waits for the header could have been `have <= 2` -- which
+	 * never completes a zero-parameter event at all, and the wait above
+	 * would run out its budget against a controller that had answered. */
+	{
+		struct hci_event_reassembly z;
+		u8 bare[2];
+
+		bare[0] = 0x0E;		/* Command Complete, as it happens */
+		bare[1] = 0x00;		/* and no parameters */
+
+		hci_reassembly_reset(&z);
+
+		if (!hci_event_feed(&z, bare, 2)) {
+			kputs("  bluetooth: a two-byte event -- a code and a "
+			      "zero length -- was not completed, though "
+			      "nothing follows its header\n");
+			ok = false;
+		} else if (z.want != 2) {
+			kprintf("  bluetooth: a zero-parameter event declared "
+				"%u bytes, expected 2\n", z.want);
+			ok = false;
+		}
+	}
+
+	/* A command with nowhere to send it. `bt_hci_command` checks the
+	 * transport before building anything, and nothing had called it that
+	 * way -- so the check could have been absent and the first real use
+	 * on a half-initialised structure would have called through a null. */
+	{
+		struct bt_hci h;
+
+		bt_hci_init(&h, 0);
+
+		if (bt_hci_command(&h, HCI_OP_RESET, 0, 0, &status, 4)) {
+			kputs("  bluetooth: a command succeeded against a "
+			      "controller with no transport at all\n");
+			ok = false;
+		}
+	}
+
+	/* --- attaching, which nothing here had ever run -------------------
+	 *
+	 * `bt_hci_attach` is wired into the class-driver chain, and until that
+	 * same mutation run said so, **no test on this branch had ever called
+	 * it.** Every mutation of it survived: invert the class comparison and
+	 * the driver claims every device that is *not* a Bluetooth adapter;
+	 * turn any of its four refusals into an acceptance and it claims one
+	 * it has already diagnosed as unusable.
+	 *
+	 * That matters more here than it would in most drivers, because this
+	 * function's counters are **the evidence for KF-248**. If they count
+	 * the wrong devices, the measurement that bug is waiting on is wrong,
+	 * and nothing in the boot log would say which.
+	 *
+	 * The same hole in the same shape is GX-010 on the graphics branch:
+	 * everything proved about two backends was proved about `identify`,
+	 * and `attach` had never been executed by anything.
+	 *
+	 * The counters are saved and put back at the end. A self-test that
+	 * leaves `seen` at four makes `bt_hci_print_summary` report four
+	 * controllers on a machine with none -- a boot log lying about
+	 * hardware, which is the one thing this file exists to prevent.
+	 */
+	{
+		struct usb_device ud;
+		unsigned save_seen       = seen;
+		unsigned save_unconf     = declined_unconfigured;
+		unsigned save_no_event   = declined_no_event_endpoint;
+		unsigned save_unexpected = unexpected_event_endpoint;
+		unsigned before;
+
+		/* --- something that is not a Bluetooth adapter ------------ */
+		attach_fixture(&ud);
+		before          = seen;
+		ud.usb_class    = 0x03;		/* HID */
+		ud.usb_subclass = 0x01;		/* boot interface */
+		ud.usb_protocol = 0x02;		/* mouse */
+
+		if (bt_hci_attach(0, &ud)) {
+			kputs("  bluetooth: a HID mouse was claimed as a "
+			      "Bluetooth controller\n");
+			ok = false;
+		}
+
+		if (seen != before) {
+			kprintf("  bluetooth: a HID mouse was counted among "
+				"the controllers seen (%u to %u)\n", before,
+				seen);
+			ok = false;
+		}
+
+		/* --- each field wrong on its own --------------------------
+		 *
+		 * Three comparisons in one `if`, so three cases. A device with
+		 * all three wrong cannot tell them apart, and two of them
+		 * swapped -- which is the mistake GX-010 is about -- passes a
+		 * test that only ever gets all three right or all three
+		 * wrong. */
+		attach_fixture(&ud);
+		ud.usb_class = (u8)(BT_USB_CLASS + 1);
+
+		if (bt_hci_attach(0, &ud)) {
+			kputs("  bluetooth: a device with the wrong class, "
+			      "and the right subclass and protocol, was "
+			      "claimed\n");
+			ok = false;
+		}
+
+		attach_fixture(&ud);
+		ud.usb_subclass = (u8)(BT_USB_SUBCLASS + 1);
+
+		if (bt_hci_attach(0, &ud)) {
+			kputs("  bluetooth: a device with the wrong subclass "
+			      "was claimed\n");
+			ok = false;
+		}
+
+		attach_fixture(&ud);
+		ud.usb_protocol = (u8)(BT_USB_PROTOCOL + 1);
+
+		if (bt_hci_attach(0, &ud)) {
+			kputs("  bluetooth: a device with the wrong protocol "
+			      "was claimed\n");
+			ok = false;
+		}
+
+		/* --- a real adapter that never configured ------------------ */
+		attach_fixture(&ud);
+		ud.configured = false;
+		before        = declined_unconfigured;
+
+		if (bt_hci_attach(0, &ud)) {
+			kputs("  bluetooth: an unconfigured adapter was "
+			      "claimed, and its only endpoint is the control "
+			      "one\n");
+			ok = false;
+		}
+
+		if (declined_unconfigured != before + 1) {
+			kprintf("  bluetooth: an unconfigured adapter was "
+				"declined and not counted as one (%u to %u)\n",
+				before, declined_unconfigured);
+			ok = false;
+		}
+
+		/* --- the reading this driver exists to take ----------------
+		 *
+		 * A configured adapter whose surviving IN endpoint is the bulk
+		 * one. This is what KF-248 predicts, and this count is the
+		 * measurement it is waiting on. */
+		attach_fixture(&ud);
+		ud.in_is_interrupt = false;
+		ud.in_ep           = 0x82;
+		before             = declined_no_event_endpoint;
+
+		if (bt_hci_attach(0, &ud)) {
+			kputs("  bluetooth: an adapter with no event endpoint "
+			      "was claimed, so a command would go out and its "
+			      "answer would arrive on an endpoint nothing "
+			      "reads\n");
+			ok = false;
+		}
+
+		if (declined_no_event_endpoint != before + 1) {
+			kprintf("  bluetooth: the endpoint measurement did "
+				"not count a bulk-only adapter (%u to %u)\n",
+				before, declined_no_event_endpoint);
+			ok = false;
+		}
+
+		/* --- and the outcome nobody has planned for ---------------- */
+		attach_fixture(&ud);
+		before = unexpected_event_endpoint;
+
+		if (bt_hci_attach(0, &ud)) {
+			kputs("  bluetooth: an adapter was claimed, though "
+			      "this driver issues no transfer and claiming it "
+			      "takes it from whatever could\n");
+			ok = false;
+		}
+
+		if (unexpected_event_endpoint != before + 1) {
+			kprintf("  bluetooth: an adapter that kept its "
+				"interrupt endpoint was not counted as the "
+				"surprise it is (%u to %u)\n", before,
+				unexpected_event_endpoint);
+			ok = false;
+		}
+
+		/* Three adapters got past the class check -- the unconfigured
+		 * one, the bulk-only one and the surprising one -- so three
+		 * were seen. The four turned away on class, subclass or
+		 * protocol must not be in that number.
+		 *
+		 * This assertion said four on its first run, because the
+		 * count was written from the number of cases rather than from
+		 * the number of *adapters* among them. It failed with
+		 * "3 controllers counted ... expected 4", which is the check
+		 * working: a count taken from the code it is checking would
+		 * have agreed with whatever the code did. */
+		if (seen != save_seen + 3) {
+			kprintf("  bluetooth: %u controllers counted over a "
+				"run offering three adapters and four "
+				"non-adapters, expected 3\n", seen - save_seen);
+			ok = false;
+		}
+
+		if (bt_hci_count() != seen) {
+			kputs("  bluetooth: bt_hci_count() and the counter it "
+			      "reports disagree\n");
+			ok = false;
+		}
+
+		seen                       = save_seen;
+		declined_unconfigured      = save_unconf;
+		declined_no_event_endpoint = save_no_event;
+		unexpected_event_endpoint  = save_unexpected;
 	}
 
 	return ok;

@@ -401,5 +401,129 @@ bool bt_mouse_self_test(void)
 		}
 	}
 
+	/* --- every way in that is a refusal ------------------------------
+	 *
+	 * This file's tests all follow the same path: attach a real mouse,
+	 * feed it a real report, check the numbers. `mutate-bluetooth.py`
+	 * turned **every one** of the refusals along that path into an
+	 * acceptance and nothing went red, which says the refusals were
+	 * reached by nothing.
+	 *
+	 * They are not equally serious and they are all cheap. The two that
+	 * matter are the `ready` checks: a `bt_mouse` that never attached has
+	 * a zeroed layout, and decoding a report through one reads every
+	 * field out of bit zero.
+	 */
+	{
+		static struct bt_mouse never;
+		static const u8 not_a_descriptor[] = { 0xFF, 0xFF, 0xFF };
+		static const u8 buttons_only[] = {
+			0xA1, 0x01,
+			0x05, 0x09,
+			0x19, 0x01, 0x29, 0x04,
+			0x95, 0x04, 0x75, 0x01,
+			0x81, 0x02,
+			0x95, 0x01, 0x75, 0x04,
+			0x81, 0x01,
+			0xC0
+		};
+		static const u8 short_pdu[] = { 0x08, 0x00, 0x41 };
+
+		/* Its own copy of the report, rather than the `pdu` above.
+		 * Eight blocks already read that one and BT-012 is what
+		 * happens when a ninth writes to it. */
+		static const u8 whole[12] = {
+			0x08, 0x00, 0x41, 0x00,
+			0xA1,
+			0x05, 0x2C, 0x01, 0xD4, 0xFE, 0xFF, 0x00
+		};
+		u8 bad[8];
+
+		kmemset(&never, 0, sizeof(never));
+
+		/* A descriptor that is not one. */
+		if (bt_mouse_configure(&never, not_a_descriptor,
+				       sizeof(not_a_descriptor), 0x000C,
+				       0x0041)) {
+			kputs("  btmouse: three bytes of nonsense configured "
+			      "as a mouse\n");
+			ok = false;
+		}
+
+		/* One that parses, and is not a mouse. */
+		if (bt_mouse_configure(&never, buttons_only,
+				       sizeof(buttons_only), 0x000C,
+				       0x0041)) {
+			kputs("  btmouse: a buttons-only device configured "
+			      "as a mouse\n");
+			ok = false;
+		}
+
+		if (never.ready) {
+			kputs("  btmouse: a refused configure left the mouse "
+			      "marked ready\n");
+			ok = false;
+		}
+
+		/* **Traffic to a mouse that never configured.** */
+		if (bt_mouse_acl(&never, 0x000C, 2, whole, sizeof(whole),
+				 &s)) {
+			kputs("  btmouse: a mouse that never configured "
+			      "decoded a report, through a layout that is "
+			      "all zeroes\n");
+			ok = false;
+		}
+
+		if (bt_mouse_pdu(&never, whole, sizeof(whole), &s)) {
+			kputs("  btmouse: a mouse that never configured "
+			      "decoded a whole PDU\n");
+			ok = false;
+		}
+
+		/* Now a configured one, so the refusals below are the ones
+		 * being tested rather than `ready` again. */
+		if (!bt_mouse_configure(&never, real_mouse,
+					sizeof(real_mouse), 0x000C, 0x0041)) {
+			kputs("  btmouse: the real mouse would not configure "
+			      "for the refusal cases\n");
+			ok = false;
+		} else {
+			u64 before = never.malformed;
+
+			/* Three bytes cannot hold a four-byte L2CAP header. */
+			if (bt_mouse_pdu(&never, short_pdu,
+					 sizeof(short_pdu), &s)) {
+				kputs("  btmouse: a three-byte PDU was "
+				      "decoded, so its length came from a "
+				      "byte that is not there\n");
+				ok = false;
+			}
+
+			/* A well-formed L2CAP header on the right channel,
+			 * declaring a HIDP message with nothing in it. The
+			 * header parses, the channel matches, and the HIDP
+			 * layer is what has to refuse -- and count it. */
+			bad[0] = 0x00;		/* length: no payload */
+			bad[1] = 0x00;
+			bad[2] = 0x41;		/* the CID configured above */
+			bad[3] = 0x00;
+
+			if (bt_mouse_pdu(&never, bad, 4, &s)) {
+				kputs("  btmouse: a PDU with no HIDP byte at "
+				      "all produced a report\n");
+				ok = false;
+			}
+
+			if (never.malformed != before + 1) {
+				kprintf("  btmouse: a malformed PDU was "
+					"refused and not counted (%u to %u), "
+					"so the boot log would say the link "
+					"was clean\n", (unsigned)before,
+					(unsigned)never.malformed);
+				ok = false;
+			}
+		}
+	}
+
 	return ok;
 }

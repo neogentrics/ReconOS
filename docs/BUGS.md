@@ -234,10 +234,16 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-18, and each entry says why. They are listed because a register that only
+17, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
+
+*It said 18 against a list of 17 until 21 September 2026. `check_open`
+compared the set of identifiers and never the number beside them, so the one
+figure in this section that was written rather than derived is the one that
+drifted -- which is what that function's own docstring says happens. It
+checks the number now too.*
 
 - **BG-105** — A register that says nothing until the port is already running
 - **BG-104** — An unimplemented region reporting exactly four gigabytes
@@ -260,6 +266,506 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 ---
 
 ## Fixed
+
+### BT-015 — The one function whose output is another bug's evidence had never been called
+
+- **Found in** `bluetooth` at `61747d6`, 21 September 2026, by
+  `scripts/mutate-bluetooth.py`: **every mutation of `bt_hci_attach`
+  survived** — all three comparisons inverted, all four refusals turned into
+  acceptances, seven in a row out of one function. That pattern does not mean
+  seven weak tests. It means no test.
+- **Was** `bt_hci_attach` is wired into the class-driver chain and nothing on
+  this branch had ever executed it. What it can therefore be wrong about:
+
+  | the mutation | what the machine would do |
+  |---|---|
+  | `usb_class != BT_USB_CLASS` inverted | claim every USB device that is **not** a Bluetooth adapter — the keyboard, the mouse, the disk |
+  | any of the four `return false` inverted | claim an adapter it has already diagnosed as unusable, and hold it against whatever could use it |
+  | two of the three fields compared in the wrong order | claim the wrong hardware, silently |
+
+- **And the counters are the part that matters.** `seen`,
+  `declined_no_event_endpoint` and `unexpected_event_endpoint` are **the
+  evidence for KF-248** — the numbers that branch is waiting for a Gateway
+  boot to produce. If they count the wrong devices the measurement is wrong,
+  and nothing in the boot log would say which.
+- **Fixed in** `bluetooth`, with seven cases: a HID mouse refused and not
+  counted, each of class, subclass and protocol wrong **on its own**, an
+  unconfigured adapter, a bulk-only one, and one that kept its interrupt
+  endpoint. Three separate wrong-field cases rather than one wrong device,
+  because two swapped arguments pass a test that only ever gets all three
+  right or all three wrong. The counters are saved and restored, so the test
+  cannot make `bt_hci_print_summary` report controllers on a machine with
+  none.
+- **The first version of the assertion was wrong and said so**: it expected
+  four adapters where three get past the class check, and failed with
+  *"3 controllers counted ... expected 4"*. A count taken from the code it
+  checks would have agreed with whatever the code did.
+- **This is GX-010 in the same shape, in a different track**: everything
+  proved about two display backends was proved about `identify`, and `attach`
+  had never been executed by anything. Two sessions, five days apart, same
+  hole. It is worth treating as a thing to look for rather than a coincidence.
+
+### BT-016 — The only test that reached the big-endian read used a value that is the same backwards
+
+- **Found in** `bluetooth` at `61747d6`, 21 September 2026, by
+  `scripts/mutate-bluetooth.py`, which turned `case 4:`'s `return true` in
+  `sdp_uint` into `return false` and changed no result anywhere — the
+  signature of a success path nothing reaches.
+- **Was** `get_be32` had no test. That was not visible by reading the file,
+  because a test *did* reach it: the BT-011 wrap case, which parses an element
+  declaring `FF FF FF FF` bytes of content.
+
+  **`FF FF FF FF` is the same number read either way round.** It exercises the
+  arithmetic the wrap check is about and says nothing whatever about byte
+  order.
+- **Why that is the dangerous one to leave.** SDP is the only big-endian
+  protocol in this stack, sitting a few bytes from HCI and L2CAP, which are
+  not. `usb_storage.c` names the identical hazard for SCSI inside its
+  wrappers. A reversed read does not fail; it returns a plausible number —
+  the same failure shape as a BD_ADDR written the wrong way round, which
+  produces a valid-looking address for a device that is not there.
+- **Fixed in** `bluetooth` with `01 02 03 04`, chosen because it is
+  asymmetric: reversed it is `0x04030201`. Reversing `get_be32` now fails with
+  *"01 02 03 04 read as 04030201, expected 01020304 -- SDP is big-endian and
+  everything beneath it is not"*.
+- **A fixture can be wrong by being too symmetric**, which is the same fault
+  as BT-013, where every address pair differed only in byte zero. Twice in one
+  day, in two files, found by two different means.
+
+### BT-017 — Both sides of a boundary were tested, and never the boundary
+
+- **Found in** `bluetooth` on 21 September 2026 by
+  `scripts/mutate-bluetooth.py`, written for this. It replaces every
+  comparison, logical operator and boolean return in the nine Bluetooth files
+  in turn, builds and boots each one, and reports the breakages the self-tests
+  sat through. First run: **333 mutants, 198 killed, 26 refused by the
+  compiler, 109 survived.**
+- **Was** one shape, over and over. This branch tests a refusal with input
+  well clear of the limit and an acceptance with input well clear of it, and
+  almost never the exact case — so `x < N` could be `x <= N` throughout with
+  every test still green. Each of these was a survivor:
+
+  | where | what `<=` instead of `<` would have done |
+  |---|---|
+  | `bt_hid.c`, a report behind a report id | dropped every report from a device sending one byte of data |
+  | `bt_pair.c`, `bt_pairing_set_pin` | refused a 16-character PIN, which is the longest the specification allows, so a device wanting one could never be paired with |
+  | `bluetooth.c`, the event header | never completed a zero-parameter event, so a controller that had answered would run the caller's budget out |
+  | `sdp.c`, three header lengths | refused an element that ends flush with the record, throwing the whole record away |
+
+  Alongside them, refusals nothing reached at all: a zero-length USB transfer
+  reported as a complete event; a command sent through a `bt_hci` with no
+  transport; all six of `bt_mouse.c`'s refusals, including traffic to a mouse
+  that never configured, whose layout is all zeroes; and a device with one
+  axis accepted as a mouse, because the only test of `!have_x || !have_y` had
+  *neither* axis and passes with the operator either way round.
+- **Fixed in** `bluetooth` — each one tested at the boundary and each
+  verified by putting the fault back. Second run: **345 mutants, 237 killed,
+  82 survived.** `bt_hid.c` and `bt_mouse.c` are at zero.
+- **The 82 that remain are listed**, not summarised, in
+  `docs/audits/bt-mutation-survivors.txt`. Some are equivalent mutations that
+  cannot change behaviour; some are guards on paths no test can reach without
+  hardware. **The tool cannot tell those apart from real holes and does not
+  try.** It narrows a few thousand lines to a list short enough to read, and
+  reading it is the work. The largest remaining group is the `outmax` arm of
+  four guards in `bt_pair.c`, which is BT-006's exact shape — a caller's
+  buffer guard that no caller in any test comes close to filling.
+- **And the tool inherited two lessons rather than paying for them again.**
+  BG-198 was the desktop's mutation harness dying between mutating and
+  restoring, leaving a mutation that read as a fault in correct code: this one
+  restores in a `finally`, **verifies** each restore byte for byte, and writes
+  a sentinel file so a run that is killed outright cannot have its leftovers
+  taken as the original by the next one. A surviving mutation is precisely the
+  one a baseline check would not catch.
+- **The lesson it did pay for** is its own: the first run took no tree lock
+  and its 333 builds and 333 boots overlapped most of a `verify-kernel.sh` run
+  in another worktree. No binary was mixed — the trees are separate — but
+  BT-014's first instance was a boot cut short by a timeout *because two
+  builds were running*, and a rig with timeouts in it gives wrong answers
+  under load. It takes the lock per mutant now, so it interleaves at seven
+  seconds a time rather than blocking every other session for thirty-eight
+  minutes.
+
+### The Bluetooth track's first fourteen, 21 September 2026
+
+`BT-` was claimed on 16 September and then not used for five days, while the
+branch found and fixed the faults below and recorded every one of them in
+`docs/SIGNALS.md` and in commit messages. **That was the wrong file.** SIGNALS
+is an outbox — it is read once by one session and then scrolls away. This is
+the durable record, and the rule at the top of it says a bug is what it was,
+what it cost, and how it was found. Fourteen of those existed with no entry.
+
+So they are numbered here in one pass, in the order they were found, the same
+way the network track's first eight were and for the same reason: no number
+has been quoted anywhere else yet, so nothing is renumbered by doing it now.
+From BT-015 on, a number is taken when the fault is found.
+
+**All fourteen are in code this branch wrote, found before it merged.** That
+is not a smaller class of bug than one found in a release — GX-010 and NW-007
+are the same shape — but it is worth saying plainly, because it means "Found
+in" below names a commit on `bluetooth` rather than a version anybody ran.
+
+The one thing the whole list has in common: **nine of the fourteen were found
+by reading rather than by testing**, and most of those by an audit that listed
+every place a rule applies and checked each one. The tests on this branch
+number in the hundreds and could not have reached them.
+
+### BT-001 — The HIDP report type is two bits, not four, so a compliant report with a reserved bit set was thrown away
+
+- **Found in** `bluetooth` at `66424cb`, 17 September 2026, by reading the
+  Linux kernel's `net/bluetooth/hidp/hidp.h` — the file an earlier commit had
+  said could not be checked, because no available package ships it. It is
+  public; only the packaging was the obstacle.
+- **Was** the report type in a HIDP DATA transaction occupies the bottom
+  **two** bits of the header's low nibble. The other two are reserved. This
+  branch compared the whole nibble:
+
+  ```c
+  if (m->parameter != HIDP_REPORT_INPUT)
+          return false;
+  ```
+
+  A device that sets a reserved bit sends `0xA5` where a compliant one sends
+  `0xA1`. Both are input reports. The nibble comparison reads the first as an
+  unknown type and drops it — **every report, silently, for that one device**.
+  A mouse that works for most people and not for one, with nothing in the log.
+- **Why no amount of breaking would have found it.** Eight faults before this
+  one came from deliberately breaking working code. Every test that method
+  would produce uses a *compliant* value, because that is what the author
+  believes the format to be. A field two bits wide cannot be discovered by
+  breaking a test written on the assumption that it is four.
+- **Fixed in** `bluetooth` at `66424cb`, masking with `HIDP_REPORT_TYPE_MASK`,
+  and tested in both directions: `0xA5` must read as an input report, and an
+  OUTPUT report carrying the same reserved bit must still be refused, so the
+  mask cannot pass by matching everything. Reverting it fails with *"header a5
+  was not read as an input report"*.
+
+### BT-002 — A device with report ids got a layout claiming zero bytes, which turned off the check that would have caught it
+
+- **Found in** `bluetooth` at `f2d5306`, 17 September 2026, by writing
+  `bt_mouse.c` — the file that joins the layers. Every layer under it had
+  passed alone.
+- **Was** two functions, each correct, disagreeing about one number.
+
+  `hid_report_parse` deliberately zeroes `info.input_bits` for a device that
+  uses report ids, because the report length is per-id there and a single
+  number would be a wrong answer rather than a missing one. That is right.
+
+  `hid_report_mouse_layout` took the report's length from `info.input_bits`.
+  So a report-id device got a layout claiming a report of **zero bytes**.
+- **And the guard against that was disabled by the same value.** `hid_mouse_decode`
+  refuses a short report with `len < report_bytes`. With `report_bytes` zero,
+  `len < 0` is never true for an unsigned length, so the short-report check
+  turned itself off. A truncated report would have been decoded with its axes
+  read from bytes the device never sent.
+- **Fixed in** `bluetooth` at `f2d5306`, by taking the length from the fields
+  themselves — the highest `bit_offset + bit_size`, padding included — which
+  holds whether or not report ids are in play and does not depend on a value
+  that is deliberately zero. Taking it from `input_bits` again is a permanent
+  breakage in the suite.
+
+### BT-003 — The next step of the sequence sat after a `return` that almost always ran
+
+- **Found in** `bluetooth` at `37d6ae1`, 18 September 2026, by running the
+  whole sequence for the first time. Every state machine under it passed
+  alone.
+- **Was** `bt_stack_acl` answered signalling and returned the reply, and the
+  check that opens the *next* channel sat after that return. Signalling almost
+  always produces a reply, so the sequence stopped with the control channel
+  open and nothing following it. The interrupt channel — the one reports
+  arrive on — was never opened.
+- **It is a shape, not a typo.** A reply and a next step are not the same
+  thing, and a function that returns one silently drops the other. Every
+  future step added to that function would have had the same problem.
+- **Fixed in** `bluetooth` at `37d6ae1` by splitting them: `bt_stack_poll` is
+  separate now and emits what the sequence owes on its own initiative, rather
+  than only in answer to something.
+
+### BT-004 — A Configure Request was acted on without checking which channel it named
+
+- **Found in** `bluetooth` at `37d6ae1`, 18 September 2026, by the same first
+  run of the whole sequence, and it is the first time the branch had two
+  channels open at once.
+- **Was** `l2cap.c` reads the destination CID out of a Configure Request and
+  never compared it. Every other message in that file is matched on one.
+
+  With a single channel that is invisible. With two on one link, the control
+  channel — open first — **swallowed the interrupt channel's Configure
+  Request**, and the interrupt channel then waited for a configuration
+  somebody else had answered.
+- **Why no test in the file could see it.** Every test in `l2cap.c` had a
+  single channel, which is exactly the condition under which the missing check
+  does not matter. The suite was large and the hole was in its premise.
+- **This is the same rule, for the fifth time on this branch** — an answer that
+  does not name what it is answering must not be taken as the answer to
+  whatever happens to be outstanding — and the one place it was forgotten. The
+  kernel's KF-248 is the same rule one layer below; KF-252 was found by
+  applying it.
+- **Fixed in** `bluetooth` at `37d6ae1`, with a two-channel case in `l2cap.c`.
+
+### BT-005 — A Disconnection Request tore down whichever channel read it first
+
+- **Found in** `bluetooth` at `a083da4`, 18 September 2026, **by audit rather
+  than by testing.** BT-004 had shown that the file's own tests could not
+  reach a two-channel case, which argued for listing every place a message is
+  matched and checking each. Nine places. Seven had a rule; Configure Request
+  and Disconnection Request did not.
+- **Was** without the check, any channel acts on a disconnection meant for
+  another: it tears *itself* down and answers on the other's behalf. The
+  channel actually being closed never hears back, and **a working one is
+  destroyed instead**. BT-004 only stalled a channel; this removes one that is
+  carrying reports.
+- **Nothing on this branch disconnects a second channel**, so no test was going
+  to reach it and no breakage of working code would have either. It was a
+  minute's reading.
+- **The nine places, for whoever audits next:** `bt_hci_command` on opcode;
+  `l2cap_channel_input` on identifier and CID for Connection Response and
+  Configure Response, and on CID for Configure Request and Disconnection
+  Request; `bt_link_event` on address for Connection Complete and on handle
+  for Disconnection Complete; `bt_mouse_acl` on handle and CID;
+  `bt_pairing_event` on address, and on the stored key's address for a Link
+  Key Request.
+- **Fixed in** `bluetooth` at `a083da4`. Removing the check fails with *"a
+  working channel torn down by a message that was never about it"*.
+- **And the first test for it was wrong**: it built the hostile request into
+  the same buffer the legitimate one already occupied, so the legitimate
+  request was parsed out of the hostile one's bytes. It failed loudly rather
+  than quietly, but only because the two happen to differ in a field the
+  assertions check. It rebuilds now.
+
+### BT-006 — A command builder wrote eight bytes into a buffer whose size it was never told
+
+- **Found in** `bluetooth` at `802258e`, 18 September 2026, by the second audit
+  of the same kind: list every place a caller's buffer is written. Eleven
+  builders, eleven call sites, one wrong.
+- **Was** the command builders take no size — `hci_command_build`,
+  `hci_inquiry_build`, `l2cap_signal_build` and the rest write what they write
+  and the caller promises the room. That is worth exactly what the call sites
+  keep, and `bt_stack_event`'s inquiry path wrote eight bytes with no `outmax`
+  guard, where every other call site in that file has one.
+- **It is the worst kind of thing to leave to a test.** Nothing fails at the
+  overrun. A few bytes past the end are overwritten and what breaks is
+  whatever was living there, later, somewhere unrelated.
+- **Fixed in** `bluetooth` at `802258e`, and checked with a canary rather than
+  by inspection: a seven-byte buffer with a known byte past the end, which
+  must survive. Removing the guard fails with both *"a command was written
+  into a seven-byte buffer that needs eight"* and *"the bytes past a short
+  buffer were overwritten"*. The second is the one that matters, because it
+  proves a real memory write rather than a missing return.
+
+### BT-007 — A PIN length bounded only by convention, and it takes the return address
+
+- **Found in** `bluetooth` at `237a233`, 18 September 2026, by the third audit
+  of the same kind: list every `kmemcpy` with a variable length and check what
+  bounds it. Eleven on this branch, ten bounded a few lines above.
+- **Was** the eleventh copies `p->pin_len` bytes into a 23-byte stack buffer in
+  `bt_pair.c`. `pin_len` is a **public struct field** in a header;
+  `bt_pairing_init` sets it to four and nothing else wrote it, so the bound was
+  the convention that nothing else would.
+- **It does not produce a wrong PIN. It panics.** Unhandled exception, boot
+  dead at 37 self-tests of 73. A `pin_len` of 56 writes 33 bytes past the
+  buffer and takes the return address with it.
+- **Fixed in** `bluetooth` at `237a233`, in two places, because one is not
+  enough: `bt_pairing_set_pin` bounds the length where it is set, so a
+  configuration mistake is heard about where it is made, and the copy checks
+  too, because the struct is in a header and the field can still be written
+  directly. Refused with a negative reply rather than clamped — a clamped PIN
+  is a different PIN, and pairing then fails for a reason nobody can see.
+- **This is where the branch's harness earned itself.** The panicking run
+  reported `FAIL: 0`, and that was true: no self-test printed FAIL because the
+  kernel died before most of them ran. It was caught by `pass: 37 (expected
+  73)` and by never reaching `Idling.` See BT-014.
+
+### BT-008 — One reassembly buffer with two writers, and a PDU acted on before it had arrived
+
+- **Found in** `bluetooth` at `5749ed3`, 18 September 2026, by the fourth audit
+  of the same kind: where does one buffer have more than one writer?
+- **Was** `bt_stack.c` shares one reassembly buffer across every channel on the
+  link, because they are one stream of fragments and two reassemblies would
+  disagree about which PDU is in flight. That part is right. Two pieces of code
+  feeding it was not: `bt_mouse_acl` fed the buffer and so did the stack, whose
+  guard read
+
+  ```c
+  if (state != BT_STACK_RUNNING && !feed(...))
+  ```
+
+  Once running, that short-circuits **before** the feed, so the early return
+  never happens and an incomplete PDU fell through to the parsing below, which
+  read `want` bytes from a buffer holding fewer and acted on whatever the
+  previous PDU had left there.
+- **Fixed in** `bluetooth` at `5749ed3`. There is one feed now, at the top, and
+  nothing past it runs until that feed says the PDU is whole. `bt_mouse_pdu`
+  takes a finished buffer and `bt_mouse_acl` is a feed plus that, so one place
+  decides completeness.
+- **And the first test for it could not see it.** Half a Disconnection Request
+  passes either way: it is eight bytes, six of them leave the signalling
+  header's length bytes stale, `l2cap_signal_parse` refuses the result, and the
+  fault hides behind an accident of which bytes were rubbish. A Configure
+  Request is sixteen bytes and its first eight carry a complete
+  self-consistent signalling header, so the partial parse succeeds and reads
+  its channel id from bytes that have not arrived. Sending it twice makes those
+  bytes the previous copy's. It fails now with *"a half-arrived Configure
+  Request drew a 14-byte reply"*.
+
+### BT-009 — A lost link left everything above it running on a handle the controller reuses
+
+- **Found in** `bluetooth` at `682ddf4`, 18 September 2026, by the fifth audit
+  of the same kind, and the question is one sentence long: **what happens the
+  second time?** Every test on the branch had run the sequence once.
+- **Was** a Disconnection Complete puts `bt_link` back to idle and clears its
+  handle, and nothing above it looked. The sequence stayed at RUNNING with a
+  mouse still marked ready, holding the old handle and the old channel.
+- **Connection handles are reused.** The controller can give the same number to
+  the next connection, and a mouse left ready on it would decode **that
+  device's traffic through the previous device's layout** — a pointer moving
+  from somebody else's data.
+- **Fixed in** `bluetooth` at `682ddf4`. A lost link tears down both channels
+  and the mouse by reinitialising rather than clearing fields one at a time, so
+  a field added later cannot be forgotten. The pairing survives deliberately:
+  the link key outlives the link, and discarding it would make a known device
+  pair again on every disconnection. Only the window is shut.
+
+### BT-010 — A guard that no test on the branch could reach, in the one path that needed it
+
+- **Found in** `bluetooth` at `0d2f29b`, 20 September 2026, by fetching a
+  **real** SDP record — 701 bytes, a DualShock 4's, out of the Windows
+  `BTHPORT` cache — because every SDP fixture until then had been written by
+  the same hand that wrote the parser, and a wrong idea of the format would
+  have been spelled the same way in both.
+- **Was** `hid_report_parse` refuses to produce a mouse layout for a descriptor
+  carrying more than one report id, because `bit_offset` accumulates across
+  every Input item: with two reports, the second's fields sit *after* the
+  first's rather than at zero, so a layout built from them points at offsets no
+  report uses.
+
+  **Nothing could reach that guard.** The single-report case in `bt_mouse.c`
+  does not, because one is not more than one. The real record does not, because
+  its refusal fires one step earlier at the usages check.
+- **And the first test written for it was about something else.** It asserted
+  that the real record produced no mouse layout. It does not — but deleting the
+  guard left that green, because of the earlier refusal. The test looked like it
+  was about the guard and was not. It prints the real state now rather than
+  asserting an outcome two guards can produce: *8 report ids (truncated),
+  fields usable 0, withheld for fewer usages than fields.*
+- **Fixed in** `bluetooth` at `0d2f29b` with a two-report descriptor in
+  `hid_report.c`, well-formed in every other respect, where deleting the guard
+  fails with *"two reports produced a mouse layout with X at bit 16"* — the
+  second report's X, at an offset no report uses.
+- **A real device found the hole in the test and a synthetic one was needed to
+  fill it.** Neither would have done alone.
+
+### BT-011 — Four bounds checks that overflow, and one of them is reachable from the wire
+
+- **Found in** `bluetooth` at `e6951b8`, 20 September 2026, by the sixth audit
+  of the same kind: a check written `a + b > limit` is not a check when `a + b`
+  can wrap. Eight additive bounds checks on this branch, four of which could.
+- **Was**, and `sdp_element_parse` is the one that matters: a size index of 7
+  takes the element's length from **four bytes of the record**, so the wire can
+  say `0xFFFFFFFF`. Added to a five-byte header that is 4 — smaller than almost
+  any buffer. The guard passed and handed the caller a four-gigabyte length
+  pointing five bytes into a 700-byte record. **Reachable from a corrupt or
+  hostile service record**, which arrives before any pairing decision is made.
+- The other three are the two reassembly buffers and `hid_field_extract`, fed
+  by a caller rather than by the wire — the same shape as BT-007, a bound that
+  held only because callers behave.
+- **Putting the L2CAP one back does not produce a wrong value, it panics.**
+  Unhandled exception, 34 self-tests of 76, and `FAIL: 0`. Second time on this
+  branch that a memory-safety fault reported no failures because the kernel
+  died before most tests ran, and caught both times by the expected count and
+  by `Idling.`
+- **Fixed in** `bluetooth` at `e6951b8`. All four are subtractions against
+  remaining space now, which cannot wrap because the remaining space is
+  established first.
+- **And the first test for it did not wrap.** With the buffer empty,
+  `0 + 0xFFFFFFFF` is `0xFFFFFFFF`, larger than the buffer, so even the broken
+  form refuses it and putting the fault back left the test green. The wrap needs
+  the sum to pass 2³², so the buffer must hold something first: with four bytes,
+  `4 + 0xFFFFFFFF` is 3.
+
+### BT-012 — A self-test block that read a fixture an unrelated block had written 175 lines earlier
+
+- **Found in** `bluetooth` at `f28b1c7`, 20 September 2026, by audit, after two
+  additions in one morning broke their neighbours through exactly this
+  coupling. The visible direction — a later block failing — is the harmless
+  one. **The dangerous direction is a later block passing** because an earlier
+  one left the fixture convenient.
+- **Was** `bluetooth.c`'s assertion that an event answering no command is not
+  read as answering one read the shared `ev`, and depended on `ev[0]` still
+  holding the `0x3E` an unrelated block had put there 175 lines earlier. Edit
+  that block and this one silently tests a different event, or nothing at all,
+  and says `pass` either way.
+
+  `l2cap.c` had the other shape: `pdu` is written once at the top and read by
+  eight blocks that never re-establish it, which is reasonable — they all want
+  the same fixture. The hazard was that nothing said so, and the oversized case
+  wrote into it and worked only by being last. A block added after it would
+  have inherited a PDU declaring 673 bytes and failed for a reason nothing in
+  it mentions.
+- **Fixed in** `bluetooth` at `f28b1c7`. The first builds its own six bytes and
+  names the event it used; the second has its own buffer, and `pdu`'s
+  declaration now carries the rule in a comment.
+- **Every other audit on this branch found a fault in the kernel. This one
+  found a fault in the apparatus meant to find faults** — the same category as
+  BT-014. Test code is code, and nothing was testing it.
+
+### BT-013 — An address comparison that could have stopped after one byte, and every test on the branch passed
+
+- **Found in** `bluetooth` at `61747d6`, 21 September 2026, by unifying six
+  duplicated helpers and then break-testing the single copy. With one copy, one
+  break should reach every caller — so `bt_addr_equal` was shortened to compare
+  three bytes of six.
+
+  **Everything passed.**
+- **Was** a fault in the fixtures, not in the code, and it is the most
+  consequential one on the branch. Every address fixture was a pair differing
+  in **byte zero** — `55:44:33:22:11:00` against `99:44:33:22:11:00` — so a
+  comparison that read only the first byte satisfied all of them.
+
+  That includes the pairing gate that had been break-tested three days earlier
+  and reported as covered: *window closed* and *wrong device*, both green
+  against an address check that stopped after one byte.
+- **What it gated.** Between them, the two copies of that comparison decided
+  which device a Connection Complete is about, which device may be answered
+  during pairing, and whether a stored link key belongs to the device asking
+  for it. The consequence of a prefix-only comparison is **a machine pairing
+  with a device that shares a prefix with the intended one**, with nothing
+  saying so.
+- **And the copies had already drifted in their names**, which is the argument
+  for unifying them: `same_address` in `bt_link.c`, `same_addr` in `bt_pair.c`,
+  written independently, doing the same thing.
+- **Fixed in** `bluetooth` at `61747d6`. One `bt_addr_equal` in
+  `kernel/include/recon/kernel/bt_bytes.h`, and fixtures that differ in the
+  **last** byte. Three-of-six is now caught in *both* layers from one edit —
+  `finding something to talk to : FAIL` and `agreeing a key with it : FAIL` —
+  which is the unification demonstrating its own point.
+
+### BT-014 — The branch's verification harness called three different non-results green
+
+- **Found in** `bluetooth` on 17, 18 and 20 September 2026, three times, each
+  time by the harness being wrong about a run whose real state was known from
+  something else.
+- **Was** a check for the *absence of failures* used as a check that the work
+  ran. Three instances, each a different way for that to be false:
+
+  | what happened | what it printed | what caught it |
+  |---|---|---|
+  | a 25-second timeout cut the boot short while two builds ran | `FAIL: 0`, `pass: 4` | the count being obviously wrong, by luck |
+  | BT-007's overrun panicked the kernel at test 37 of 73 | `FAIL: 0` | an expected count, added after the first |
+  | a build failed and the previous binary was booted | green, every check true | nothing — noticed while fixing BT-009 |
+
+  The third is the purest: **a check that did not run is not a check that
+  passed**, and every assertion was true of a kernel built before the broken
+  edit.
+- **Fixed in** `bluetooth` across `f2d5306` (expected count and a required
+  `Idling.`) and `682ddf4` (abort on a failed build).
+- **`scripts/verify-kernel.sh` already had the first two of these lessons**,
+  recorded as KF-143. A signal from this branch implied they were novel and was
+  corrected at `394ad4e`. They were novel to *this* harness, which is a smaller
+  claim and the true one.
+- **Three times the verification needed the discipline it exists to enforce.**
+  Recorded rather than quietly fixed, because the desktop track paid for the
+  same lesson at BG-198 and a register is the only place a second track can
+  read it.
 
 ### The network track's first eight, 16 September 2026
 

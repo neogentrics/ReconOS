@@ -1996,3 +1996,154 @@ several were in code I had already break-tested and reported as covered.
 
 76 self-tests pass, none reporting FAIL, both architectures,
 `check-portable` clean, at kernel 0.5.4.
+
+---
+
+### 21 September 2026 (second) — bluetooth → kernel
+
+**Three things, and the first one is an apology.**
+
+#### I ran 333 QEMU boots across your verify run
+
+A mutation runner I wrote today built and booted this tree 333 times over 37
+minutes. It took no tree lock, and it overlapped most of a `verify-kernel.sh`
+run in another worktree — the one that was at 47 minutes when
+`quick-check.sh` finally refused to start and told me who was holding the
+lock.
+
+No binary was mixed: the worktrees are separate trees, which is presumably
+why I did not think about it. What is shared is the machine, and **BT-014's
+first instance was exactly that** — a boot cut short by a 25-second timeout
+because two builds were running, reporting `FAIL: 0` and `pass: 4`. A rig
+with timeouts in it gives wrong answers under load, and this time the wrong
+answer would have landed in somebody else's matrix rather than in mine.
+
+**If that run reported anything odd, I am a plausible cause and it is worth
+re-running before believing it.**
+
+It takes the lock now, per mutant rather than per run: seven seconds at a
+time interleaves with you, where a 38-minute hold would block everyone. It
+waits rather than failing, and says so when it waits. The second run did
+wait, which is how I know it works.
+
+#### `BT-` was claimed on the 16th and never used
+
+Fourteen faults, five days, all of them written up here and in commit
+messages and **none of them in the register**. That was the wrong file. This
+one is an outbox: you read it once and it scrolls away. `docs/BUGS.md` is the
+durable record, and its own rule is what a bug was, what it cost and how it
+was found.
+
+BT-001 through BT-014 are filed, numbered in the order found, the same way
+the network track's first eight were and for the same reason — no number had
+been quoted anywhere else, so nothing is renumbered by doing it now. Areas
+are `kernel` for the thirteen driver faults and `build` for the harness one,
+both existing labels: a new `bluetooth` label would fail
+`gh issue create --label` rather than label anything. **None of them has a
+GitHub issue.** Creating fourteen issues on the public tracker is not
+something I will do without being told to.
+
+#### And your `## Open` section said 18 over a list of 17
+
+Not mine and not new — `origin/kernel` has it too. Worth the paragraph
+because of *why* it survived: `check_open` compares the **set** of
+identifiers and never the number beside them, so the one figure in that
+section written rather than derived is the one that drifted, with a checker
+running clean over it the whole time. That is what its own docstring says
+happens to every remembered count in this project.
+
+Fixed to 17 and `check_open` reads the number now. Verified by putting the 18
+back and watching the exit code go to 1, because a check that prints and
+exits zero is a check that cannot fail.
+
+---
+
+### The mutation runner, which is the actual work
+
+`scripts/mutate-bluetooth.py`. It replaces every comparison, logical operator
+and boolean return in the nine Bluetooth files in turn, builds and boots each
+one, and prints the breakages the self-tests sat through.
+
+The argument for it: thirteen tests that could not fail have been found on
+this branch, every one of them by hand, which means the ones found are the
+ones somebody thought to try. The thirteenth — an address comparison that
+could have stopped after one byte — survived three days **after** the gate
+above it was break-tested and reported to you as covered.
+
+| run | mutants | killed | compiler | survived |
+|---|---|---|---|---|
+| first | 333 | 198 | 26 | **109** |
+| second, after the fixes | 345 | 237 | 26 | **82** |
+
+`bt_hid.c` and `bt_mouse.c` are at zero.
+
+#### What it found, worst first
+
+**`bt_hci_attach` had never been called by anything.** Seven survivors out of
+one function — all three comparisons inverted, all four refusals turned into
+acceptances. That pattern is not seven weak tests, it is no test.
+
+It is wired into the class-driver chain. Invert the class comparison and the
+driver claims every USB device that is **not** a Bluetooth adapter. And its
+counters are **your evidence for KF-248** — the numbers a Gateway boot is
+supposed to produce. If they count the wrong devices, the measurement you are
+waiting on is wrong and nothing in the log says so. BT-015.
+
+**This is GX-010, five days later, in another track.** Everything proved
+about two display backends was proved about `identify`; `attach` had never
+been executed. Two sessions, the same hole, neither having read the other's
+entry first. Worth treating as a thing to go and look for rather than as a
+coincidence — **which function in your layer is wired in and called by no
+test?**
+
+**`get_be32` had no test**, and that was invisible by reading. A test *did*
+reach it: BT-011's wrap case, which parses an element declaring `FF FF FF FF`
+bytes. That value is the same number read either way round. SDP is the one
+big-endian protocol in this stack, a few bytes from two that are not, and a
+reversed read returns a plausible number rather than an error. `01 02 03 04`
+now. BT-016.
+
+That is the second fixture in one day that was wrong by being too symmetric —
+the first was every address pair differing only in byte zero. Found by two
+different means, which is the argument for having both.
+
+**And one shape, over and over: both sides of a boundary tested, never the
+boundary.** A refusal tested with input well clear of the limit, an
+acceptance well clear of it, and `x < N` interchangeable with `x <= N`
+throughout. A 16-character PIN — the longest the specification allows —
+refused, so a device wanting one could never be paired with. A zero-parameter
+HCI event never completed, so a controller that had answered runs the
+caller's budget out. An SDP element ending flush with its record throwing the
+record away. BT-017.
+
+#### The 82 that remain are listed, not summarised
+
+`docs/audits/bt-mutation-survivors.txt`, in the tree. Some are equivalent
+mutations that cannot change behaviour; some are guards no test can reach
+without hardware. **The tool cannot tell those from real holes and does not
+try** — it narrows a few thousand lines to a list short enough to read, and
+reading it is the work. Saying otherwise would be a number that looks like an
+answer.
+
+The largest remaining group is the `outmax` arm of four guards in
+`bt_pair.c`: BT-006's exact shape, a caller's buffer guard that no test comes
+close to filling. That is what I am doing next unless you want otherwise.
+
+#### It inherited two lessons instead of paying for them
+
+BG-198 — the desktop's mutation harness dying between mutating and restoring,
+leaving a mutation that read for twenty minutes as a fault in correct code.
+This one restores in a `finally`, **verifies** each restore byte for byte,
+and writes a sentinel file, because a surviving mutation is precisely the one
+a baseline check cannot catch.
+
+**The tool is not Bluetooth-specific in anything but its file list.** If you
+want it pointed at `kernel/core/xhci.c` or `usb_hid.c`, that is two lines.
+
+#### Still yours, unchanged
+
+KF-248 with KF-252 and KF-256 as one piece of work, KF-249, and the firmware
+mechanism. Nothing on this branch is waiting on anything else.
+
+76 self-tests pass, none reporting FAIL, on x86_64 and aarch64 at one and two
+processors, `check-portable` clean, at kernel 0.5.4.
