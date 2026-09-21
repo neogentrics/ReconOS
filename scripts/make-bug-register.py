@@ -51,12 +51,43 @@ SOURCE = os.path.join(ROOT, "docs", "BUGS.md")
 #           - **Was:** ...
 #           - **Fixed in** ...
 
+# **Derived, not listed.** (KF-261)
+#
+# This was `(?:BG|KF)` and it read 337 entries out of a file holding 356: every
+# `GX-` and every `NW-` entry -- the graphics and network sessions' whole
+# registers -- were invisible to the page that claims to summarise the file.
+#
+# The comment that used to sit here is left below, because it is the same fault
+# being described by its own victim. KF-200 was this pattern naming one prefix
+# and missing a second; the fix was to add the second to the list, and the
+# lesson -- **that a list of prefixes is the bug** -- was written down and not
+# applied. Two more prefixes arrived and the page went quietly back to
+# undercounting. `make-issues.py` learned this as KF-247 and derives from
+# `[A-Z]{2}-\d+`; this file did not get the same treatment at the same time.
+#
+#   > Two prefixes since 12 September 2026: `BG-` is the desktop's, `KF-` the
+#   > kernel's. Naming one of them here read 178 entries out of a file holding
+#   > 251 and printed "highest 178" -- a count produced by the same regex that
+#   > missed them, so it could not disagree with itself. See KF-200.
+ENTRY_ID = r"[A-Z]{2}-\d+"
+
 ENTRY_RE = re.compile(
-    r"(?m)^### ((?:BG|KF)-\d+)\s*(?:—|–|--|-)\s*(.+?)\s*$")
-# Two prefixes since 12 September 2026: `BG-` is the desktop's, `KF-` the
-# kernel's. Naming one of them here read 178 entries out of a file holding
-# 251 and printed "highest 178" -- a count produced by the same regex that
-# missed them, so it could not disagree with itself. See KF-200.
+    r"(?m)^### (" + ENTRY_ID + r")\s*(?:—|–|--|-)\s*(.+?)\s*$")
+
+# The same heading with nothing after the number required: what an entry is
+# when you are only counting them. The gap between this and ENTRY_RE is what
+# `parse` refuses on -- and it is deliberately derived from the same ENTRY_ID,
+# because a second opinion that shares the assumption being tested is not a
+# second opinion, but the assumption being tested here is the *separator*,
+# not the prefix. The prefix is checked by COUNT_ANY below, which shares
+# nothing with either.
+ENTRY_LOOSE = re.compile(r"(?m)^### (" + ENTRY_ID + r")")
+
+# And the count that assumes nothing at all about what an identifier looks
+# like: a third-level heading whose first word contains a hyphen and a digit.
+# If somebody numbers a track `GFX-1` or `usb-07`, this sees it and the two
+# above do not, and the mismatch is reported rather than drawn as a chart.
+COUNT_ANY = re.compile(r"(?m)^### (\S*[A-Za-z]-\d+\S*)")
 # The colon moves. Ninety-nine entries write `- **Fixed in** ...` and five write
 # `- **Fixed in:** ...` with the colon inside the emphasis -- which is invisible
 # when reading and fatal to a pattern that assumes it is outside. Those five
@@ -90,6 +121,40 @@ def clip(text, limit=260):
         return text
     cut = text[:limit].rsplit(" ", 1)[0]
     return cut + "&hellip;"
+
+
+def count_check(md, entries):
+    """Refuse rather than summarise a file this script cannot fully see.
+
+    **A count produced by the thing being counted can never disagree with it.**
+    That sentence is already in this register twice -- KF-187 and KF-247 -- and
+    this file was the third place it was true. So there are three counts here
+    and they are built from progressively weaker assumptions:
+
+        len(entries)      what the parser actually read
+        ENTRY_LOOSE       a heading with an identifier, separator or not
+        COUNT_ANY         a heading whose first word looks like a number at all
+
+    Any disagreement stops the run. A page that draws a tidy chart of most of
+    the register is worse than no page, because the number on it gets quoted.
+    """
+    loose = ENTRY_LOOSE.findall(md)
+    anything = COUNT_ANY.findall(md)
+
+    if len(entries) == len(loose) == len(anything):
+        return
+
+    found = set(e["id"] for e in entries)
+    missing = [h for h in anything if h not in found]
+
+    raise SystemExit(
+        "make-bug-register: the register has %d headings by the loosest "
+        "count, %d that look like entries, and %d that parsed.\n"
+        "Unseen, and so absent from every figure on the page:\n  %s\n"
+        "This is KF-261. The pattern at the top of this file has fallen "
+        "behind the register again."
+        % (len(anything), len(loose), len(entries),
+           ", ".join(missing[:20]) or "(a separator, not a prefix)"))
 
 
 def parse(md):
@@ -142,6 +207,8 @@ def parse(md):
             "raw": body,
             "plain": plain(m.group(2) + " " + body),
         })
+
+    count_check(md, entries)
 
     entries.sort(key=lambda e: e["n"], reverse=True)
     return entries
@@ -206,8 +273,14 @@ AREA_LABEL = {
 
 def recorded_areas():
     src = io.open(AREA_SOURCE, encoding="utf-8").read()
+    # **The second site of KF-261, and it is why that entry is worth reading.**
+    # The pattern at the top of this file named two prefixes and so did this
+    # one, forty lines apart, and fixing either alone changes nothing: with
+    # only the first fixed the page sees nineteen more entries and reports
+    # every one of them as having no area, because this line cannot see the
+    # lines that give them one. A hard-coded assumption is rarely in one place.
     table = {k: a for k, a in
-             re.findall(r"'((?:BG|KF)-\d+)':\s*'([a-z-]+)'", src)}
+             re.findall(r"'(" + ENTRY_ID + r")':\s*'([a-z-]+)'", src)}
     if not table:
         raise SystemExit(
             "no areas parsed out of %s -- its AREA table has changed shape. "
@@ -619,15 +692,19 @@ def main():
           % (len(entries),
              len([e for e in entries if e["fixed"]]),
              len([e for e in entries if not e["fixed"]])))
-    for pre in ("BG", "KF"):
-        ns = [e["n"] for e in entries if e["id"].startswith(pre)]
+    # The prefixes that are in the file, rather than the prefixes that were in
+    # the file when this line was written. The third site of KF-261: this one
+    # was harmless in itself -- it printed two rows instead of four -- which is
+    # exactly why it survived the first two fixes.
+    for pre in sorted(set(e["id"].split("-")[0] for e in entries)):
+        ns = [e["n"] for e in entries if e["id"].startswith(pre + "-")]
         if ns:
             print("  %s- %d entries, highest %d" % (pre, len(ns), max(ns)))
 
     # The count this script prints has to be checkable against the file without
     # running this script, because the last two faults here were both a number
     # the parser produced about its own parsing.
-    on_disk = len(re.findall(r"(?m)^### (?:BG|KF)-\d+", md))
+    on_disk = len(re.findall(r"(?m)^### " + ENTRY_ID, md))
     if on_disk != len(entries):
         sys.stderr.write("%d headings in the file, %d parsed -- the entry "
                          "pattern has stopped matching how entries are "
