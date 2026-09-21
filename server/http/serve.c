@@ -403,13 +403,14 @@ static int read_more(int fd, char *buf, size_t *have, size_t room,
  *
  * --- What is compressed, and what is not ---
  *
- * **Only whole responses.** The streaming path hands a handler a sink and it
- * writes as it goes; `deflate.c` compresses a buffer in one call and has no
- * incremental form. Files are served by the streaming path, so **files are not
- * compressed today** -- which is worth stating plainly rather than leaving for
- * somebody to discover, because files are the largest bodies this server sends.
- * What is compressed is the console, the JSON API and the log, which are the
- * bodies produced in memory.
+ * **Both shapes, by two different routes.** What follows compresses a whole
+ * response in one call, which is right for the console, the JSON API and the
+ * log -- the bodies this server builds in memory. Files are served by the
+ * streaming path instead and are compressed there, by `deflate_stream_*` and
+ * `http_stream_begin`, since 0.37.0. Until then they were not compressed at
+ * all, which this comment said plainly rather than leaving for somebody to
+ * discover; the gap is closed and the sentence is kept so that the next person
+ * to read it knows there are two paths and not one.
  *
  * **Only text.** A media type that is already compressed -- an image, a
  * download -- costs processor time to grow slightly. The list below is the
@@ -426,6 +427,26 @@ static int read_more(int fd, char *buf, size_t *have, size_t room,
 
 /* Below this, framing costs more than compression saves. */
 #define HTTP_GZIP_MIN  256
+
+/*
+ * Where a streamed body is compressed.
+ *
+ * The compressor's state is large -- a 32 KiB window and two hash tables over
+ * it, about 300 KiB -- and there is one of it, for the same reason there is
+ * one `GZIP_BODY`: the server is single-process and a response runs to
+ * completion before the next one starts. A second concurrent response would be
+ * a change to that shape rather than to this line.
+ *
+ * Input is fed in fixed pieces so that the output buffer can be a fixed size
+ * whatever a handler hands over in one call. A handler that writes a megabyte
+ * in one `http_stream_write` is compressed a piece at a time here rather than
+ * refused, because the alternative is a buffer sized for the largest write
+ * anybody might ever make.
+ */
+#define HTTP_GZIP_PIECE 8192
+
+static struct deflate_stream GZIP_STREAM;
+static unsigned char GZIP_OUT[DEFLATE_STREAM_BOUND(HTTP_GZIP_PIECE)];
 
 /*
  * Where a compressed body lives.
@@ -650,6 +671,47 @@ int http_stream_header(struct http_sink *sink, const char *name,
 	return HTTP_OK;
 }
 
+/*
+ * Body bytes, framed for the wire. No counting and no promise-checking: those
+ * are about the resource, and this is only about the connection.
+ *
+ * Split out of `http_stream_write` when compression arrived, because there are
+ * now three things that put bytes in the body -- the handler's writes, gzip's
+ * ten-byte header, and the compressor's tail -- and only the first of them is
+ * the handler's declared length. One function frames all three; the counting
+ * stays where the handler's bytes come in.
+ *
+ * **Zero length returns without sending**, and that is not an optimisation. A
+ * zero-length chunk is the chunked terminator. Sending one here would end the
+ * body in the middle of it, and the compressor produces nothing rather often
+ * -- it holds bytes back while it looks for a match -- so this would not have
+ * been a rare path.
+ *
+ * Returns 0 or -1, and does not set `failed`: what the caller does about a
+ * failure differs between them.
+ */
+static int send_body(struct http_sink *sink, const void *data, size_t len)
+{
+	char size[32];
+	int n;
+
+	if (sink->head_only || len == 0)
+		return 0;
+
+	if (!sink->chunked)
+		return send_all(sink->fd, (const char *)data, len,
+		                sink->bytes_sent);
+
+	n = snprintf(size, sizeof(size), "%lx\r\n", (unsigned long)len);
+	if (n < 0 || (size_t)n >= sizeof(size))
+		return -1;
+	if (send_all(sink->fd, size, (size_t)n, sink->bytes_sent) != 0
+	    || send_all(sink->fd, (const char *)data, len, sink->bytes_sent) != 0
+	    || send_all(sink->fd, "\r\n", 2, sink->bytes_sent) != 0)
+		return -1;
+	return 0;
+}
+
 int http_stream_begin(struct http_sink *sink, int status,
                       const char *content_type, long length)
 {
@@ -661,6 +723,48 @@ int http_stream_begin(struct http_sink *sink, int status,
 	sink->begun = 1;
 	sink->declared = length;
 	sink->status = status;
+
+	/*
+	 * Compress, or not -- decided here because it is the last moment it can
+	 * be. Compressing changes the length, which changes the framing, and
+	 * both are about to go on the wire.
+	 *
+	 * **Never on a partial response.** A 206 sends a byte range of the
+	 * resource and `Content-Range` names the bytes of the *resource*. A
+	 * compressed 206 would have to describe a range of the compressed form
+	 * -- which is not what the client asked for, and not something this
+	 * server can name honestly. The status is the structural guard, because
+	 * a 206 is the only way a range is served; the `Content-Range` check
+	 * beside it is there so that a partial path added later, by somebody
+	 * who did not read this, still cannot get past it.
+	 *
+	 * **Never below the threshold, when the length is known.** The same
+	 * eighteen bytes of framing `send_response` weighs. When the length is
+	 * *not* known there is nothing to weigh it against, and a body of
+	 * unknown length is the case worth compressing, so it goes ahead.
+	 *
+	 * The declared length is kept even so. It is no longer a
+	 * `Content-Length` -- the body on the wire is a different size -- but it
+	 * is still the handler's promise about the resource, and
+	 * `http_stream_end` still holds it to it. A handler that says 4096 and
+	 * writes 3000 has truncated the file whether or not it was compressed
+	 * on the way out.
+	 */
+	sink->gzipping = 0;
+	if (sink->may_gzip && status == 200 && compressible(content_type)
+	    && !(length >= 0 && length < HTTP_GZIP_MIN)) {
+		size_t i;
+		int partial = 0;
+
+		for (i = 0; i < sink->extras; i++) {
+			if (seq_fold(sink->extra[i].name, "content-range"))
+				partial = 1;
+		}
+		if (!partial)
+			sink->gzipping = 1;
+	}
+	if (sink->gzipping)
+		length = HTTP_LENGTH_UNKNOWN;
 
 	/*
 	 * Choose the framing, and it is the client's version that decides.
@@ -707,6 +811,35 @@ int http_stream_begin(struct http_sink *sink, int status,
 		n += m;
 	}
 
+	/*
+	 * Written here rather than added through `http_stream_header`, because
+	 * these two are the server's and `extra[]` is the handler's -- and the
+	 * handler may already have filled it. `files.c` serving a range uses
+	 * all four slots.
+	 *
+	 * `Vary` goes out whenever the response *could* have been compressed,
+	 * not only when it was, for the reason `send_response` gives at length:
+	 * a cache that stored the gzip form under a key that did not mention
+	 * `Accept-Encoding` would serve it to a client that never asked for it.
+	 * It is the **type** that decides and not this request, because the
+	 * question a cache is asking is whether some other client would have
+	 * been answered differently -- and for a PNG none ever would be.
+	 */
+	if (compressible(content_type)) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "Vary: Accept-Encoding\r\n");
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	}
+	if (sink->gzipping) {
+		int m = snprintf(head + n, sizeof(head) - (size_t)n,
+		                 "Content-Encoding: gzip\r\n");
+		if (m < 0 || (size_t)(n + m) >= sizeof(head))
+			return -1;
+		n += m;
+	}
+
 	{
 		size_t i;
 
@@ -733,6 +866,23 @@ int http_stream_begin(struct http_sink *sink, int status,
 	if (send_all(sink->fd, head, (size_t)n, sink->bytes_sent) != 0) {
 		sink->failed = 1;
 		return -1;
+	}
+
+	/*
+	 * The gzip header is body, not head, so it goes out here -- after the
+	 * blank line and through whatever framing was just chosen. Starting the
+	 * compressor earlier would have meant holding these ten bytes somewhere
+	 * until the head was written, which is a place for them to be
+	 * forgotten on the path where a handler writes nothing at all.
+	 */
+	if (sink->gzipping) {
+		long n10 = deflate_stream_begin(&GZIP_STREAM, GZIP_OUT,
+		                                sizeof(GZIP_OUT));
+
+		if (n10 < 0 || send_body(sink, GZIP_OUT, (size_t)n10) != 0) {
+			sink->failed = 1;
+			return -1;
+		}
 	}
 	return HTTP_OK;
 }
@@ -761,31 +911,47 @@ int http_stream_write(struct http_sink *sink, const void *data, size_t len)
 		return -1;
 	}
 
+	/* Counted above, sent nowhere: a HEAD reports the length and no body.
+	 * The compressor is not run either -- there is nothing to send, and a
+	 * HEAD that left the stream half-started would be a stream the next
+	 * response inherits. */
 	if (sink->head_only)
 		return HTTP_OK;
 
-	if (sink->chunked) {
-		char size[32];
-		int n = snprintf(size, sizeof(size), "%lx\r\n",
-		                 (unsigned long)len);
-
-		if (n < 0 || (size_t)n >= sizeof(size)) {
-			sink->failed = 1;
-			return -1;
-		}
-		if (send_all(sink->fd, size, (size_t)n, sink->bytes_sent) != 0
-		    || send_all(sink->fd, (const char *)data, len,
-		                sink->bytes_sent) != 0
-		    || send_all(sink->fd, "\r\n", 2, sink->bytes_sent) != 0) {
+	if (!sink->gzipping) {
+		if (send_body(sink, data, len) != 0) {
 			sink->failed = 1;
 			return -1;
 		}
 		return HTTP_OK;
 	}
 
-	if (send_all(sink->fd, (const char *)data, len, sink->bytes_sent) != 0) {
-		sink->failed = 1;
-		return -1;
+	/*
+	 * A piece at a time, so `GZIP_OUT` can be a fixed size. A write may
+	 * legitimately produce nothing -- the compressor holds bytes back while
+	 * it looks for a match that might continue into input that has not
+	 * arrived -- and `send_body` of nothing is nothing, which is why this
+	 * loop has no special case for it.
+	 */
+	{
+		const unsigned char *at = (const unsigned char *)data;
+		size_t left = len;
+
+		while (left) {
+			size_t take = left > HTTP_GZIP_PIECE
+			            ? HTTP_GZIP_PIECE : left;
+			long out = deflate_stream_write(&GZIP_STREAM, at, take,
+			                                GZIP_OUT,
+			                                sizeof(GZIP_OUT));
+
+			if (out < 0
+			    || send_body(sink, GZIP_OUT, (size_t)out) != 0) {
+				sink->failed = 1;
+				return -1;
+			}
+			at += take;
+			left -= take;
+		}
 	}
 	return HTTP_OK;
 }
@@ -798,6 +964,23 @@ int http_stream_end(struct http_sink *sink)
 		/* A handler that wrote nothing at all. Not this function's to
 		 * answer -- the caller still owes the client a status. */
 		return -1;
+	}
+
+	/*
+	 * The compressor's tail, and it must go out **before** the chunked
+	 * terminator: it is body, and a terminator sent first would end the
+	 * body without it. What is left here is the bytes held back for a match
+	 * that might have continued, the end-of-block, and gzip's checksum and
+	 * length -- so a stream ended without it decompresses to a truncated
+	 * file, and the checksum the client computes does not match the one it
+	 * never received.
+	 */
+	if (!sink->failed && sink->gzipping && !sink->head_only) {
+		long out = deflate_stream_end(&GZIP_STREAM, GZIP_OUT,
+		                              sizeof(GZIP_OUT));
+
+		if (out < 0 || send_body(sink, GZIP_OUT, (size_t)out) != 0)
+			sink->failed = 1;
 	}
 
 	if (!sink->failed && sink->chunked && !sink->head_only) {
@@ -1161,6 +1344,8 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
 			sink.keep_alive = keep;
 			sink.minor = req->minor;
 			sink.declared = HTTP_LENGTH_UNKNOWN;
+			sink.may_gzip = http_accept_gzip(
+				http_header_get(req, "accept-encoding"));
 			sink.bytes_sent = site->bytes_sent;
 			sink.server_name = site->server_name;
 

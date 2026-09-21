@@ -139,6 +139,20 @@ struct http_sink {
 	int  keep_alive;
 	int  begun;
 	int  minor;		/* the request's HTTP/1.x */
+
+	/*
+	 * Compression, in two parts, because they answer different questions.
+	 *
+	 * `may_gzip` is about the *client*: it said it accepts gzip. The server
+	 * sets it when it builds the sink, because only the server has the
+	 * request.
+	 *
+	 * `gzipping` is about *this response*: `http_stream_begin` decided to
+	 * compress it. A handler sets neither and reads neither.
+	 */
+	int  may_gzip;
+	int  gzipping;
+
 	long declared;		/* HTTP_LENGTH_UNKNOWN, or the promised length */
 	int  status;		/* what `http_stream_begin` was told to send */
 	unsigned long  written;

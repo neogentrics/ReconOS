@@ -1373,7 +1373,9 @@ the JSON log       3818 -> 815 bytes
 - **What is not compressed, said plainly**: files. They go through the
   streaming path, and `deflate.c` compresses a buffer in one call with no
   incremental form. Files are the largest bodies this server sends, so the
-  gap is worth naming rather than leaving for somebody to discover.
+  gap is worth naming rather than leaving for somebody to discover. *(Closed in
+  0.37.0 by an incremental form of the same encoder -- VF-044. The paragraph
+  above is left as it was written, because it was true when it was written.)*
 
 ### VF-036 -- a suite that runs on the machine, and the two statuses it found
 
@@ -1814,6 +1816,125 @@ nothing, but it has answered    HTTP_KEEPALIVE_MS   10000   a client deciding
   the pair that should be reached for again: **the guest's own counter against
   the client's**, which turns "a flake" into "it answered and I did not hear",
   and then a capture.
+
+### VF-044 -- the gap 0.29.0 named, closed, and the four mutants that found the checks
+
+- **What 0.29.0 wrote down about itself** *What is not compressed, said
+  plainly: files.* Compression was wired into `send_response`, which builds a
+  whole body and compresses it in one call, and files do not go that way --
+  they go through the sink, a block at a time, precisely so that a file can be
+  larger than this program's memory. Files are the largest bodies this server
+  sends and they go out on its slowest resource, so the entry named the gap
+  rather than leaving it to be discovered.
+- **What it needed was not a loop around the old function.** Three things have
+  to survive between calls and each is a reason: the **window**, because LZ77
+  matches against the previous 32 KiB of input and a compressor that forgot
+  between blocks would find no match that spanned one -- which at eight
+  kilobytes a block is most of them; the **bit writer**, because a deflate
+  block is a bit stream that does not begin on a byte boundary, so ending one
+  per call would mean a header every eight kilobytes; and the **checksum and
+  length**, which gzip puts at the end and computes over everything. One block
+  now spans the whole body.
+- **The one thing that is genuinely different from the whole-buffer form.** It
+  cannot look ahead. Near the end of what has arrived a match might continue
+  into bytes nobody has handed over yet, and emitting a shorter one would be a
+  guess that cannot be taken back -- so compression stops `DEFLATE_MATCH_MAX`
+  short and the tail is carried. Which means `deflate_stream_write` may
+  legitimately return **nothing at all**, and that turns out to matter twice
+  over.
+- **"It will hardly matter" is not a measurement.** The window slides, and the
+  hash chains hold window offsets, so every one of them moves. zlib subtracts
+  the shift; this cleared them instead, which costs the matches that would have
+  spanned the slide and is a great deal harder to get wrong. The comment said
+  the cost was *within a per cent*. `scripts/gzip-probe.py` was then extended
+  to run both compressors over the same files and it said otherwise -- on the
+  three files large enough to slide at all, **three to four points worse**:
+
+```
+                          whole            streamed
+README.md          27804   48%      30110      52%
+serve.c            24905   40%      26906      44%
+CMakeLists.txt     26231   37%      28485      40%
+```
+
+  A number written from expectation, contradicted by the first measurement
+  anybody took of it. The fix keeps the property that made clearing attractive
+  -- no second piece of arithmetic on offsets that must agree with the first --
+  by walking the kept history back through **the same `z_insert`** every other
+  insertion uses. One hash insert per kept byte, once per 16 KiB:
+
+```
+README.md          27804   48%      28120      48%
+serve.c            24905   40%      25224      41%
+CMakeLists.txt     26231   37%      26569      37%
+```
+
+- **Three opinions, and the third is not this project's.** The suite carries
+  its own inflater written from RFC 1951 in the opposite shape to the encoder;
+  that is a real second opinion and still two readings of one document by one
+  author. So every file also goes to Python's `zlib`, which checks the CRC and
+  the length it never saw written. It accepts both forms of every file.
+- **Refused on a 206, for a reason worth stating.** `Content-Range` counts the
+  bytes of the **resource**. A compressed partial response would have to
+  describe a range of the compressed form, which is not what the client asked
+  for and not something this server can name honestly. The status is the
+  structural guard -- a 206 is the only way a range is served -- and a
+  `Content-Range` check sits beside it so a partial path added later by
+  somebody who did not read this still cannot get past it.
+- **Four mutants, and two of them were useful.** New checks that pass on their
+  first run have not been watched fail, so each guard was broken on purpose:
+
+| mutation | verdict |
+| --- | --- |
+| `status == 200` becomes `status >= 200` | **survived** -- the `Content-Range` check caught it, which is the belt-and-braces working and also means the status guard was untested |
+| both range guards removed | caught |
+| the status guard alone, `Content-Range` removed | caught -- so each holds independently |
+| the compressor's tail never flushed | caught, by the trailer |
+| the tail flushed **after** the chunked terminator | caught, by the trailer |
+| `send_body` sends a zero-length piece | **survived** |
+
+  The last one is the interesting failure. A zero-length chunk **is** the
+  chunked terminator, so sending one ends the body in the middle of itself --
+  and the compressor returns zero rather often. But nothing in the suite ever
+  made it: `/text` hands over two thousand bytes in one call, which always
+  produces output. The mutant survived because the test was wrong, not because
+  the guard was unnecessary. `/drip` writes the same bytes sixty-four at a
+  time, with no declared length -- the shape a real streaming handler has --
+  and kills it.
+- **What proves the stream is whole, and why it is not another inflater.** The
+  suite checks gzip's **trailer**: a CRC over every input byte and the input
+  length, both written last. `test_deflate.c` already proves the compressor
+  decodes and `gzip-probe.py` already proves zlib agrees; what was unproven
+  here is whether *this path* delivered everything -- whether `http_stream_end`
+  flushed what the compressor was holding, and did it before the terminator
+  rather than after. A trailer answers exactly that, and both ordering mutants
+  above are what shows it answers it.
+- **And a trap the suite has now walked into twice.** `strstr(reply,
+  "Content-Type")` once matched `X-Content-Type-Options`. Now a **compressed
+  body is arbitrary bytes**, so `strstr(reply, "Content-Encoding")` can match
+  inside the body of a response whose head says no such thing -- which is the
+  exact check these tests turn on, passing for the wrong reason. `head_has`
+  looks only before the blank line, only at the start of a line, and only when
+  followed by a colon.
+- **Measured on a booted machine, against a file on the volume:**
+
+```
+/console.css   687 bytes on the volume, 421 on the wire (61%)
+```
+
+  De-chunked and decompressed by Python's `gzip`, and compared to the plain
+  fetch **byte for byte** -- which the console's own check cannot do, because
+  the console reports how many requests it has served and so differs between
+  two fetches. A file does not. 98 checks on the machine, up from 86.
+- **A hazard worth writing down, because it cost an hour.** `io.open(path,
+  'w')` on Windows translates every newline, so a patch script that rewrites a
+  C file rewrites its line endings too -- four files went to CRLF without
+  anything saying so. Git normalises on commit here, so the committed text was
+  never wrong; the working tree was, which is enough to make `grep` and
+  `cat -A` lie to the next person to look. It also put two real CR bytes
+  *inside* string literals, which `scripts/check-c-literals.py` caught -- the
+  check written for the heredoc version of this same fault, catching a
+  different cause of it.
 
 ### VF-043 -- the gap VF-028 wrote down, closed by two versions that were not about it
 

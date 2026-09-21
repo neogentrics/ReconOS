@@ -45,10 +45,11 @@
  * eye, where the polynomial below is one constant that appears in the
  * specification.
  */
-unsigned long deflate_crc32(const void *data, size_t len)
+unsigned long deflate_crc32_update(unsigned long running, const void *data,
+                                   size_t len)
 {
 	const unsigned char *p = (const unsigned char *)data;
-	unsigned long crc = 0xFFFFFFFFUL;
+	unsigned long crc = running ^ 0xFFFFFFFFUL;
 	size_t i;
 	int k;
 
@@ -62,6 +63,22 @@ unsigned long deflate_crc32(const void *data, size_t len)
 		}
 	}
 	return (crc ^ 0xFFFFFFFFUL) & 0xFFFFFFFFUL;
+}
+
+unsigned long deflate_crc32_final(unsigned long running)
+{
+	/* Nothing to do: `_update` leaves the finished value, so that a caller
+	 * which stops early still has a usable checksum rather than an
+	 * inverted one. The function exists so that a reader of the streaming
+	 * code sees where finishing would happen if the representation ever
+	 * changed. */
+	return running & 0xFFFFFFFFUL;
+}
+
+/* One loop, called twice, rather than two loops that must agree. */
+unsigned long deflate_crc32(const void *data, size_t len)
+{
+	return deflate_crc32_final(deflate_crc32_update(0, data, len));
 }
 
 /* --- the bit writer --------------------------------------------------------- */
@@ -468,4 +485,404 @@ long deflate_gzip(const void *in, size_t len, void *out, size_t room)
 			(unsigned char)(((unsigned long)len >> (8 * i)) & 0xFF);
 
 	return (long)(head + compressed_end + 8);
+}
+
+/* --- compressing a body one block at a time --------------------------------
+ *
+ * See `deflate.h` for why this exists and what a caller must guarantee. What
+ * follows is the same encoder as above with its state lifted out of locals and
+ * into `struct deflate_stream`, plus a window that slides.
+ *
+ * --- The one thing that is genuinely different ---
+ *
+ * The whole-buffer encoder can look ahead as far as it likes, because the
+ * whole input is there. This one cannot: near the end of what has arrived, a
+ * match might continue into bytes that have not been handed over yet, and
+ * emitting it would be guessing. So compression stops `DEFLATE_MATCH_MAX`
+ * short of the end and the tail is carried to the next call -- which is why
+ * `deflate_stream_write` may legitimately produce **no output at all**, and
+ * why `deflate_stream_end` exists to compress what is left.
+ */
+
+size_t deflate_stream_bound(size_t len)
+{
+	/*
+	 * Worst case for fixed Huffman is nine bits per byte -- every literal
+	 * in the 144..255 range, which are the nine-bit codes -- so the output
+	 * can be about an eighth larger than the input. The window's worth of
+	 * carried-over input is included because `deflate_stream_end` emits it
+	 * all at once, and the constant covers a block header, an end-of-block
+	 * symbol and the flush to a byte boundary.
+	 */
+	return DEFLATE_STREAM_BOUND(len);
+}
+
+/* The bit writer, over a caller's buffer rather than a `struct bits`. The
+ * state lives in the stream so it survives between calls. */
+struct out {
+	unsigned char *buf;
+	size_t         room;
+	size_t         at;
+	struct deflate_stream *z;
+};
+
+static void z_bits(struct out *o, unsigned long value, int n)
+{
+	struct deflate_stream *z = o->z;
+
+	if (z->failed)
+		return;
+
+	z->hold |= (value & ((1UL << n) - 1UL)) << z->bits;
+	z->bits += n;
+
+	while (z->bits >= 8) {
+		if (o->at >= o->room) {
+			/* The caller was told what room to provide. Running
+			 * out mid-block cannot be recovered from -- the bits
+			 * already written cannot be taken back -- so the
+			 * stream is marked failed and every later call is a
+			 * no-op that reports it. */
+			z->failed = 1;
+			return;
+		}
+		o->buf[o->at++] = (unsigned char)(z->hold & 0xFF);
+		z->hold >>= 8;
+		z->bits -= 8;
+	}
+}
+
+static void z_code(struct out *o, unsigned long code, int n)
+{
+	int i;
+
+	for (i = n - 1; i >= 0; i--)
+		z_bits(o, (code >> i) & 1UL, 1);
+}
+
+static void z_literal(struct out *o, int symbol)
+{
+	if (symbol < 144)
+		z_code(o, 0x30UL + (unsigned long)symbol, 8);
+	else if (symbol < 256)
+		z_code(o, 0x190UL + (unsigned long)(symbol - 144), 9);
+	else if (symbol < 280)
+		z_code(o, (unsigned long)(symbol - 256), 7);
+	else
+		z_code(o, 0xC0UL + (unsigned long)(symbol - 280), 8);
+}
+
+static void z_match(struct out *o, int length, int distance)
+{
+	int i;
+
+	for (i = 28; i >= 0; i--) {
+		if (length >= (int)LENGTH_BASE[i])
+			break;
+	}
+	z_literal(o, 257 + i);
+	if (LENGTH_EXTRA[i])
+		z_bits(o, (unsigned long)(length - LENGTH_BASE[i]),
+		       LENGTH_EXTRA[i]);
+
+	for (i = 29; i >= 0; i--) {
+		if (distance >= (int)DIST_BASE[i])
+			break;
+	}
+	z_code(o, (unsigned long)i, 5);
+	if (DIST_EXTRA[i])
+		z_bits(o, (unsigned long)(distance - DIST_BASE[i]),
+		       DIST_EXTRA[i]);
+}
+
+/* Register a position in the hash chain. Positions are window offsets, and
+ * `base` is what makes them comparable across a slide. */
+static void z_insert(struct deflate_stream *z, size_t at)
+{
+	unsigned h;
+
+	if (at + DEFLATE_MATCH_MIN > z->have)
+		return;
+	h = hash3(z->window + at);
+	z->prev[at % DEFLATE_WINDOW] = z->head[h];
+	z->head[h] = (int)at;
+}
+
+/*
+ * Compress from `z->at` up to `limit`, which is short of the end while more
+ * input may still arrive and is the end itself when it may not.
+ */
+static void z_run(struct deflate_stream *z, struct out *o, size_t limit)
+{
+	while (z->at < limit && !z->failed) {
+		int best_len = 0;
+		int best_dist = 0;
+
+		if (z->at + DEFLATE_MATCH_MIN <= z->have) {
+			unsigned h = hash3(z->window + z->at);
+			int candidate = z->head[h];
+			int tries = 0;
+
+			while (candidate >= 0 && tries < DEFLATE_CHAIN_MAX) {
+				size_t dist;
+				size_t k = 0;
+				size_t max;
+
+				if ((size_t)candidate >= z->at)
+					break;
+				dist = z->at - (size_t)candidate;
+				if (dist == 0 || dist > DEFLATE_WINDOW)
+					break;
+
+				max = limit - z->at;
+				if (max > DEFLATE_MATCH_MAX)
+					max = DEFLATE_MATCH_MAX;
+
+				while (k < max
+				       && z->window[candidate + (int)k]
+				          == z->window[z->at + k])
+					k++;
+
+				if ((int)k > best_len) {
+					best_len = (int)k;
+					best_dist = (int)dist;
+					if (best_len >= DEFLATE_MATCH_MAX)
+						break;
+				}
+				candidate = z->prev[(size_t)candidate
+				                    % DEFLATE_WINDOW];
+				tries++;
+			}
+			z_insert(z, z->at);
+		}
+
+		if (best_len >= DEFLATE_MATCH_MIN) {
+			int step;
+
+			z_match(o, best_len, best_dist);
+			for (step = 1; step < best_len; step++)
+				z_insert(z, z->at + (size_t)step);
+			z->at += (size_t)best_len;
+			continue;
+		}
+
+		z_literal(o, z->window[z->at]);
+		z->at++;
+	}
+}
+
+/*
+ * Make room in the window by dropping the oldest half.
+ *
+ * --- Why the chains are rebuilt rather than rebased ---
+ *
+ * The hash chains hold window offsets, so a slide moves every one of them.
+ * zlib subtracts the shift from each entry, dropping the ones that go
+ * negative. This clears the chains and **walks the kept history back through
+ * `z_insert`** instead, which is the same function every other insertion goes
+ * through -- so there is no second, subtly different piece of arithmetic on
+ * offsets that must agree with the first.
+ *
+ * Clearing alone was tried first and measured, because "it will hardly matter"
+ * is not a measurement. It mattered: on the three files in `gzip-probe.py`
+ * large enough to slide at all, the streamed output was three to four points
+ * worse than the whole-buffer encoder's -- 48% to 52% on `README.md`, 37% to
+ * 40% on `CMakeLists.txt` -- because after each slide the compressor had
+ * 16 KiB of history in the window and no way to find any of it.
+ *
+ * Rebuilding costs one hash insert per kept byte, once per 16 KiB, and closes
+ * it: both of those files now match the whole-buffer encoder exactly and the
+ * worst of the six is one point behind. Run `scripts/gzip-probe.py` to see the
+ * two columns beside each other.
+ */
+static void z_slide(struct deflate_stream *z)
+{
+	size_t keep = DEFLATE_WINDOW / 2;
+	size_t drop;
+	size_t i;
+
+	if (z->at < keep)
+		return;			/* nothing safe to drop yet */
+
+	drop = z->at - keep;
+	for (i = 0; i + drop < z->have; i++)
+		z->window[i] = z->window[i + drop];
+	z->have -= drop;
+	z->at -= drop;
+	z->base += drop;
+
+	for (i = 0; i < (size_t)(1 << 15); i++)
+		z->head[i] = -1;
+	for (i = 0; i < DEFLATE_WINDOW; i++)
+		z->prev[i] = -1;
+
+	/*
+	 * Re-register the history that survived, oldest first, so that each
+	 * chain ends up in the same order it would have been built in. The
+	 * bytes from `z->at` on have not been compressed yet and are inserted
+	 * by `z_run` as it reaches them, exactly as before the slide.
+	 */
+	for (i = 0; i < z->at; i++)
+		z_insert(z, i);
+}
+
+long deflate_stream_begin(struct deflate_stream *z, void *out, size_t room)
+{
+	unsigned char *dst = (unsigned char *)out;
+	size_t i;
+
+	if (!z || !out || room < 10)
+		return DEFLATE_EROOM;
+
+	z->have = 0;
+	z->at = 0;
+	z->base = 0;
+	z->hold = 0;
+	z->bits = 0;
+	z->crc = 0;
+	z->length = 0;
+	z->started = 0;
+	z->failed = 0;
+	for (i = 0; i < (size_t)(1 << 15); i++)
+		z->head[i] = -1;
+	for (i = 0; i < DEFLATE_WINDOW; i++)
+		z->prev[i] = -1;
+
+	/* The same header the whole-buffer form writes, and for the same
+	 * reasons -- see `deflate_gzip`, including why the timestamp is zero. */
+	dst[0] = 0x1F;
+	dst[1] = 0x8B;
+	dst[2] = 8;
+	dst[3] = 0;
+	dst[4] = dst[5] = dst[6] = dst[7] = 0;
+	dst[8] = 0;
+	dst[9] = 0xFF;
+	return 10;
+}
+
+long deflate_stream_write(struct deflate_stream *z, const void *in, size_t len,
+                          void *out, size_t room)
+{
+	const unsigned char *src = (const unsigned char *)in;
+	struct out o;
+	size_t taken = 0;
+
+	if (!z || z->failed)
+		return DEFLATE_EROOM;
+	if (len == 0)
+		return 0;
+	if (room < deflate_stream_bound(len))
+		return DEFLATE_EROOM;
+
+	o.buf = (unsigned char *)out;
+	o.room = room;
+	o.at = 0;
+	o.z = z;
+
+	if (!z->started) {
+		z_bits(&o, 0, 1);	/* not the final block */
+		z_bits(&o, 1, 2);	/* fixed Huffman */
+		z->started = 1;
+	}
+
+	z->crc = deflate_crc32_update(z->crc, in, len);
+	z->length += (unsigned long)len;
+
+	while (taken < len && !z->failed) {
+		size_t space = sizeof(z->window) - z->have;
+		size_t take = len - taken;
+		size_t limit;
+
+		if (space == 0) {
+			z_slide(z);
+			space = sizeof(z->window) - z->have;
+			if (space == 0) {
+				/* The window is full of bytes that cannot be
+				 * compressed yet, which means one match has
+				 * been pending for a whole window. Impossible
+				 * with a bounded match length; refused rather
+				 * than looped on. */
+				z->failed = 1;
+				break;
+			}
+		}
+		if (take > space)
+			take = space;
+
+		{
+			size_t i;
+
+			for (i = 0; i < take; i++)
+				z->window[z->have + i] = src[taken + i];
+		}
+		z->have += take;
+		taken += take;
+
+		/*
+		 * Stop short of the end. A match starting in the last
+		 * `DEFLATE_MATCH_MAX` bytes might continue into input that has
+		 * not arrived, and emitting a shorter one now would be a guess
+		 * that cannot be taken back.
+		 */
+		limit = z->have > DEFLATE_MATCH_MAX
+		      ? z->have - DEFLATE_MATCH_MAX : 0;
+		z_run(z, &o, limit);
+	}
+
+	return z->failed ? DEFLATE_EROOM : (long)o.at;
+}
+
+long deflate_stream_end(struct deflate_stream *z, void *out, size_t room)
+{
+	struct out o;
+	int i;
+
+	if (!z || z->failed)
+		return DEFLATE_EROOM;
+	if (room < deflate_stream_bound(0) + 8)
+		return DEFLATE_EROOM;
+
+	o.buf = (unsigned char *)out;
+	o.room = room - 8;		/* the trailer is written after */
+	o.at = 0;
+	o.z = z;
+
+	if (!z->started) {
+		/* Nothing was ever written. One empty final block, so the
+		 * stream is complete rather than truncated. */
+		z_bits(&o, 1, 1);
+		z_bits(&o, 1, 2);
+		z->started = 1;
+	}
+
+	/* What was held back for a match that might have continued. */
+	z_run(z, &o, z->have);
+
+	z_literal(&o, 256);		/* end of block */
+
+	/*
+	 * The final-block bit was written as zero at the start, because when
+	 * the header went out nobody knew whether more would follow. So the
+	 * stream ends with an **empty final block** rather than by going back
+	 * to change a bit that has already been sent -- which is exactly the
+	 * option a stream does not have.
+	 */
+	z_bits(&o, 1, 1);
+	z_bits(&o, 1, 2);
+	z_literal(&o, 256);
+	if (z->bits)
+		z_bits(&o, 0, 8 - z->bits);
+
+	if (z->failed)
+		return DEFLATE_EROOM;
+
+	for (i = 0; i < 4; i++)
+		o.buf[o.at + i] =
+			(unsigned char)((deflate_crc32_final(z->crc)
+			                 >> (8 * i)) & 0xFF);
+	for (i = 0; i < 4; i++)
+		o.buf[o.at + 4 + i] =
+			(unsigned char)((z->length >> (8 * i)) & 0xFF);
+
+	return (long)(o.at + 8);
 }

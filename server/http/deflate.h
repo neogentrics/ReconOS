@@ -109,4 +109,119 @@ size_t deflate_bound(size_t len);
  */
 unsigned long deflate_crc32(const void *data, size_t len);
 
+/*
+ * The same checksum, one piece at a time.
+ *
+ * `deflate_crc32(data, len)` is `deflate_crc32_update(0, data, len)` finished,
+ * and the one-shot form is written in terms of this one so that there is a
+ * single loop rather than two that must agree. Start at 0; the value between
+ * calls is not the checksum and is not meant to be looked at.
+ */
+unsigned long deflate_crc32_update(unsigned long running, const void *data,
+                                   size_t len);
+unsigned long deflate_crc32_final(unsigned long running);
+
+/*
+ * --- Compressing something that does not fit in memory --------------------
+ *
+ * `deflate_gzip` takes a buffer and gives a buffer, which is right for
+ * everything this server builds in memory and wrong for the one thing it does
+ * not: a **file**. 0.29.0 wired compression into `send_response` and said so
+ * plainly -- *files were not compressed then, and that gap is worth naming
+ * because files are the largest bodies this server sends.* They go through the
+ * streaming path, in eight-kilobyte blocks, precisely so that a file can be
+ * larger than this program's memory.
+ *
+ * So the compressor needs a form that is handed one block at a time and keeps
+ * what it has learned. Three things have to persist between calls and each is
+ * a reason this is not simply a loop around the other function:
+ *
+ *   * **the window.** LZ77 matches against the previous 32 KiB of *input*, and
+ *     a block-at-a-time compressor that forgot between calls would find no
+ *     match that spanned a boundary -- which, at eight kilobytes a block, is
+ *     most of them;
+ *   * **the bit writer.** A deflate block is a bit stream, and blocks do not
+ *     begin on byte boundaries. Ending one per call would mean a new block
+ *     header every eight kilobytes and a stream that is bigger for it;
+ *   * **the checksum and the length**, which gzip puts at the end and which
+ *     are computed over everything.
+ *
+ * One block spans the whole body: the header is written once, the symbols flow
+ * through, and the end-of-block and the trailer are written when the handler
+ * says it is finished.
+ *
+ * --- What a caller must guarantee ---
+ *
+ * That `room` is at least `deflate_stream_bound(len)`. Deflate can expand
+ * incompressible input slightly, and a compressor that could run out of output
+ * halfway through a block has no way to stop cleanly -- the bits already
+ * written cannot be taken back. The bound is generous and exact rather than
+ * hopeful.
+ */
+
+/*
+ * Enough output room for `len` bytes of input, whatever it contains.
+ *
+ * The macro exists because a caller that wants a static buffer needs this as
+ * an array size, and a constant that had to agree with a function would be two
+ * things that can drift apart. `len` is evaluated more than once, so pass it a
+ * constant -- which is the only way an array size can be written anyway.
+ */
+#define DEFLATE_STREAM_BOUND(len)                                             \
+	(((len) + DEFLATE_WINDOW + DEFLATE_MATCH_MAX)                         \
+	 + ((len) + DEFLATE_WINDOW + DEFLATE_MATCH_MAX) / 8 + 64)
+
+size_t deflate_stream_bound(size_t len);
+
+struct deflate_stream {
+	/*
+	 * The window, and one byte more than the format's 32768.
+	 *
+	 * The extra is not padding: a match may be up to `DEFLATE_MATCH_MAX`
+	 * long and is looked for against a lookahead that must still be in the
+	 * window, so the buffer holds a window plus a longest match and then
+	 * slides.
+	 */
+	unsigned char window[DEFLATE_WINDOW + DEFLATE_MATCH_MAX + 1];
+	size_t        have;		/* bytes in the window */
+	size_t        at;		/* how far compression has got */
+	size_t        base;		/* input offset of window[0] */
+
+	int           head[1 << 15];
+	int           prev[DEFLATE_WINDOW];
+
+	unsigned long hold;		/* bits not yet flushed */
+	int           bits;		/* how many of them */
+
+	unsigned long crc;		/* running, not finished */
+	unsigned long length;		/* input bytes seen */
+	int           started;		/* the block header has been written */
+	int           failed;
+};
+
+/*
+ * Begin a gzip stream. Writes the ten-byte header into `out`.
+ *
+ * Returns the bytes written, or a negative verdict. `room` must be at least
+ * ten.
+ */
+long deflate_stream_begin(struct deflate_stream *z, void *out, size_t room);
+
+/*
+ * Compress `len` bytes. Returns the bytes written into `out`, which may be
+ * zero -- a compressor holds bytes back while it looks for a match, and a
+ * caller that treated zero as an error would refuse its own body.
+ */
+long deflate_stream_write(struct deflate_stream *z, const void *in, size_t len,
+                          void *out, size_t room);
+
+/*
+ * Finish: the last symbols, the end of the block, the padding to a byte, and
+ * the eight-byte trailer. Returns the bytes written, or negative.
+ *
+ * `room` must be at least `deflate_stream_bound(0) + 8`, which covers a full
+ * window's worth of held-back input plus the trailer.
+ */
+long deflate_stream_end(struct deflate_stream *z, void *out, size_t room);
+
 #endif

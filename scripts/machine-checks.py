@@ -506,6 +506,115 @@ def compression():
        "%s declared, %d arrived" % (said, len(whole)))
 
 
+def dechunk(body):
+    """Undo chunked framing. Returns the bytes, or None if it does not hold."""
+    out = b""
+    at = 0
+    while True:
+        end = body.find(b"\r\n", at)
+        if end < 0:
+            return None
+        try:
+            n = int(body[at:end].split(b";")[0], 16)
+        except ValueError:
+            return None
+        at = end + 2
+        if n == 0:
+            return out
+        if at + n + 2 > len(body):
+            return None
+        out += body[at:at + n]
+        if body[at + n:at + n + 2] != b"\r\n":
+            return None
+        at += n + 2
+
+
+def compressed_files():
+    """
+    A file off the volume, compressed on the way out.
+
+    The check the console's cannot be: a file does not change between two
+    fetches, so the compressed form and the plain form can be compared **byte
+    for byte** rather than give-or-take a counter. If the streaming compressor
+    drops a match, mis-frames a chunk, or ends without flushing what it held
+    back, this is where it shows.
+
+    Files are the largest bodies this server sends and they go out on its
+    slowest resource, which is why 0.29.0 named their not being compressed as
+    the gap worth stating plainly.
+    """
+    status, lines, whole = parts(get("/console.css"))
+    if status.startswith("HTTP/1.1 404"):
+        print("  note  no volume attached; the file checks are skipped")
+        return
+
+    status, lines, framed = parts(get("/console.css",
+                                      "Accept-Encoding: gzip\r\n"))
+    ok(status.startswith("HTTP/1.1 200"), "a file asked for compressed", status)
+    ok(header(lines, "Content-Encoding") == "gzip",
+       "comes back compressed", header(lines, "Content-Encoding"))
+    ok((header(lines, "Transfer-Encoding") or "").lower() == "chunked",
+       "framed chunked, because its length on the wire is not known when the "
+       "head goes out", header(lines, "Transfer-Encoding"))
+    ok(header(lines, "Content-Length") is None,
+       "and carrying no Content-Length, which would now be the wrong number",
+       header(lines, "Content-Length"))
+    ok(header(lines, "Vary") is not None,
+       "and telling caches the answer depends on Accept-Encoding")
+
+    packed = dechunk(framed)
+    ok(packed is not None, "the chunked framing holds together")
+
+    if packed is not None:
+        try:
+            plain = gzip.decompress(packed)
+            ok(plain == whole,
+               "and the file decompresses to itself, byte for byte, in a "
+               "library this project did not write",
+               "%d back, %d on the volume" % (len(plain), len(whole)))
+        except Exception as e:
+            ok(False, "and the file decompresses to itself, byte for byte, in "
+                      "a library this project did not write", str(e))
+        ok(len(packed) < len(whole),
+           "and the compressed form is smaller",
+           "%d against %d" % (len(packed), len(whole)))
+        # Printed rather than only asserted, because the size is the whole
+        # point of the feature and a number nobody looks at is a number that
+        # can quietly get worse.
+        print("  note  %s: %d bytes on the volume, %d on the wire (%d%%)"
+              % ("/console.css", len(whole), len(packed),
+                 len(packed) * 100 // len(whole) if whole else 0))
+
+
+def a_range_is_never_compressed():
+    """
+    The guard, on a real file.
+
+    `Content-Range` counts the bytes of the resource. A compressed 206 would
+    leave those numbers describing something the client was never sent, and
+    there is no honest way to restate them -- the compressed size of a range is
+    not a range of anything. So a client that asks for both gets the range,
+    uncompressed, and that is the right answer rather than a missed
+    opportunity.
+    """
+    status, lines, whole = parts(get("/console.css"))
+    if status.startswith("HTTP/1.1 404"):
+        return
+
+    status, lines, body = parts(get("/console.css",
+                                    "Accept-Encoding: gzip\r\n"
+                                    "Range: bytes=0-63\r\n"))
+    ok(status.startswith("HTTP/1.1 206"),
+       "a range asked for compressed is still a range", status)
+    ok(header(lines, "Content-Encoding") is None,
+       "and is not compressed", header(lines, "Content-Encoding"))
+    ok(header(lines, "Content-Range") is not None,
+       "and still names the bytes it sent", header(lines, "Content-Range"))
+    ok(body == whole[:64],
+       "and they are the bytes it named",
+       "%d bytes" % len(body))
+
+
 def files_off_the_volume():
     status, lines, body = parts(get("/console.css"))
     if status.startswith("HTTP/1.1 404"):
@@ -777,7 +886,9 @@ def main():
                   a_form_field_past_its_bound, conditional_requests,
                   the_console_itself, the_console_escapes_what_it_shows,
                   the_resolver_and_the_clock, negotiation,
-                  compression, files_off_the_volume, the_status_line,
+                  compression, compressed_files,
+                  a_range_is_never_compressed,
+                  files_off_the_volume, the_status_line,
                   keep_alive, forty_connections):
         try:
             check()

@@ -24,8 +24,11 @@
 #
 # With no arguments it uses this repository's own text, which is what the
 # server will actually be sending: documents, source and a page of console.
-# Every file is compressed by `deflate.c` and decompressed by `zlib`, and the
-# ratio is printed because the numbers are the other thing worth knowing.
+# Every file goes through **both** compressors -- the whole-buffer one that
+# `send_response` uses and the streaming one that files go through -- and is
+# decompressed by `zlib`. Both ratios are printed, because the question the
+# streaming form has to answer is not only "is it correct" but "is it as small
+# as the one it is standing in for".
 #
 import os
 import subprocess
@@ -35,19 +38,59 @@ import zlib
 
 HARNESS = r'''
 #include <stdio.h>
+#include <string.h>
 #include "deflate.h"
 
 static unsigned char in[300000];
-static unsigned char out[400000];
+static unsigned char out[600000];
+static struct deflate_stream Z;
 
-int main(void)
+/*
+ * With no argument, the whole-buffer compressor. With `stream`, the
+ * incremental one, fed in eight-kilobyte pieces -- `HTTP_SEND_CHUNK`-sized,
+ * which is the shape the file handler actually produces.
+ */
+int main(int argc, char **argv)
 {
 	size_t len = 0;
+	size_t at = 0, total = 0;
 	long n;
 	int c;
 
 	while ((c = getchar()) != EOF && len < sizeof(in))
 		in[len++] = (unsigned char)c;
+
+	if (argc > 1 && strcmp(argv[1], "stream") == 0) {
+		n = deflate_stream_begin(&Z, out, sizeof(out));
+		if (n < 0) {
+			fprintf(stderr, "begin: %ld\n", n);
+			return 1;
+		}
+		total = (size_t)n;
+
+		while (at < len) {
+			size_t take = len - at > 8192 ? 8192 : len - at;
+
+			n = deflate_stream_write(&Z, in + at, take,
+			                         out + total,
+			                         sizeof(out) - total);
+			if (n < 0) {
+				fprintf(stderr, "write: %ld\n", n);
+				return 1;
+			}
+			total += (size_t)n;
+			at += take;
+		}
+
+		n = deflate_stream_end(&Z, out + total, sizeof(out) - total);
+		if (n < 0) {
+			fprintf(stderr, "end: %ld\n", n);
+			return 1;
+		}
+		total += (size_t)n;
+		fwrite(out, 1, total, stdout);
+		return 0;
+	}
 
 	n = deflate_gzip(in, len, out, sizeof(out));
 	if (n < 0) {
@@ -85,6 +128,28 @@ def build(root, where):
     return exe
 
 
+def run(exe, how, raw):
+    """Compress `raw` one way. Returns (bytes, complaint)."""
+    args = [exe] if how == "whole" else [exe, "stream"]
+    done = subprocess.run(args, input=raw, capture_output=True)
+    if done.returncode != 0:
+        return None, "%s failed: %s" % (
+            how, done.stderr.decode("utf-8", "replace").strip())
+
+    packed = done.stdout
+    try:
+        # 16 + MAX_WBITS is zlib's way of saying "this has a gzip header on
+        # it", including the CRC and the length, both of which it checks.
+        back = zlib.decompress(packed, 16 + zlib.MAX_WBITS)
+    except zlib.error as e:
+        return packed, "%s REFUSED: %s" % (how, e)
+
+    if back != raw:
+        return packed, "%s DIFFERENT (%d bytes back, %d in)" % (
+            how, len(back), len(raw))
+    return packed, None
+
+
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = sys.argv[1:] or [os.path.join(root, p) for p in DEFAULT]
@@ -96,51 +161,47 @@ def main():
             print("the harness did not build")
             return 2
 
-        print("%-28s %9s %9s %6s  %s"
-              % ("file", "bytes", "gzip", "ratio", "zlib"))
+        print("%-22s %8s   %8s %6s   %8s %6s  %s"
+              % ("file", "bytes", "whole", "ratio", "streamed", "ratio",
+                 "zlib"))
 
         for path in files:
+            name = os.path.basename(path)[:22]
             try:
                 with open(path, "rb") as f:
                     raw = f.read()
             except OSError as e:
-                print("%-28s %s" % (os.path.basename(path), e))
+                print("%-22s %s" % (name, e))
                 bad += 1
                 continue
 
-            done = subprocess.run([exe], input=raw, capture_output=True)
-            if done.returncode != 0:
-                print("%-28s compressing failed: %s"
-                      % (os.path.basename(path),
-                         done.stderr.decode("utf-8", "replace").strip()))
-                bad += 1
-                continue
+            sizes = {}
+            complaints = []
+            for how in ("whole", "stream"):
+                packed, complaint = run(exe, how, raw)
+                sizes[how] = len(packed) if packed is not None else 0
+                if complaint:
+                    complaints.append(complaint)
 
-            packed = done.stdout
-            try:
-                # 16 + MAX_WBITS is zlib's way of saying "this has a gzip
-                # header on it", including the CRC and the length, both of
-                # which it checks.
-                back = zlib.decompress(packed, 16 + zlib.MAX_WBITS)
-                verdict = "same" if back == raw else "DIFFERENT"
-            except zlib.error as e:
-                verdict = "REFUSED: %s" % e
-
-            if verdict != "same":
+            if complaints:
                 bad += 1
 
-            ratio = (len(packed) * 100 // len(raw)) if raw else 0
-            print("%-28s %9d %9d %5d%%  %s"
-                  % (os.path.basename(path), len(raw), len(packed), ratio,
-                     verdict))
+            def pct(n):
+                return (n * 100 // len(raw)) if raw else 0
+
+            print("%-22s %8d   %8d %5d%%   %8d %5d%%  %s"
+                  % (name, len(raw),
+                     sizes["whole"], pct(sizes["whole"]),
+                     sizes["stream"], pct(sizes["stream"]),
+                     "; ".join(complaints) if complaints else "same"))
 
     if bad:
         print()
         print("%d file(s) did not come back" % bad)
         return 1
     print()
-    print("every file came back byte for byte, through a decompressor this "
-          "project did not write")
+    print("every file came back byte for byte, both ways, through a "
+          "decompressor this project did not write")
     return 0
 
 

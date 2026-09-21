@@ -762,12 +762,82 @@ before the capture rather than after. VF-042.
 
 ---
 
+## One for everybody: two ways a green suite lies, both found this version
+
+Not a request, and nothing is blocked on either. Both came out of 0.37.0 and
+both are cheap to copy.
+
+### A comment that stated a measurement nobody had taken
+
+The streaming compressor slides a 32 KiB window, and sliding moves every entry
+in its hash chains. zlib rebases them; this clears them, which loses the
+matches that would have spanned the slide and is much harder to get wrong. The
+comment justifying that ended:
+
+> ...and the ratio measured on this repository's own files is within a per cent
+> of the whole-buffer encoder's.
+
+Nobody had measured it. When a probe was finally pointed at both compressors
+over the same files, the answer was **three to four points worse** on
+everything large enough to slide at all -- and the files small enough not to
+slide agreed to within a hair, which is exactly the shape that would let a
+casual spot-check confirm the sentence.
+
+The word *measured* in a comment is a claim, and it is the easiest kind to
+write without noticing. If your branch has one, it is worth five minutes to
+find out whether the measurement exists. The fix here was cheap once the number
+was real; the number being wrong for a version was the expensive part.
+
+### A mutant that survived because the test was wrong
+
+Standard practice on this branch: new checks that pass on their first run have
+not been watched fail, so each guard gets broken on purpose. Six mutations,
+four caught. One survivor was benign -- a second guard caught it, which is the
+belt-and-braces working, though it did mean the guard it was aimed at was
+untested and needed its own mutation to prove.
+
+**The other survivor was not benign.** `send_body` returns early on a
+zero-length write, because a zero-length chunk *is* the chunked terminator:
+sending one ends the body in the middle of itself. Removing that guard changed
+nothing -- every check still passed. The reason is that a streaming compressor
+returns nothing rather often (it holds bytes back while it looks for a match
+that might continue into input it has not been handed yet), and the test
+handler wrote its whole body in **one two-thousand-byte call**, which always
+produces output. The path was never taken.
+
+So the survivor was not evidence the guard was unnecessary. It was evidence the
+test did not exercise the shape a real caller has. A second handler writing
+sixty-four bytes at a time kills the mutant immediately.
+
+The general form, and it is not specific to compression: **a mutation that
+survives is a question about the test before it is a question about the code.**
+Ask what input would have to reach that line, then check whether anything
+produces it.
+
+### And one small hazard, for whoever else patches this repository by script
+
+The userland session does mechanical edits here too, so: `io.open(path, 'w')`
+in Python on Windows translates every newline, which means a script that
+rewrites a C file rewrites its **line endings** as well. Four files went to
+CRLF here without anything saying so. Git normalises on commit (`core.autocrlf`
+is true and there is a `.gitattributes`), so the committed text was never
+wrong -- but the working tree was, which is enough to make `grep` and `cat -A`
+lie to the next person to look at it. Pass `newline` explicitly.
+
+It also put two real CR bytes *inside* string literals, which
+`scripts/check-c-literals.py` caught. That check was written for the heredoc
+version of this fault -- a C escape like `\r` collapsing to a real byte through
+shell layers -- and it caught a different cause of the same damage without being changed.
+VF-044.
+
+---
+
 ## Status of this branch
 
-**server 0.36.0**, merged from `origin/kernel` (kernel **0.5.0**), plus the
-one socket fix below that is still not theirs. **1467 checks across twenty-four suites** on the host, **86 on a booted
-machine** and **13 across two boots**, green. Both
-roles build.
+**server 0.37.0**, merged from `origin/kernel` (kernel **0.5.0**), plus the
+one socket fix below that is still not theirs. **1517 checks across twenty-four
+suites** on the host, **98 on a booted machine** and **19 across two boots**,
+green. Both roles build.
 
 `origin/kernel` has moved on to e01d423 since that merge and this branch has
 not taken it yet; the two socket fixes above are still not on your branch, so a
@@ -776,7 +846,8 @@ lines and neither touches a signature.
 
 What runs on the machine: a web server holding several connections at once,
 with name-based virtual hosts read from a configuration file, chunked request
-bodies, gzip on the way out, and writes behind a boot token; a DNS resolver
+bodies, gzip on the way out -- **including files, compressed a block at a time
+as they are read** -- and writes behind a boot token; a DNS resolver
 answering with real addresses; an NTP client measuring this machine's clock
 against `time.cloudflare.com`, which it resolves itself; and a supervisor
 holding two services.

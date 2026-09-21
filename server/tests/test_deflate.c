@@ -488,6 +488,155 @@ int main(void)
 		   "and the answer fits inside it");
 	}
 
+	/* --- compressing one block at a time --------------------------------------
+	 *
+	 * The same input, handed over in pieces, must decode to the same bytes
+	 * -- and the pieces must not be visible in the result. The decoder
+	 * below is the same one that reads the whole-buffer form, which is the
+	 * point: a streaming encoder that produced something only its own
+	 * reader understood would pass a round trip and fail every client.
+	 */
+	{
+		static struct deflate_stream Z;
+		static unsigned char OUT[400000];
+
+		/* Feed `in` in `piece`-sized pieces and decode the result. */
+		long (*unused)(void) = 0;
+		size_t piece;
+		(void)unused;
+
+		for (piece = 1; piece <= 8192; piece *= 8) {
+			size_t at = 0;
+			size_t total = 0;
+			long m;
+			long back;
+
+			for (i = 0; i < 40000; i++)
+				SRC[i] = (unsigned char)('a' + (int)(i % 11));
+
+			m = deflate_stream_begin(&Z, OUT, sizeof(OUT));
+			ok(m == 10, "a stream begins with the gzip header");
+			total = (size_t)m;
+
+			while (at < 40000) {
+				size_t take = 40000 - at;
+
+				if (take > piece)
+					take = piece;
+				m = deflate_stream_write(&Z, SRC + at, take,
+				                         OUT + total,
+				                         sizeof(OUT) - total);
+				if (m < 0)
+					break;
+				total += (size_t)m;
+				at += take;
+			}
+			checks++;
+			if (m < 0) {
+				failures++;
+				printf("  FAIL  writing in %lu-byte pieces "
+				       "gave %ld\n", (unsigned long)piece, m);
+				continue;
+			}
+
+			m = deflate_stream_end(&Z, OUT + total,
+			                       sizeof(OUT) - total);
+			checks++;
+			if (m < 0) {
+				failures++;
+				printf("  FAIL  ending a %lu-byte-piece stream "
+				       "gave %ld\n", (unsigned long)piece, m);
+				continue;
+			}
+			total += (size_t)m;
+
+			back = ungzip(OUT, total, BACK, sizeof(BACK));
+			checks++;
+			if (back != 40000 || memcmp(BACK, SRC, 40000) != 0) {
+				failures++;
+				printf("  FAIL  %lu-byte pieces came back %ld "
+				       "bytes\n", (unsigned long)piece, back);
+			}
+		}
+	}
+
+	/* A stream that is begun and ended with nothing in between is still a
+	 * complete gzip stream, not a truncated one. */
+	{
+		static struct deflate_stream Z;
+		static unsigned char OUT[80000];
+		long a, b;
+
+		a = deflate_stream_begin(&Z, OUT, sizeof(OUT));
+		b = deflate_stream_end(&Z, OUT + a, sizeof(OUT) - (size_t)a);
+		ok(a > 0 && b > 0, "an empty stream can be begun and ended");
+		ok(a > 0 && b > 0
+		   && ungzip(OUT, (size_t)(a + b), BACK, sizeof(BACK)) == 0,
+		   "and decodes to nothing, rather than not decoding");
+	}
+
+	/*
+	 * Bytes that do not compress, in pieces.
+	 *
+	 * The streaming form has no stored-block fallback -- it cannot choose
+	 * one, because by the time it knows how well the body compressed most
+	 * of it has been sent. So this checks the bound holds rather than that
+	 * the output is small: a caller that provides `deflate_stream_bound`
+	 * must never be refused.
+	 */
+	{
+		static struct deflate_stream Z;
+		static unsigned char OUT[400000];
+		unsigned long seed = 4242;
+		size_t at = 0, total = 0;
+		long m, back;
+
+		for (i = 0; i < 30000; i++) {
+			seed = seed * 1103515245UL + 12345UL;
+			SRC[i] = (unsigned char)((seed >> 16) & 0xFF);
+		}
+
+		m = deflate_stream_begin(&Z, OUT, sizeof(OUT));
+		total = (size_t)m;
+		while (at < 30000) {
+			size_t take = 30000 - at > 8192 ? 8192 : 30000 - at;
+
+			m = deflate_stream_write(&Z, SRC + at, take,
+			                         OUT + total,
+			                         sizeof(OUT) - total);
+			if (m < 0)
+				break;
+			total += (size_t)m;
+			at += take;
+		}
+		ok(m >= 0, "incompressible input streams without being refused");
+		if (m >= 0) {
+			m = deflate_stream_end(&Z, OUT + total,
+			                       sizeof(OUT) - total);
+			total += (size_t)(m > 0 ? m : 0);
+			back = ungzip(OUT, total, BACK, sizeof(BACK));
+			ok(back == 30000 && memcmp(BACK, SRC, 30000) == 0,
+			   "and comes back byte for byte");
+		}
+	}
+
+	/* And a caller that does not provide the room it was told to is
+	 * refused rather than producing half a block it cannot take back. */
+	{
+		static struct deflate_stream Z;
+		static unsigned char OUT[80000];
+		long m;
+
+		m = deflate_stream_begin(&Z, OUT, 4);
+		ok(m == DEFLATE_EROOM,
+		   "a header that does not fit is refused");
+
+		deflate_stream_begin(&Z, OUT, sizeof(OUT));
+		m = deflate_stream_write(&Z, "hello", 5, OUT, 16);
+		ok(m == DEFLATE_EROOM,
+		   "and so is a write with less room than the bound asks for");
+	}
+
 	printf("  %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
