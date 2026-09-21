@@ -1,70 +1,27 @@
-Help. A new application, beside the Control Panel in the Start menu, with
-a page for each part of the system and this change log underneath. The text is
-written out of the system's own files every time it starts, so help describing
-a version that is no longer running cannot survive an update.
+Errors have codes now. When something goes wrong ReconOS names it —
+VT-A001, VT-G005 — so it can be written down and looked up. errors in
+the Terminal says what a code means, errors log is what has happened on this
+machine, and docs/ERRORS.md is the whole list for when you have a code and
+not a working machine.
 
-What changed, after an update. The first time an account reaches the
-desktop on a new version, a window says what that version brought, with an OK
-button. Each account is told once. The whole log is in Help at any time,
-back to the first version.
+Three kinds: STOP (the system cannot continue and shows a screen with the
+code on it), fault (something failed and the rest carried on), and note
+(written down, nothing broke). If a run stops, the next start says so once,
+with the code.
 
-The Control Panel and the Start menu have their own icons, instead of
-sharing the plain window that stood in for everything without one.
+A firewall. Control Panel → Firewall, and firewall in the Terminal. It
+decides what ReconOS itself opens and accepts: outgoing allowed, incoming
+blocked, and a list of rules where the first match decides. Nine rules ship —
+the incoming ones written down and switched off, so opening one is a switch
+rather than remembering a port number. It is not the host's firewall and does
+not touch it.
 
-Storage says where the room went. The page used to be four notes about
-things that do not work. It now measures what ReconOS owns — the system, the
-programs, each account by name, the scratch space and the Recycle Bin — and
-can empty the bin. How much room is left is still the host's answer, because
-there is one filesystem and no volume layer under it.
+The startup screen checks the system instead of only counting it. Every
+folder the system needs, the skins, the accounts, the programs, the firewall —
+each line says what it found, and says the code when what it found is wrong.
+Missing folders are rebuilt rather than only reported.
 
-The Recycle Bin from the Terminal. bin lists it, bin <name> puts
-something in, bin restore <name> takes it back out, and bin empty clears
-it. Before this the bin could only be reached from the File Explorer.
-
-Text that is not plain English draws properly. Accents, dashes,
-quotation marks and other alphabets used to be dropped silently — a sentence
-would arrive with a hole where its punctuation should be. They are read as
-UTF-8 now, in file names as well as in the help. A character the font has no
-drawing for shows as an empty box rather than as nothing. A keyboard laid out
-for a language with accents in it can type them, and Backspace removes a whole
-character rather than a piece of one.
-
-The Update page says what version this is and what it brought, with a
-way through to the whole change log. It used to be three notes about things
-that do not work; one of them stopped being true when the change log arrived.
-
-Notepad can replace. Ctrl+H opens the find bar with a second field:
-*Replace* changes the match in front of you and moves to the next, *All*
-changes every one. Both undo.
-
-Programs written for Wayland get a ReconOS title bar. A program that
-was not written for ReconOS used to arrive with a frame of its own, in
-somebody else's colours, with its own buttons. Now it is framed the way every
-other window is — same colours, same buttons, same corners — and can be
-dragged, resized, minimized, maximized and closed like one. A program that
-insists on drawing its own frame still may; it is not given a second one.
-
-F1 opens the help about whatever you are looking at. From Notepad it opens
-Writing; from a Control Panel page it opens the page about that page.
-
-Three quiet bugs, found by clearing the compiler's warnings. The File
-Explorer's folder drop-down could point at the wrong place for a deeply nested
-folder; a wallpaper or account picture with a very long file name was listed
-but could not be loaded; and a file with a very long name could be moved to
-the wrong place on its way to the bin. The build now compiles with nothing to
-say, so the next warning will be one somebody notices.
-
-Skins can be written here. *Copy This Skin* on the Appearance page writes
-the chosen one out under a name of your own; *Edit This Skin* lists every
-colour with a swatch and lets you change it. The change is immediate and is
-saved as you make it. The ten that ship are built in and cannot be edited —
-copy one first. theme copy <name> does the same from the Terminal.
-
-Type in the Start menu to find something. The list narrows to names
-containing what you typed; the arrows move the highlight and Enter opens it.
-Escape steps back one thing at a time. The menu took no keys at all before
-this, not even Escape.
-
-Every button is the same shape. The rounded corners a skin asks for were
-written in three places and every button that had not been rewritten stayed
-square. On Beacon that meant two shapes of button in one window.
+Remote access, two ways. Over SSH by forwarding the control socket, which
+is encrypted and needs nothing from ReconOS; or over TCP 7420 with a key, which
+is off by default and says plainly that the key crosses the network in the
+clear. The firewall has to allow it either way.

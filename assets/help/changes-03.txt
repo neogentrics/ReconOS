@@ -1,55 +1,62 @@
-Set two cookies: one with a day to run, one for the window only. Close the
-window. Open it again. Both came back.
+v0.4.74 was not about cookies. The question it left is what does an
+application do in destroy that it should be doing on close, and destroy
+runs at shutdown because closing a built-in application hides its window.
 
-A cookie with no expiry is a *session* cookie, and the word is the
-specification -- it lasts until the browser closes. So one surviving the
-browser closing is not a cosmetic fault; it is the only thing that definition
-forbids.
+Asked of all ten built-in windows. Grepping for save found nothing, which is
+why this needed asking properly: the two that answer are not about saving
+anything. They are about stopping.
 
-### Closing an application does not destroy its window
+### The player kept playing
 
-recon_apps.c calls recon_appwin_hide. The window keeps its tabs, its
-scroll position and its jar, and opening the application again shows the same
-one back -- which is right, and is why it was written that way.
+player_destroy calls stop_playing, and nothing else did. So closing the
+Media Player mid-track left the audio stream open, the decoder open, the whole
+file in memory and the tick running — with no window on the screen and no
+entry in the taskbar. The only way to stop it was to open the player again.
 
-But web_destroy was where the jar got sealed. A hidden window is not
-destroyed, so that ran at shutdown and never before: the jar was never
-written on a close, session cookies were never dropped, and both cookies just
-stayed in memory where nothing had asked them to be.
+Photographed: play, close (windows says nothing is open), open it again, and
+the transport is on pause at 0:09 of 10:00. It had been counting the whole
+time.
 
-tests/test_cookie.c had twenty-two tests on this and none of them could see
-it. Every one calls recon_cookie_jar_save itself. Not one goes through a
-window, and *whether the call happens at all* is the one thing a test that
-makes the call cannot check.
+The first attempt at that measurement proved nothing. The tone was twelve
+seconds long and the run took eighteen, so the track had ended on its own and
+the player was showing "Stopped." for reasons that had nothing to do with the
+close. It looked exactly like a pass. Ten minutes of tone is what made the
+question answerable.
 
-### The obvious fix would have signed you out for minimising
+closed and not visibility — which fires on minimize too, as v0.4.74 found
+out. Minimising a music player must not stop the music, and putting a
+window down is the most ordinary thing to do while listening to something. The
+photograph of the minimize path shows it still running at 0:07.
 
-There is a visibility(void *user, bool visible) callback, and the browser
-never implemented it. It looks exactly like the hook this needs.
+### Mail held a connection and a password
 
-It is not. All four of show, hide, minimize and restore reach it --
-verified by reading the four call sites, after writing a comment that
-confidently said otherwise. A browser that ended its session on
-visibility(false) would sign you out of everything every time you
-minimised the window, which is a far worse bug than the one being fixed, and
-it would have looked like a clean fix in the diff.
+mailwin_destroy disconnects and erases. So a mail window closed at nine in
+the morning kept its connection to the server, and the password in this
+process's memory, until the machine was shut down.
 
-So the seam grew a second half. closed fires from recon_appwin_hide alone,
-and the header for visibility now says in as many words that it fires on
-minimize too -- because the next person to reach for it will reach for it for
-this reason.
+The struct had already ruled on it. The comment above password says it
+*"lives for as long as this window does, and goes when it does"* — written when
+closing a window and destroying one were the same thing, and true of neither
+since.
 
-### Both halves, photographed
+The text, not the field. recon_secure_erase over the whole
+struct recon_edit would zero masked with it, and a password box that has
+stopped drawing dots is a worse bug than the one being fixed. A send in flight
+is deliberately left alone: the window is still there to be called back into,
+and dropping somebody's outgoing mail because they closed a window is not a
+thing to do about a connection.
 
-scripts/cookie-survives-shot.sh now runs twice against a live desktop, and
-windows is asked in between so neither run can pass by not having happened:
+### The instrument was wrong twice, in the two ways that look like passing
 
-| | closed and reopened | minimized and restored |
-| --- | --- | --- |
-| before | keepme=survived; session-only=gone | — |
-| after | keepme=survived | keepme=survived; session-only=gone |
+scripts/player-close-shot.sh reported three pictures written and the
+pictures said *"Nothing to play."* — because look.sh throws its root away
+when the password stamp does not match, so a file placed in it before the
+first run is deleted by that run. The root is settled first now, and the
+script counts the accounts the tone reached rather than leaving it to the
+photograph.
 
-The second column is the one worth having. It fails on the fix that looks
-right.
+Both faults were the same shape as the twelve-second tone, and as the theme
+measurement in v0.4.71: an instrument that answers confidently about
+something it is not pointed at.
 
 ---

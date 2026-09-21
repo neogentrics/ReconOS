@@ -164,58 +164,222 @@ int recon_font_ascent(struct recon_font *font) {
 
 /* --- hit regions -------------------------------------------------------- */
 
-void recon_hit_clear(struct recon_panel *panel) { (void)panel; }
+/*
+ * These are the one thing here that does real work, because **a hit region is
+ * a data structure and not a screen.**
+ *
+ * `recon_hit_add` records where a control is; `recon_hit_region` reads it
+ * back; `recon_appwin_hit_centre` walks that list to answer *where is the
+ * control with this id*. A suite that clicks by id rather than by coordinate
+ * needs all three, and the first version of this file returned true from
+ * `add` while storing nothing -- so nothing could ever be found, and the
+ * browser suite failed at the line asking where the new-tab button was.
+ *
+ * Storing them is not a second implementation of anything under test. Nothing
+ * in either suite asserts about this list; it is the mechanism a click uses to
+ * arrive, in the same way the panel pointer is the mechanism a window uses to
+ * exist.
+ */
+#define HITS_MAX 256
+
+static struct {
+    int x, y, w, h;
+    uint32_t id;
+} g_hits[HITS_MAX];
+
+static size_t g_hit_count;
+
+void recon_hit_clear(struct recon_panel *panel) {
+    (void)panel;
+    g_hit_count = 0;
+}
 
 bool recon_hit_add(struct recon_panel *panel, int x, int y, int w, int h,
         uint32_t id) {
-    (void)panel; (void)x; (void)y; (void)w; (void)h; (void)id;
+    (void)panel;
+    if (g_hit_count >= HITS_MAX) {
+        return false;
+    }
+    g_hits[g_hit_count].x = x;
+    g_hits[g_hit_count].y = y;
+    g_hits[g_hit_count].w = w;
+    g_hits[g_hit_count].h = h;
+    g_hits[g_hit_count].id = id;
+    g_hit_count++;
     return true;
 }
 
 bool recon_hit_region(const struct recon_panel *panel, size_t index, int *x,
         int *y, int *w, int *h, uint32_t *id) {
-    (void)panel; (void)index; (void)x; (void)y; (void)w; (void)h; (void)id;
-    return false;
+    (void)panel;
+    if (index >= g_hit_count) {
+        return false;
+    }
+    if (x != NULL) { *x = g_hits[index].x; }
+    if (y != NULL) { *y = g_hits[index].y; }
+    if (w != NULL) { *w = g_hits[index].w; }
+    if (h != NULL) { *h = g_hits[index].h; }
+    if (id != NULL) { *id = g_hits[index].id; }
+    return true;
+}
+
+/*
+ * Topmost first, which is what the real one does: a control drawn over
+ * another is the one a click lands on, and the later `add` is the later draw.
+ */
+static uint32_t hit_at(int x, int y) {
+    for (size_t i = g_hit_count; i > 0; i--) {
+        const size_t k = i - 1;
+        if (x >= g_hits[k].x && x < g_hits[k].x + g_hits[k].w &&
+                y >= g_hits[k].y && y < g_hits[k].y + g_hits[k].h) {
+            return g_hits[k].id;
+        }
+    }
+    return 0;
 }
 
 uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
-    (void)panel; (void)x; (void)y;
-    return 0;
+    (void)panel;
+    return hit_at(x, y);
 }
 
 uint32_t recon_hit_test_active(struct recon_panel *panel, int x, int y) {
-    (void)panel; (void)x; (void)y;
-    return 0;
+    (void)panel;
+    return hit_at(x, y);
 }
 
-/* --- widgets ------------------------------------------------------------ */
+/*
+ * The widgets are not stubbed.
+ *
+ * `src/recon_widget.c` is linked for real, because a control registers its own
+ * hit region inside `recon_widget_button` -- so a stubbed widget layer is a
+ * window with no controls on it, and clicking anything by id is impossible.
+ * That is how the browser suite first failed to find the new-tab button.
+ *
+ * It costs nothing: every host-bound call it makes is already answered above.
+ */
 
-enum recon_widget_state recon_widget_caption_button(struct recon_panel *panel,
-        int x, int y, int size, uint32_t id, enum recon_widget_caption glyph,
-        recon_color behind, const char *tip) {
-    (void)panel; (void)x; (void)y; (void)size; (void)id; (void)glyph;
-    (void)behind; (void)tip;
+/* --- what the widget layer asks for underneath itself -------------------- */
+
+/*
+ * `hot` and `held` are state, not a screen, so they are kept for real -- the
+ * same reason the hit regions above are. `recon_widget_press` records which
+ * control is being held and `recon_widget_release` reads it back, and a pair
+ * of stubs that forgot in between would make every press a click on nothing.
+ */
+static uint32_t g_hot;
+static uint32_t g_held;
+
+
+uint32_t recon_panel_held(const struct recon_panel *panel) {
+    (void)panel;
+    return g_held;
+}
+
+void recon_panel_set_held(struct recon_panel *panel, uint32_t id) {
+    (void)panel;
+    g_held = id;
+}
+
+void recon_panel_set_hot(struct recon_panel *panel, uint32_t id) {
+    (void)panel;
+    g_hot = id;
+}
+
+/*
+ * The three below are arithmetic on colours and numbers with no host in them
+ * at all, and they are stubbed only because they live in `recon_ui.c` beside
+ * the drawing. Each answers the plainest thing that is still true: a state
+ * derived the way the real one derives it, a surface that does not change with
+ * the state, and a radius of zero.
+ */
+enum recon_widget_state recon_widget_state_from(uint32_t hot, uint32_t held,
+        uint32_t id, bool disabled) {
+    if (disabled) {
+        return RECON_WIDGET_DISABLED;
+    }
+    if (held == id && id != 0) {
+        return RECON_WIDGET_ACTIVE;
+    }
+    if (hot == id && id != 0) {
+        return RECON_WIDGET_HOT;
+    }
     return RECON_WIDGET_NORMAL;
 }
 
-uint32_t recon_widget_held_id(const struct recon_panel *panel) {
-    (void)panel;
+recon_color recon_widget_surface(recon_color base,
+        enum recon_widget_state state) {
+    (void)state;
+    return base;
+}
+
+int recon_button_radius(int w, int h) {
+    (void)w; (void)h;
     return 0;
 }
 
-bool recon_widget_hover(struct recon_panel *panel, uint32_t id) {
-    (void)panel; (void)id;
+void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
+        bool pressed, recon_color face) {
+    (void)panel; (void)x; (void)y; (void)w; (void)h; (void)pressed; (void)face;
+}
+
+void recon_fill_round_rect(struct recon_panel *panel, int x, int y, int w,
+        int h, int radius, recon_color color) {
+    (void)panel; (void)x; (void)y; (void)w; (void)h; (void)radius; (void)color;
+}
+
+/* No skin here has a gradient, so every role is a flat colour. */
+bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
+        recon_color *to) {
+    (void)role; (void)from; (void)to;
     return false;
 }
 
-bool recon_widget_press(struct recon_panel *panel, uint32_t id) {
-    (void)panel; (void)id;
-    return false;
+/* --- what both suites need, because the widget layer is real ------------ */
+
+recon_color recon_color_mix(recon_color from, recon_color to, uint8_t amount) {
+    return amount >= 128 ? to : from;
 }
 
-bool recon_widget_release(struct recon_panel *panel) {
+recon_color recon_color_readable_on(recon_color surface, recon_color preferred,
+        recon_color light_ink, recon_color dark_ink) {
+    (void)surface; (void)light_ink; (void)dark_ink;
+    return preferred;
+}
+
+void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
+        recon_color color) {
+    (void)panel; (void)x; (void)y; (void)w; (void)h; (void)color;
+}
+
+int recon_font_line_height(struct recon_font *font) {
+    (void)font;
+    return 16;
+}
+
+int recon_text_width(struct recon_font *font, const char *text) {
+    /*
+     * Eight pixels a character. Not a measurement of anything -- it is a
+     * number that grows with the text, which is all any layout here needs
+     * from it, and a zero would make every line infinitely wide.
+     */
+    (void)font;
+    return text != NULL ? (int)strlen(text) * 8 : 0;
+}
+
+bool recon_hit_inert(struct recon_panel *panel) {
     (void)panel;
-    return false;
+    return true;
+}
+
+bool recon_hit_tip(struct recon_panel *panel, const char *text) {
+    (void)panel; (void)text;
+    return true;
+}
+
+uint32_t recon_panel_hot(const struct recon_panel *panel) {
+    (void)panel;
+    return g_hot;
 }
 
 /* --- the shell ---------------------------------------------------------- */

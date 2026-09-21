@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.76
+    VERSION 0.4.77
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -867,6 +867,7 @@ add_test(NAME cookies COMMAND recon_cookie_tests)
 # Collapsing them signs you out of a browser and stops the music every time a
 # window is put down, and both of those shipped as bugs once already.
 add_executable(recon_appwin_tests
+    src/recon_widget.c
     tests/test_appwin.c
     tests/appwin_stubs.c
     src/recon_appwin.c)
@@ -875,6 +876,46 @@ target_include_directories(recon_appwin_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_test(NAME window-transitions COMMAND recon_appwin_tests)
+
+# The browser, with no compositor under it.
+#
+# `src/recon_web.c` is 6,433 lines and had no suite at all -- everything ever
+# checked about it was checked by photographing a running desktop.
+#
+# The real dependencies are linked wherever they are logic: the parser, the
+# stylesheet, the jar, the forms, the URL and the filesystem are all the
+# shipping files, so a page opened here is a real parse of real bytes. What is
+# stubbed is the part that puts pixels on a screen, asks the host for a font,
+# or opens a socket.
+add_executable(recon_web_tests
+    src/recon_widget.c
+    tests/test_web.c
+    tests/appwin_stubs.c
+    tests/web_stubs.c
+    src/recon_web.c
+    src/recon_appwin.c
+    src/recon_html.c
+    src/recon_css.c
+    src/recon_form.c
+    src/recon_http.c
+    src/recon_url.c
+    src/recon_cookie.c
+    src/recon_cookie_store.c
+    src/recon_sealed.c
+    src/recon_keyring.c
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_fs.c
+    src/recon_stb.c)
+
+target_include_directories(recon_web_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+target_link_libraries(recon_web_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB} m)
+
+add_test(NAME browser COMMAND recon_web_tests)
 
 # The C library the desktop will be built against when it runs on our kernel.
 #

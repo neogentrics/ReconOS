@@ -3,10 +3,10 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.4.76-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
-[![release](https://img.shields.io/badge/latest_release-v0.4.76-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.76)
+[![version](https://img.shields.io/badge/version-0.4.77-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.4.77-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.77)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-59_suites,_4475868_checks-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-60_suites,_4475883_checks-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-327-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
@@ -72,7 +72,7 @@ written down as it was hit rather than guessed at in advance.
 | **Skins** | thirteen, in four groups: the standard set, three for colour vision, two for reading, and your own. Glass comes in six colours, Metallic in eight metals, Beacon in blue or olive |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
 | **Finds things** | the Start menu's box searches programs, settings, the account's folders, the files in them, and the help — ordered by how sure the answer is |
-| **Tests** | 59 suites, counted by running them, no display needed |
+| **Tests** | 60 suites, counted by running them, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -82,7 +82,7 @@ in the Control Panel itself, page by page, and in
 
 ## Where it is at, and why
 
-**v0.4.76.** The number tracks what works, not what is planned, and it is at
+**v0.4.77.** The number tracks what works, not what is planned, and it is at
 0.4 rather than 1.0 for one reason: **the desktop does not yet run on the
 kernel.** Both halves are real and neither is finished into the other. Until a
 ReconOS kernel can hold a display and a filesystem for a ReconOS desktop, this

@@ -9,6 +9,68 @@ way for the two to disagree.
 
 ---
 
+## v0.4.77 — the browser, with no compositor under it
+
+`src/recon_web.c` is **6,433 lines and had no suite at all.** Everything ever
+checked about it was checked by photographing a running desktop — slow, needs
+a compositor, and limited to the questions a picture can answer.
+
+v0.4.76 established that `recon_appwin.c` links without one. The browser sits
+on top of it, so the same is true, and the reason is worth stating: everything
+underneath the browser that is *logic* is a real file — the parser, the
+stylesheet, the jar, the forms, the URL, the filesystem, the widget layer —
+and everything that is a *screen* is a stub. A page opened in this suite is a
+real parse of real bytes.
+
+### Clicking by id, which the live harness cannot do
+
+`scripts/look.sh` clicks at coordinates read off a screenshot. A control that
+moves makes the test click on empty space — and clicking empty space is not an
+error, **so the test goes green having done nothing.**
+
+Here `recon_appwin_hit_centre` is asked where a control *is*, by id. Drifting
+`HIT_NEWTAB` by one number fails the check that asks for it, by name.
+
+### Three failures on the first run, three different kinds of wrong
+
+- **`showing 1` with one tab is right.** `web_describe` prints `w->active + 1`
+  so it matches the number beside the tab in the list under it.
+- **`history: 0` after opening a file is right too.** `recon_web_open_path`
+  leaves `have_url` false deliberately — a document with no address has
+  nothing for a relative link to resolve against — and the history is a list
+  of addresses. Worth writing down: somebody who opens two files and presses
+  Back is going to be surprised, and the reason is a decision rather than an
+  oversight.
+- **The new-tab button could not be found, and that one was mine.** A hit
+  region is a data structure, not a screen — and my `recon_hit_add` returned
+  true while storing nothing. A stub that answers plausibly and remembers
+  nothing is the exact shape of a check that cannot fail.
+
+### The widget layer is linked, not stubbed
+
+That was the second half of the same fault. A control registers its own hit
+region *inside* `recon_widget_button`, so a stubbed widget layer is a window
+with no controls on it. Reimplementing that in the stub file would have been
+writing a second widget layer, and the first place the two disagreed would be
+the place nobody checked. `src/recon_widget.c` is 319 lines and every
+host-bound call it makes was already answered.
+
+### Proven by breaking it
+
+Drifting the hit id fails one check. Making `recon_html_title` return nothing
+fails four — so the real parser is genuinely in the loop rather than a title
+being carried along beside it.
+
+### And the stale-binary trap, again
+
+The first mutation collided with another id, the build failed, and the run
+used the previous binary and reported **15 checks, 0 failures.** Third time
+this month. The build's exit code is the thing to read, not its output.
+
+**60 suites.**
+
+---
+
 ## v0.4.76 — it was testable
 
 Joshua, after v0.4.75: *"is it testable?"*
