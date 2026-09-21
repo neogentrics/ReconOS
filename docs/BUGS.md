@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-19, and each entry says why. They are listed because a register that only
+20, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -213,6 +213,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
+- **NW-016** — Two entries name kernel versions that were never released
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -536,6 +537,58 @@ turned out to be true.
   Register offsets, the reset sequence, and the meaning of every bit are proved
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
+
+### NW-016 — Two entries name kernel versions that were never released
+
+[#546](https://github.com/neogentrics/ReconOS/issues/546)
+
+- **Found in** `docs/BUGS.md`, on 20 September 2026, by the network session, by
+  mechanising the kernel session's own rule and running it — *no entry may name
+  a version whose tree does not contain its fix.*
+- **Was** `KF-227` says *"Fixed in kernel 0.2.32"* and `KF-228` says *"Fixed in
+  kernel 0.2.33"*. **Neither number was ever set.** `git log --all -S"VERSION :=
+  0.2.32" -- kernel/Makefile` returns nothing, and so does the same query for
+  0.2.33, while the neighbour 0.2.31 returns commit `a519543`.
+
+  `KF-228`'s own text says *"the shared mapping, like its two neighbours"*, so
+  the likely history is three fixes given three consecutive numbers in prose
+  while the line was raised once. The prose ran ahead of the Makefile.
+- **What it costs.** Those two entries answer *which binary contains this fix*
+  with a binary that never existed. That is worse than answering nothing, which
+  is what NW-010 and its neighbours did before today: an absent answer sends
+  you to `git log`, and a wrong one sends you looking for a release.
+- **Found by** a check written the same hour, which is the only reason it
+  surfaced after four days: `check_versions` in `make-issues.py` now reads every
+  version named by a *fixed-in* line and refuses any that does not appear in the
+  Makefile's own history, or that is newer than the tree it sits in.
+
+  **That sentence originally quoted the field's exact spelling and the quotation
+  closed this entry.** `is_fixed` matches that spelling anywhere in a body,
+  including inside backticks, so an entry that *describes* the field acquires
+  it. `--check` caught it immediately — *"NW-016 is named as open and its own
+  entry says otherwise"* — which is the register checking itself and working.
+  Worth knowing before writing about the register in the register: it cannot
+  quote its own field syntax without meaning it.
+
+  **The check found its own bug first.** Its initial pattern was `([\d.]+)`,
+  which swallowed the full stop ending each sentence and reported eight
+  failures for versions like `0.2.32.` — all spurious. The second attempt
+  matched nothing at all and printed nothing, which looked exactly like
+  success. Neither would have been noticed from the exit code, so the pattern
+  was run against the register directly and made to name what it found before
+  the result was believed.
+- **Not fixed here, and the reason is that guessing would be worse.** These are
+  the kernel session's entries and the correct attribution is theirs to make:
+  the fixes are real and landed somewhere, most plausibly folded into 0.2.34,
+  but "most plausibly" is exactly the confidence that produced the fault.
+  Reported with the evidence instead.
+- **Only half of the rule is machine-checkable and the entry should say so.**
+  Whether a *released* version's tree really contains a given fix needs to know
+  which commit was the fix, which no script here can know. What is checkable is
+  that the version was released at all, and that no entry claims one newer than
+  its own tree. The kernel session's own case — two entries naming 0.5.0 while
+  0.5.0's tree lacked their fixes — is in the unreachable half, and was caught
+  by a person reading rather than by a script.
 
 ### NW-015 — "Twenty-five times" was wrong and unfalsifiable in the same sentence
 

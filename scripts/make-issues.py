@@ -537,6 +537,70 @@ def link_into_register(bg, number):
     return True
 
 
+def check_versions(text):
+    """Every version an entry names must be one that was actually released.
+
+    **The kernel session's rule, mechanised**: *no entry may name a version
+    whose tree does not contain its fix.* Both sessions came close to breaking
+    it on the same night -- theirs by leaving `VERSION` at 0.5.0 while two
+    entries said they were fixed in it, mine by counting past numbers nobody
+    had published.
+
+    Only the checkable half is enforced here, and the difference matters.
+    Whether a *published* version's tree really contains a given fix needs to
+    know which commit was the fix, which this file cannot know. What it can
+    check is that the version was published at all -- which catches the
+    "fixed in 0.4.1" class, where the number names nothing that ever existed --
+    and that no entry claims a version newer than the tree it sits in, which
+    catches an entry written against a bump that never happened.
+
+    It degrades to a note rather than a failure when git cannot answer. A check
+    that goes red because the repository is shallow teaches people to ignore
+    it, which is worse than not having it.
+    """
+    m = re.search(r'^VERSION := ([\d.]+)',
+                  pathlib.Path('kernel/Makefile').read_text(encoding='utf-8'),
+                  re.M)
+    current = m.group(1) if m else None
+
+    named = sorted(set(re.findall(r'\*\*Fixed in\*\* kernel (\d+\.\d+\.\d+)', text)))
+    if not named:
+        return 0
+
+    out = subprocess.run(['git', 'log', '-p', '--follow', '--', 'kernel/Makefile'],
+                         capture_output=True, encoding='utf-8', errors='replace')
+    if out.returncode != 0 or not out.stdout:
+        print('  note: could not read the Makefile history, so the versions '
+              'entries name were not checked')
+        return 0
+
+    published = set(re.findall(r'^\+VERSION := ([\d.]+)', out.stdout, re.M))
+    if current:
+        published.add(current)
+
+    def as_tuple(v):
+        try:
+            return tuple(int(x) for x in v.split('.'))
+        except ValueError:
+            return None
+
+    bad = []
+    for v in named:
+        if v not in published:
+            bad.append('%s is named by an entry and was never released' % v)
+        elif current and as_tuple(v) and as_tuple(current) and \
+                as_tuple(v) > as_tuple(current):
+            bad.append('%s is named by an entry and is newer than this tree '
+                       '(%s)' % (v, current))
+
+    for b in bad:
+        print('  ' + b)
+
+    print('  %d version(s) named by entries, %d not released'
+          % (len(named), len(bad)))
+    return 1 if bad else 0
+
+
 def check_links():
     """
     Every link in the register must resolve to an issue whose title is that
@@ -658,7 +722,7 @@ def main():
     dry = '--dry-run' in sys.argv
     if '--check' in sys.argv:
         text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')
-        sys.exit(check_links() | check_open(text))
+        sys.exit(check_links() | check_open(text) | check_versions(text))
 
     entries = parse('docs/BUGS.md')
     have = existing_titles()

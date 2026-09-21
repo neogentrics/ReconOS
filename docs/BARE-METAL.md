@@ -415,8 +415,19 @@ by measurement rather than by reading.
 | `R_RDSAR` | 0xE4 | Rx Ring Addr, 64-bit | ✔ |
 | `R_MTPS` | 0xEC | Early Tx threshold | ✔ |
 
-**Fifteen offsets, fifteen agreements, none of them previously run against
+**Fourteen agreements out of fifteen rows, none of them previously run against
 hardware.**
+
+**This said "fifteen offsets, fifteen agreements" and that was wrong**, for
+twelve lines, directly beneath a table whose own `R_TPPOLL` row reads
+*unlabelled in this dump*. That offset had nothing to agree with, so the count
+was of rows rather than of confirmations — a tally that included the line it
+could not check.
+
+Corrected with the reason attached rather than the number quietly changed,
+because the shape has now appeared four times in this project (KF-187, KF-247,
+KF-261 and here) and this is the first time in a document rather than a script.
+The session that wrote it had just written the disclaimer standing beside it.
 
 **And the kernel session's own caution, which belongs next to the table rather
 than after it:** *fifteen offsets from one part in one firmware state at one
