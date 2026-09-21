@@ -349,22 +349,43 @@
 # tree is a version nobody can use to ask *which* tree, and the whole point of
 # raising it per fix is that somebody later can.
 #
-# **0.5.4 on 20 September 2026: 0.5.0 is theirs, and four patches land on it.**
+# **0.5.6 on 20 September 2026: 0.5.0 is theirs, and six fixes sit on top of it
+# — four of them mine and two of them theirs.**
 #
 # The kernel session merged this branch at `3c73212` and called the result
 # **0.5.0** — one minor for the capability rather than one per driver, which is
 # the right arithmetic and is theirs to make. A minor zeroes the patch, so the
 # two sequences lay end to end exactly as their signal says.
 #
-# **What their 0.5.0 does not contain is the four fixes made after that commit**,
-# and they are what the .4 counts: NW-010, NW-011, NW-012 and NW-014. Verified
-# rather than assumed before this number was chosen — `netdev_primary` appears
-# zero times in their `netdev.c` and NW-010 has no entry in their register.
+# **The .6 counts what is in this tree, not what this branch wrote.** Four are
+# mine — NW-010, NW-011, NW-012 and NW-014, all made after the commit they
+# merged. Verified rather than assumed before choosing a number: `netdev_primary`
+# appears zero times in their `netdev.c` and NW-010 has no entry in their
+# register, so none of the four was already counted in 0.5.0.
+#
+# **Two are theirs and that is the part worth explaining.** `origin/kernel` sets
+# 0.5.0 in the merge commit `9e2d334` and has not touched the line since — but
+# `KF-259` and `KF-260` are fixed in the register and both commits come *after*
+# that merge, which `git merge-base --is-ancestor` confirms rather than
+# eyeballing the log. By the rule this file has followed since 0.1.x they are
+# owed two patches, and both fixes are in this tree because this branch merged
+# them.
+#
+# So this is not reserving numbers on their behalf. **A version names a tree,
+# and this tree holds six fixes since 0.5.0.** Counting only mine would say
+# 0.5.4 about a tree that also contains theirs.
+#
+# It also happens to avoid the collision, which is the 0.2.38/0.2.39 case again:
+# had this branch taken 0.5.4, their two owed patches would have landed on 0.5.1
+# and 0.5.2 — numbers this tree had already spent — and the same number would
+# mean two different trees. The precedent there was that whoever *can see* the
+# other's allocation steps over it. This branch can see theirs; they cannot yet
+# see this one.
 #
 # NW-013 and NW-015 add nothing here. NW-013 is open, and it is the boot track's
 # file to change. NW-015 changed `README.md` alone, so the binary was identical
 # and a number would have implied a difference that was not there.
-VERSION := 0.5.4
+VERSION := 0.5.6
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

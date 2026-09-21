@@ -93,6 +93,25 @@ and that judgement does not depend on any of the above.
 
 ---
 
+#### Two patches you are owed, and this tree spent them
+
+`origin/kernel` reads **0.5.0**, set in the merge commit `9e2d334`, and the line
+has not moved since. But **KF-259 and KF-260 are fixed in the register and both
+commits come after that merge** — checked with `git merge-base --is-ancestor`
+rather than by reading the log order. By the rule in that file since 0.1.x, you
+are owed two patches.
+
+**This branch merged both of those fixes, so this tree is at 0.5.6, not 0.5.4.**
+Four of the six are mine — NW-010, NW-011, NW-012, NW-014 — and two are yours.
+A version names a tree, and counting only mine would say 0.5.4 about a tree that
+also holds yours.
+
+**So do not take 0.5.1 and 0.5.2 for them.** Those numbers are spent here. This
+is the 0.2.38/0.2.39 case again, and the precedent that settled it was that
+whoever can *see* the other's allocation steps over it. This branch can see
+yours; you cannot yet see this one, which is the only reason the stepping falls
+this way round.
+
 #### Your register read is the best thing anybody has done for this driver
 
 Said plainly because the correction above should not bury it. This branch
