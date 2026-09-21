@@ -171,7 +171,9 @@ ok "$(echo "$bad" | grep -c 'Nothing was written')" \
 good=$(python3 - "$port" "$token" <<'PY'
 import socket, sys
 port, token = int(sys.argv[1]), sys.argv[2]
-body = "name m17\nclock time.example\n"
+body = ("name m17\nclock time.example\n"
+        "[site shop.example]\nroot /System/Web\n"
+        "[site gone.example]\nroot /System/NotThere\n")
 req = ("POST /api/config HTTP/1.1\r\nHost: m16\r\n"
        "Authorization: Bearer %s\r\nContent-Type: text/plain\r\n"
        "Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (token, len(body), body))
@@ -254,6 +256,106 @@ ok "$(echo "$after" | grep -c '"name":"m17"')" \
 ok "$(tr -d '\r' < "$log" | grep -c 'the configuration: name m17')" \
    "and said so on its console as it started" \
    "$(tr -d '\r' < "$log" | grep 'configuration' | head -3)"
+
+#
+# --- and the thing VF-028 said was not proved on the machine ----------------
+#
+# 0.24.0 built name-based virtual hosts and said plainly what its own
+# verification did not cover: *a second named site. `server_init.c` configures
+# one site with no name, so what a boot shows is that adding the dispatch
+# changed nothing for a server that has one site.*
+#
+# Everything needed to close that arrived later and separately: a configuration
+# file (0.25.0), and a way to write one over the network (0.33.0). The site
+# above is configured, not compiled, and this is a machine that was told about
+# it by HTTP and then restarted.
+#
+# The two sites are told apart by what they serve rather than by a header. The
+# console answers `/` from a handler that builds the dashboard; the named site
+# answers it from `/System/Web/index.html` on the volume. Same path, same
+# machine, two documents.
+#
+# `/System/Uploads` would have been the tidier root to demonstrate with and is
+# deliberately not used: `server_init.c` says nothing serves that directory,
+# and a test that pointed a site at it would be quietly removing the property
+# it was written to keep.
+#
+hosts=$(python3 - "$port" <<'PY'
+import socket, sys
+port = int(sys.argv[1])
+
+def ask(host):
+    s = socket.create_connection(("127.0.0.1", port), 15); s.settimeout(15)
+    s.sendall(("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n"
+               % host).encode())
+    got = b""
+    while True:
+        d = s.recv(65536)
+        if not d:
+            break
+        got += d
+    s.close()
+    head, _, body = got.partition(b"\r\n\r\n")
+    which = ("volume" if b"It works." in body
+             else "console" if b"ReconOS Server" in body
+             else "other")
+    return "%s=%s/%d" % (host, which, len(body))
+
+print(" ".join(ask(h) for h in ("shop.example", "not-a-site.example",
+                                "10.0.2.15")))
+PY
+)
+echo "  $hosts"
+ok "$(echo "$hosts" | grep -c 'shop.example=volume')" \
+   "a configured site serves the volume's own file" "$hosts"
+ok "$(echo "$hosts" | grep -c 'not-a-site.example=console')" \
+   "a name no site claims still reaches the console, which has no name" \
+   "$hosts"
+ok "$(echo "$hosts" | grep -c '10.0.2.15=console')" \
+   "and so does this machine's own address, which is how it is reached" \
+   "$hosts"
+
+#
+# --- a site that parses and is still wrong ----------------------------------
+#
+# `/System/NotThere` is a perfectly good path and is not on this volume.
+# `config.c` cannot catch that -- it is pure, and the volume is not its
+# business -- so the configuration is accepted and the site answers 404 to
+# everything.
+#
+# The machine cannot refuse it either: the directory might be populated later,
+# and refusing to boot over a directory that does not exist yet would be worse
+# than serving nothing from it. What it can do is **say so**, once, where
+# somebody will see it. This is the *parses and is still wrong* case, which is
+# the one thing left in the configuration ask to the kernel session.
+#
+ok "$(tr -d '\r' < "$log" | grep -c 'WHICH HAS NO READABLE INDEX')" \
+   "a site whose root is not there is named on the console at boot" \
+   "$(tr -d '\r' < "$log" | grep 'the configuration: site' | head -3)"
+ok "$(tr -d '\r' < "$log" | grep -c 'site shop.example from /System/Web$')" \
+   "and the one that is there is not" \
+   "$(tr -d '\r' < "$log" | grep 'the configuration: site' | head -3)"
+
+readable=$(python3 - "$port" "$token" <<'PY'
+import socket, sys
+port, token = int(sys.argv[1]), sys.argv[2]
+s = socket.create_connection(("127.0.0.1", port), 15); s.settimeout(15)
+s.sendall(("GET /api/config HTTP/1.1\r\nHost: m16\r\n"
+           "Authorization: Bearer %s\r\nConnection: close\r\n\r\n"
+           % token).encode())
+got = b""
+while True:
+    d = s.recv(65536)
+    if not d:
+        break
+    got += d
+s.close()
+print(got.split(b"\r\n\r\n", 1)[1].decode("latin-1").strip())
+PY
+)
+ok "$(echo "$readable" | grep -c '"index_readable":false')" \
+   "and a program can ask, rather than having to read a console it cannot see" \
+   "$readable"
 
 stop
 

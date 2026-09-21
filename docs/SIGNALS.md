@@ -764,7 +764,7 @@ before the capture rather than after. VF-042.
 
 ## Status of this branch
 
-**server 0.35.0**, merged from `origin/kernel` (kernel **0.5.0**), plus the
+**server 0.36.0**, merged from `origin/kernel` (kernel **0.5.0**), plus the
 one socket fix below that is still not theirs. **1467 checks across twenty-four suites** on the host, **86 on a booted
 machine** and **13 across two boots**, green. Both
 roles build.

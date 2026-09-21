@@ -183,6 +183,7 @@ static struct server_facts FACTS;
  */
 struct config_summary {
 	int      read;			/* a file was found and parsed */
+	int      site_reachable[CONFIG_SITES_MAX];
 	unsigned long generation;	/* which one, or 0 for none */
 	unsigned long next;		/* the number a write would use */
 	int      legacy;		/* read from the 0.25.0 path instead */
@@ -1240,8 +1241,10 @@ static int handle_config(const struct http_request *r, const char *body,
 		if (!host || !root)
 			return HTTP_EINTERNAL;
 		m = snprintf(answer + n, sizeof(answer) - (size_t)n,
-		             "%s{\"host\":\"%s\",\"root\":\"%s\"}",
-		             i ? "," : "", host, root);
+		             "%s{\"host\":\"%s\",\"root\":\"%s\","
+		             "\"index_readable\":%s}",
+		             i ? "," : "", host, root,
+		             IN_FORCE.site_reachable[i] ? "true" : "false");
 		if (m < 0 || (size_t)(n + m) >= sizeof(answer))
 			return HTTP_EINTERNAL;
 		n += m;
@@ -2648,9 +2651,48 @@ static void configure(void)
 	if (CONF.site_count) {
 		chain_sites(&CONF);
 		for (i = 0; i < CONF.site_count; i++) {
+			/*
+			 * Does this site have anything to serve?
+			 *
+			 * `config.c` checks that a root is a plausible
+			 * absolute path and cannot check that it **exists** --
+			 * it is pure, and the volume is not its business. So a
+			 * configuration that parses perfectly can name a
+			 * directory that is not there, and the only symptom is
+			 * every request to that site answering 404. Nothing
+			 * says why.
+			 *
+			 * That is the *parses and is still wrong* case this
+			 * seat described to the kernel session, and while the
+			 * machine cannot refuse it -- the directory may be
+			 * populated later, and refusing at boot would be worse
+			 * than serving nothing -- it can say so out loud, once,
+			 * where somebody reading the console will see it.
+			 */
+			char probe[CONFIG_VALUE_MAX * 2 + 2];
+			i64 fd;
+			int at = 0;
+			size_t k;
+
+			for (k = 0; CONFIGURED_ROOTS[i][k]; k++)
+				probe[at++] = CONFIGURED_ROOTS[i][k];
+			probe[at++] = '/';
+			for (k = 0; CONFIGURED_INDEX[i][k]; k++)
+				probe[at++] = CONFIGURED_INDEX[i][k];
+			probe[at] = 0;
+
+			fd = recon_open_path(probe, OPEN_READ);
+			if (fd >= 0) {
+				recon_close((int)fd);
+				IN_FORCE.site_reachable[i] = 1;
+			}
+
 			snprintf(line, sizeof(line),
-			         "  the configuration: site %s from %s\n",
-			         CONFIGURED_HOSTS[i], CONFIGURED_ROOTS[i]);
+			         "  the configuration: site %s from %s%s\n",
+			         CONFIGURED_HOSTS[i], CONFIGURED_ROOTS[i],
+			         IN_FORCE.site_reachable[i] ? ""
+			           : "  -- WHICH HAS NO READABLE INDEX, so"
+			             " this site will answer 404");
 			say(line);
 		}
 		say("  the configuration: the console answers to every other"

@@ -1814,3 +1814,65 @@ nothing, but it has answered    HTTP_KEEPALIVE_MS   10000   a client deciding
   the pair that should be reached for again: **the guest's own counter against
   the client's**, which turns "a flake" into "it answered and I did not hear",
   and then a capture.
+
+### VF-043 -- the gap VF-028 wrote down, closed by two versions that were not about it
+
+- **What VF-028 admitted, in 0.24.0** Under *what is not proved on the
+  machine*: **a second named site.** `server_init.c` configured one site with
+  no name, so a boot showed only that adding the dispatch had changed nothing
+  for a server that has one site. The chain itself was proved over a real
+  socket in the host suite, which is the standard everything else here is held
+  to -- and the machine was not asked.
+- **Nothing was built for this.** What closed it arrived separately and for
+  other reasons: a configuration file in 0.25.0, and a way to write one over
+  the network in 0.33.0. The site below is **configured rather than compiled**,
+  on a machine that was told about it by HTTP and then restarted.
+- **Measured, on the second boot of `scripts/config-round-trip.sh`:**
+
+```
+shop.example         volume/564
+not-a-site.example   console/2588
+10.0.2.15            console/2680
+```
+
+  Same path, same machine, two documents. The two sites are told apart by what
+  they serve rather than by a header: the console answers `/` from a handler
+  that builds the dashboard, and the named site answers it from
+  `/System/Web/index.html` on the volume.
+- **`/System/Uploads` would have been the tidier root to demonstrate with, and
+  is deliberately not used.** `server_init.c` says that nothing serves that
+  directory and gives the reason. A test that pointed a site at it would have
+  been quietly removing the property it was written to keep, and would have
+  passed.
+- **There is no 421 here, and that is correct rather than missing.** The
+  console site has no name and claims everything that reaches it, so on this
+  machine no name is unclaimed. The 421 path is proved over a socket in
+  `test_http_serve.c`, against a chain with no default -- which is a
+  configuration this server cannot be given, because the console is built in
+  and always last.
+
+- **And the other half: a site that parses and is still wrong.** `config.c`
+  checks that a root is a plausible absolute path and **cannot** check that it
+  exists -- it is pure, and the volume is not its business. So a configuration
+  that parses perfectly can name a directory that is not there, and the only
+  symptom is that every request to that site answers 404 with nothing saying
+  why.
+- **The machine cannot refuse it and can say it.** Refusing at boot would be
+  worse than serving nothing: the directory may be populated afterwards, and a
+  machine that will not start over a missing directory is a machine somebody
+  has to walk to. So each configured site's index is opened once at boot, and
+  the console says:
+
+```
+the configuration: site shop.example from /System/Web
+the configuration: site gone.example from /System/NotThere  -- WHICH HAS NO
+                   READABLE INDEX, so this site will answer 404
+```
+
+  and `GET /api/config` carries `index_readable` per site, so a program can ask
+  rather than needing a console it cannot see.
+- **This is the *parses and is still wrong* case**, which is the one thing left
+  in the configuration ask to the kernel session. It does not close that ask --
+  a port nothing can reach still cannot be undone from the network -- but it
+  removes the commonest instance of it from the class of faults that are
+  silent.
