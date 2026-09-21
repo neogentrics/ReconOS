@@ -564,10 +564,14 @@ static void test_it_is_not_every_cookie(void) {
      * browser uses `closed` instead, which fires from `recon_appwin_hide`
      * alone.
      *
-     * That dispatch needs a window and a server, so the check on it is
-     * `scripts/cookie-survives-shot.sh`, which minimizes a real browser and
-     * photographs what comes back. What is left for here is the half that
-     * this function owns: that it is a scalpel and not `forget_all`.
+     * That dispatch is `tests/test_appwin.c`, which runs the real
+     * transitions and checks that a minimize fires `visibility` alone -- I
+     * wrote here first that it needed a window and a server and could only be
+     * photographed, and that was wrong. `scripts/cookie-survives-shot.sh`
+     * still earns its place: it is what sees that clicking the X reaches
+     * `recon_appwin_hide` at all, and that this browser is attached to the
+     * hook. What is left for *here* is the half this function owns: that it
+     * is a scalpel and not `forget_all`.
      */
     struct recon_cookie_jar *jar = recon_cookie_jar_new();
 

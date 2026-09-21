@@ -1,108 +1,88 @@
-The board's *form-gaps* row named two things this viewer still could not do.
-Rather than working from the row, I asked the tree: for every member of
-struct recon_html_field and struct recon_html_form, which ones does nothing
-outside the parser ever mention?
+v0.4.65 found required by hand: listing the members of one struct and asking
+which ones nothing outside the parser mentions. The finding was not
+required. The finding was the question.
 
-One had nobody at all.
+scripts/knows-and-does-not-do.py asks it of every struct in
+include/.
 
-### required was read and never looked at again
+### The first version was wrong, which is most of what the script is
 
-Every page that marks a box as required has been telling this browser so, and
-the answer was stored and dropped. Somebody leaves it empty, presses Send, the
-request goes — and the server refuses it and answers with a page saying which
-field was missing. So they *are* told, eventually, by a round trip, in whatever
-words the server chose. The page had said so before anything was sent.
+It reported four findings. The first one checked was a false positive —
+usage on a command registration is read by src/recon_cmd.c, which reaches
+the struct through recon_modules.h rather than including recon_module.h
+itself. Following includes transitively turned all four into nothing.
 
-That was never a decision anybody took. There is no comment anywhere saying
-"not yet"; it is simply an attribute that was parsed because it was there.
-Which is the shape worth remembering: a gap with a note beside it is a gap
-somebody chose, and this one had no note.
+Then a worse fault, and the one worth writing down. The question it asked was
+*"does anything read this member"*, and it counted the file that fills the
+member in as a reader. So required, whose only mention outside the header
+was f->required = has_attribute(...), looked read. The check could not
+fail, which is worse than not having it — and this project has now hit that
+exact shape often enough that finding it in my own instrument is unsurprising
+rather than embarrassing.
 
-### What "answered" means, five times over
+The question it asks now is sharper and needs no convention about which source
+owns which header: is every mention of this member an assignment? A member
+that is only ever written is precisely a thing the system records and never
+acts on.
 
-Each kind means something different, and getting it wrong in either direction
-has its own cost — too strict and a form cannot be sent at all, too loose and
-the check is decoration:
+### Checked the only way an instrument can be
 
-- A text box or <textarea>: it holds something.
-- A checkbox: it is ticked.
-- A file control: a file has been chosen.
-- A <select>: what is chosen has a value. The first option of a menu
-  is very often <option value="">Choose one</option>, and that is exactly
-  what required is there to catch — treating "something is highlighted" as an
-  answer would make every required menu pass.
-- A radio: *any* member of its group is on, the group being every radio in
-  that form sharing its name. Asking only about the one that carries the
-  attribute would refuse a form where somebody had chosen a different member of
-  the same set, which is the ordinary case.
+Run against the commit before required was enforced, it finds required.
+Run against the commit after, it does not. A check that can fail.
 
-A control the page never draws — a type=hidden, or one a stylesheet put out
-of the way — does not hold the form up. display:none on a required field is
-how a page turns one off, and treating it as missing would make those pages
-unsendable.
+### What it found
 
-And there is no way past it, which is this project's rule about checks
-generally. A page that marks something required and gives no way to fill it in
-is a page that cannot be submitted here. The alternative is sending a request
-the server refuses anyway, with the failure moved somewhere nobody can see it.
+Eight members, and one of them had a consequence somebody could see.
 
-### The caret goes with the sentence
+recon_app_info.close_requested — written by recon_apps.c, read by
+nothing.
 
-"This form needs Your name before it can be sent" — and the caret is already in
-the box. A message that says which field is empty and leaves somebody to find
-it is half an answer, and this viewer knows where it is.
+An application is only called *not responding* once it has been asked to close
+and has ignored the request for five seconds. That number is right: long enough
+that a program saving a file is not accused of hanging.
 
-The name is the placeholder first, because that is the words the person
-actually saw: a box labelled "Your email address" is that, not user_email.
-The name is what the server calls it and is the fallback.
+What was wrong is what the task manager said in the meantime. Close was
+pressed, the request went, and the State column carried on saying Running —
+identical to a moment before, and to every other application on the list.
+Nothing anywhere said that anything had been asked. So the five seconds read as
+a button that had not worked, and the obvious thing to do about that is press
+it again.
 
-### And a control may now name a form further down the page
+It says Closing now. The information was already there.
 
-form= exists so a page can put a search box in a header and its form in a
-footer. The lookup searched the forms met so far — so naming one already
-read worked, and naming one further down attached the control to nothing.
+### The other seven, reported rather than fixed
 
-Which is the case the attribute is *for*. And the failure is silent: the box
-draws, it types, and Send says there is nowhere to send it.
+- recon_ocr_match.score, runner_up, runner_up_score — the matcher decides
+  with local values and stores these for a caller that does not exist. The
+  header says the runner-up is *carried* because the gap between the two is
+  most of what confidence means, and carried is exactly what it is.
+- recon_ocr_result.lines, recon_mail_message.size,
+  recon_process.session, recon_widget_button.behind — each is a figure this
+  system has and shows nobody. None of them is wrong; each is a small thing a
+  page could say and does not.
 
-There were four identical copies of that lookup. They are one now, and it
-runs once the page has been read and every form is known. A name matching
-nothing leaves the control where it already was, so a mistyped form= behaves
-like the attribute not being there.
+They stay on the list, which is the point of the list.
 
-### One thing the row got wrong
+### A client that declines to close
 
-It also said a value longer than the system's text field "refuses to be edited"
-as though that were a gap. It is a refusal, it was deliberate, and it has said
-so out loud since v0.4.52: *"That field already holds more than N characters, so
-it cannot be edited here. It is still sent exactly as the page wrote it."*
-Cutting it would change what the form sends. The row was describing finished
-work.
+None of this was watchable. tests/decor_client.c exits the moment it is asked
+to go, so every close in this system was instant and the whole path after it —
+Closing, then Not responding, then the offer to force — could not be reached
+from outside.
 
-### Whether a control is drawn is recorded now
+--ignore-close keeps the window up. That is a real thing rather than a
+contrivance: a program with unsaved work is entitled to put a question up
+instead of going, and what the desktop does about a window that will not leave
+is worth being able to watch.
 
-recon_html_field gained drawn. A hidden control and a stylesheet-hidden one
-are both still *sent*, which is why they are fields at all — so this is not the
-same question as disabled, and the only way to work it out afterwards was to
-search every run for one pointing at the field. That is a decision the parser
-has already taken: it has the stylesheet, and it is the thing that chose not to
-write the run.
+scripts/closing-state-shot.sh photographs both states one second and eight
+seconds after End Task. The coordinates in it were read off the running program
+with ui hits rather than guessed.
 
-### What proves it
+### The numbers
 
-250 checks in test_html.c, up from 237.
-
-And two photographs, because the required check lives in src/recon_web.c and
-no headless suite links the browser. scripts/form-required-shot.sh runs a real
-desktop against a real page: Send with the box empty leaves the form where it
-is with the status line naming it, and the same form filled in goes —
-?name=Joshua&note=&how=friend&terms=on, the optional note empty and sent
-anyway. One picture would have proved half of it; a check that refused every
-form would pass a photograph of one refusal.
-
-One fixture fault found on the way and worth keeping: the answer page was first
-served with no extension, so it came back as application/octet-stream and the
-viewer showed the source — correctly, and confusingly. The fixture names it
-.html now.
+70 members could not be told apart from another struct using the same name,
+and the script says so rather than guessing. That is the honest edge of a
+text-matching instrument in a language with no types to ask.
 
 ---

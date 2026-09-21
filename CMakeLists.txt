@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.75
+    VERSION 0.4.76
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -852,6 +852,29 @@ target_link_libraries(recon_cookie_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 add_test(NAME cookies COMMAND recon_cookie_tests)
+
+# Which callbacks a window transition fires, with the real `recon_appwin.c`
+# and no compositor under it.
+#
+# I wrote twice that this needed a window and a server and could only be
+# checked by driving a live desktop. It does not: `struct recon_server` is
+# opaque to that file and only ever tested against NULL, and `struct
+# recon_panel` never leaves its hands -- so `tests/appwin_stubs.c` is the whole
+# of what stands between it and a link.
+#
+# The distinction it holds is the one v0.4.74 and v0.4.75 both turned on:
+# `closed` on a close, `visibility(false)` on a close *and* a minimize.
+# Collapsing them signs you out of a browser and stops the music every time a
+# window is put down, and both of those shipped as bugs once already.
+add_executable(recon_appwin_tests
+    tests/test_appwin.c
+    tests/appwin_stubs.c
+    src/recon_appwin.c)
+
+target_include_directories(recon_appwin_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_test(NAME window-transitions COMMAND recon_appwin_tests)
 
 # The C library the desktop will be built against when it runs on our kernel.
 #

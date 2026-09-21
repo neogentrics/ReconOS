@@ -1,33 +1,81 @@
-The History entry in the menu reported a count in the status bar, which is not
-a history. Both are now pages the browser builds and then reads.
+Installing was trusting whoever handed the folder over. A package brings a
+module, a module is a shared object loaded into this process, and a module in
+this process can do everything ReconOS can do. The allow-list bounds where a
+package may *place a file* and says nothing at all about what its code does
+once running -- it was never meant to.
 
-Not a panel, a dialog or a list widget, because a page is something this
-program already does completely: lay out, scroll, colour to the skin, search
-with the find bar, and -- the part that matters -- make every entry a link
-that already works. A list widget would need its own layout, its own scrolling
-and its own click handling, none of it shared with the three that exist. The
-markup is generated and parsed rather than turned straight into blocks, for
-the same reason: the parser is the one place that decides what a document is.
+This was left on purpose until the keyring had been read, because adding a
+second piece of unattended crypto before the first had been looked at would
+have compounded the debt rather than reduced it. Joshua lifted that.
 
-History is newest first, which is the order somebody looking for where they
-just were wants, and the opposite of the order Back and Forward use. The page
-you are on is marked rather than left as a link to itself.
+ECDSA over P-256, SHA-256, from mbedTLS. Ed25519 would be the better
+choice and is not available: mbedTLS 2.x has Curve25519 for key agreement
+only, which cannot sign. A correct P-256 signature is worth more than an
+Ed25519 one this would have had to write itself.
 
-And it found a bug the moment it was looked at (BG-169). The list said
-https://gaming.recontowers.com/example.com. go_typed was resolving what
-was typed against the page being read -- the same way a link on that page is
-resolved. A link on a page is relative to it; text typed into an address bar
-is not. So once you were on any page at all you could not reach a different
-site by typing its name, only paths on the site you were already on.
+There is no random per-signature secret. ECDSA's k is the whole of its
+danger -- reuse it under one key for two messages and the private key falls
+out with school algebra, which is how the PlayStation 3's signing key was
+published, and a *biased* k is nearly as bad and much harder to notice.
+mbedTLS is built with MBEDTLS_ECDSA_DETERMINISTIC, so k comes from the key
+and the message by way of HMAC-DRBG (RFC 6979) and there is no randomness that
+can fail quietly and take the key with it. Since that is a property of how the
+library was built and not of this code, recon_sign.c refuses to compile
+without it rather than falling back to the randomised form and being weaker in
+a way nobody would see.
 
-It had been there since the address bar existed, and survived because every
-test of it typed into a *fresh* tab, which has no page to be relative to. The
-same shape as the last two bugs: a check written against the one case somebody
-happened to try. A path or a fragment is still resolved against the page --
-"/about" and "#notes" have nowhere else they could mean.
+What a signature covers is a digest list, not the manifest. Signing the
+manifest alone binds the *names* of the files and none of their contents,
+which leaves the module free to be replaced -- and the module is the only file
+that can do anything. So the signed bytes are one line per file, sorted, with
+the manifest first. Sorted because the order a directory hands back its
+entries is not a property of the package, and two machines must build the same
+bytes from the same folder.
 
-Worth recording how it was found: not by a test and not by reading, but by
-building a screen that shows the data. A list of visited addresses is a thing
-you look at, and a wrong one is obvious the moment it is on screen.
+And there is no --force. A check that can be turned off is off on the day
+it matters, and the person who would reach for the flag is exactly the person
+being attacked. Somebody who means to install something unsigned signs it,
+which is one command and is the point.
+
+A machine makes its own key on first run. That is not a weakening -- the
+key is generated locally and its private half is written mode 600 -- and it is
+what makes the refusal actionable. A machine that trusts nothing installs
+nothing, which is correct and is a terrible first experience if the way out is
+a command nobody has a reason to know exists. Now sign always works, and the
+refusal names it.
+
+Three commands: keys lists what the machine trusts and whether it can sign,
+keys make / keys trust / keys distrust change that, and sign <folder>
+puts this machine's name on a package. Distrusting a key stops what it signed
+from *installing*; it does not uninstall what is already there, and says so,
+because that code is already on the disk and pretending otherwise would be
+theatre.
+
+Two suites, and a note about the second. signatures tests what
+recon_sign.c decides rather than what mbedTLS does -- that a changed byte
+stops verifying, that an untrusted key does not count, that a private key
+cannot be added to the trust store, that a key name cannot escape the trust
+directory. One of its checks is load-bearing in a way that is easy to miss:
+signing the same bytes twice must give the same signature, which is the RFC
+6979 property, and is what would notice if the #error above were ever
+removed.
+
+package-signatures tests that the signature covers the module and not only
+the manifest. There was no suite for packages at all before this, which
+meant the install path was the least tested thing in the system.
+
+### And what the keyring review found
+
+Reading outward from recon_keyring.c to what its callers do with what they
+are handed. The keyring itself holds up -- see the commit for the full
+list, but the short version is that every decision in it is the right one and
+recon_from_hex even validates its length, so a truncated nonce is rejected
+rather than zero-padded.
+
+What did not hold is BG-170: two places cleared a secret with memset where
+nothing reads the buffer afterwards, which makes the store dead and lets the
+compiler delete it. It does. scripts/check.sh now fails on any memset of
+something named like a secret, because no test and no sanitizer can see the
+difference.
 
 ---

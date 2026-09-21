@@ -15,6 +15,11 @@
 # it happens while the jar still has anything in it, and that the keyring is
 # open at the moment it runs.
 #
+# One of those got smaller. `tests/test_appwin.c` (v0.4.76) holds the dispatch
+# -- that a close fires `closed` and a minimize does not -- so what is left
+# here is the wiring above it and the keyring below it, which is still more
+# than enough to justify a live run.
+#
 # --- The password is not optional here ---
 #
 # The keyring derives its key from the account password, so an account without

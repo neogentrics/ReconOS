@@ -1,75 +1,86 @@
-46 of 80 sources built with no Linux underneath. 52 do now, and not one of
-the six was a library gap.
+The kernel has had SYS_KILL, SYS_SIGACTION, SYS_SIGMASK and
+SYS_SIGRETURN since before the desktop could compile for it at all. Nothing
+in userland/ could reach them.
 
-include/recon_server.h is the compositor: a wlroots scene, a seat, an output
-layout, a cursor manager, an xdg shell and a dozen wl_listeners. Five of
-the desktop's applications were including all of it for one field.
+userland/include/signal.h and userland/libc/signal.c are the two halves the
+desktop asks for: sending one — End Task is kill(pid, SIGTERM) and the
+second press is SIGKILL — and saying what to do about one, which is
+recon_error.c installing a handler for the four faults that mean the system
+stopped, writing a code somebody can read, and letting the default handler
+finish the job.
 
-| what it wanted | files |
-|---|---|
-| server->shell | File Explorer, Help, Control Panel |
-| and the screen size | Control Panel |
-| nothing at all | Calendar, Mail |
+### The restorer is the whole of the difficulty
 
-The last row is the flattest version of it: recon_calendar.c and
-recon_mailwin.c include recon_server.h, write struct recon_server * in
-one prototype each, and pass it along — and recon_appwin.h has forward-
-declared that name all along. The include was doing nothing. Deleting it
-builds both files.
+SYS_SIGACTION refuses a handler without one, and the kernel's comment says
+why: *"a handler with nowhere to return to runs once and then executes
+whatever follows it in memory."*
 
-include/recon_server_facts.h is the seam for the other three: they ask for
-the shell and the screen size rather than reaching in, and the implementation
-is the one file that includes both headers — which is where the wayland stops.
-recon_background_reload moved there too, because setting the wallpaper is
-something an application asks for rather than something the compositor keeps
-to itself.
+So the library has to build one, and it has to be machine code — there is no
+C for "return through a system call". Two instructions per architecture, in
+a top-level __asm__ block rather than a naked function, because naked is
+not available everywhere and a function that merely *looks* empty still gets a
+prologue that would run first.
 
-### And the same shape a third time in two days
+It is not in signal.c, and the layering is what said so. internal.h
+deliberately does not pull in recon.h — the library talks to recon_sys_*,
+not to the raw calls — so signal.c could not see SYS_SIGRETURN and the
+build stopped. The restorer belongs with the system calls: its entire content
+*is* a system call, libc/syscalls.c is the file that has them, and it is the
+file hostsys.c replaces wholesale on a host. Which also answers what the
+host does: it provides one that aborts, because reaching it would mean a
+handler returned through a frame SYS_SIGRETURN did not write.
 
-- v0.4.42 — recon_ui.h included xkbcommon for one typedef, and held
-  twenty-four files.
-- v0.4.44 — recon_ui.c had twenty-eight lines of wlroots holding three
-  thousand lines of drawing.
-- This one — a header describing a compositor, included by files that
-  wanted a pointer.
+The number in that assembly is checked by the compiler. A literal in an
+__asm__ block is exactly the kind of hand-written syscall number
+scripts/check-syscall-numbers.py exists to police and cannot see, so a
+_Static_assert holds it against the enum. If the numbers shift, the file
+stops building rather than returning into the wrong call.
 
-None was a design problem and none was a missing library. Each was an
-include, and each was found the same way: by offering files to a compiler
-instead of reading them.
+### 30 checks, against the host's
 
-### The check was stricter than the build, which is the same fault reversed
+hostsys.c answers the three primitives with POSIX kill and sigaction, so
+a handler installed through ReconOS's signal() is installed with the real
+delivery machinery underneath: raising the signal has to actually run the
+handler, in a real process, at a real moment. Twice, because a handler that
+runs once and then does not is what a missing re-arm looks like.
 
-src/recon_explorer.c came free of recon_server.h and still failed — on two
-unused callback parameters. CMakeLists.txt sets -Wno-unused-parameter
-deliberately; check-userland.sh did not.
+And the differences are held to on purpose:
 
-That check's own header carries the rule in the other direction: *"a predictor
-with looser rules than the thing it predicts is worth less than no
-predictor"*, written after a probe put a file on a list the check then refused.
-The converse costs the same way round: a check stricter than the build
-rejects files that would build, and answers a question nobody asked. It uses
-the build's flags now.
+- SIGKILL is refused here rather than passed down. The kernel refuses it
+  too — that is the point of one signal that cannot be caught — and refusing at
+  this end means the same errno whichever side says no.
+- Signal zero is refused, not used as POSIX's "does this process exist"
+  probe. The kernel takes a signal to deliver and this is not one.
+- The previous handler is what this library last installed, because
+  SYS_SIGACTION answers whether it accepted a change and not what was there
+  before. Stated in the header, and held by four checks.
 
-### And pid_t, which had been measured and left out
+What the suite cannot reach is the restorer — glibc has its own and
+hostsys.c drops ours, so every check passes whether that assembly is right or
+wrong. Written into both files rather than left to be assumed: a green suite
+over signals reads like coverage of signals, and this one covers everything
+except the part that is hardest to get right. What settles that is a program
+in ring 3, the same way the socket claim was settled.
 
-It was tried on 15 September and left out on the grounds that every file
-wanting it was behind wayland-server-core.h anyway — measured, correct, and
-it stopped being true the same afternoon, because two of those files were
-reaching wayland only through an include they did not use. A typedef nobody
-can use does not belong in a header; one two files need does.
+### And _exit, which is the one a handler may call
 
-### What is left
+exit here runs no atexit handlers and flushes no streams, so today the two do
+the same thing. Written as its own function anyway, so that when there *is*
+something for exit to run, adding it does not silently add it to the one
+signal handlers are allowed to use.
 
-Four files still reach recon_server.h, and three of them want something that
-really is wayland's:
+### Two files left off the list on purpose
 
-| file | what it wants | why it is different |
+52 of 80 became 53, not 55, and the two that did not go on are the point.
+
+Both would compile if handed a header. Compiling is not what the check
+asks. It asks whether a file could *run* on ReconOS, and a file that builds
+because it was given a declaration for something this system answers with a
+refusal has a worse answer than one that does not build — it looks ready.
+
+| file | what it wants | why giving it that would be wrong |
 |---|---|---|
-| recon_cmd.c | toplevels | a wl_list of windows — needs a way to walk the open windows that is not a wayland list |
-| recon_photos.c, recon_player.c | wl_display | a timer — *"call me back in N milliseconds"*, which is a seam worth having and is not this one |
-| recon_server_facts.c | all of it | by design; it is the file where the wayland stops |
-
-Behind those: fifteen files that are the compositor itself, eight wanting one
-missing thing each, and one wanting a hosted <math.h>.
+| recon_control.c | <sys/time.h> for struct timeval | it uses it with setsockopt(SO_RCVTIMEO), and this library refuses every setsockopt option. The timeout exists to stop a peer that connects and says nothing from freezing the thread drawing the desktop. Compile it and the freeze comes back with nothing saying so. |
+| recon_procinfo.c | sysconf(_SC_CLK_TCK) | to divide numbers it read out of /proc. There is no /proc here; the file is a Linux scraper top to bottom, and it is on the KERNEL-WANTS list as *Processes*, not on this one. |
 
 ---

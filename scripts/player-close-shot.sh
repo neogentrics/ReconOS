@@ -4,11 +4,15 @@
 #
 # --- Why this is a live run and not a suite ---
 #
-# What `stop_playing` does is testable in a suite; **whether anything calls it
-# when somebody closes the window** is not. That call is made by the window
-# seam, from a click on a title bar, through an application's `closed` hook --
-# none of which a headless suite links. The same hole the browser's jar was
-# sitting in, in a different application.
+# What `stop_playing` does is testable in a suite, and so -- since v0.4.76 --
+# is the dispatch that reaches it: `tests/test_appwin.c` runs the real window
+# transitions against stubs and holds the rule this turns on, that a minimize
+# fires `visibility` and never `closed`.
+#
+# **What no suite links is the wiring.** That a click on the title bar reaches
+# `recon_appwin_hide`, that the taskbar and Show Desktop agree with it, and
+# that this application is attached to the hook at all. That is what this
+# drives, and it is the half the player was broken in.
 #
 # --- Both halves, and the second is the one worth having ---
 #

@@ -1,62 +1,43 @@
-recon_net.c from 30.73% to 65.92%, and the eighteen functions nothing had
-ever run are five. What is left is TLS and two three-line timeout callbacks.
+68 of 68, and the port is out of accidents. What does not build with no
+Linux underneath is seventeen sources and 12,090 lines, and every one of them
+is the compositor, a wayland half of a seam, a third-party library, or a file
+left off on purpose.
 
-### The loop had half an interface
+### The blocker was not in our code
 
-include/recon_loop.h says there is no poll in it on purpose, and that
-whoever owns the loop knows how it finds out. That was half an interface:
-it told an owner to go and find out and never said *what about*. A loop keeps
-the list of descriptors and what each is waiting for, and with no way to read
-it back an owner has to keep a second copy — which is a second thing to keep in
-step, and the one that drifts is the one deciding whether a socket gets polled.
+scripts/port-blockers.sh reported sys/mman.h against src/recon_codec.c,
+857 lines, zero markers. The include is not in that file. It is in
+third_party/minimp3_ex.h, inside #ifndef MINIMP3_NO_STDIO.
 
-recon_loop_watch_count and recon_loop_watch_at. Ask the loop, build a poll
-set, hand the answers back. That is what the test does and it is what
-userland/ will do on ReconOS with whatever call it ends up having — so the
-path being exercised is the path that will run.
+minimp3 ships a second half that takes a path: it opens the file itself,
+maps it with mmap, and decodes out of the mapping. Convenient, and wrong
+here for a reason that has nothing to do with the port.
 
-Under a compositor both answer zero, and that is the answer rather than a
-gap: the compositor owns the waiting, and an owner asking what to wait on there
-is one about to poll what is already polled.
+Every file in this system arrives through recon_fs — which is what keeps
+a path inside the ReconOS root, refuses one that climbs out of it, and is the
+only thing that knows where the volume actually is. A library opening its own
+files reaches around all of that, and it would do it with the host's open on
+a host path, which on ReconOS is not a path at all.
 
-### A real socket, not a fake one
+Nothing ever called it. recon_codec.c uses mp3dec_ex_open_buf and its three
+companions, every one of which takes bytes somebody else has already read. So
+#define MINIMP3_NO_STDIO costs nothing, closes a door that was standing open,
+and takes 857 lines with it.
 
-A listener on 127.0.0.1. The alternative was handing recon_net a descriptor
-of our own and pretending — but what is being tested is precisely what it does
-with the states a real socket goes through: a connect still in flight, a
-peer that closes mid-read, a send that cannot take everything at once. A fake
-producing those would be a second implementation of the thing under test, and
-the first one to disagree would be the one nobody checked.
+That it was also a port blocker is the smaller half. A vendored library able to
+open files behind the filesystem layer is a thing to find whether or not it
+stops a compiler.
 
-Five tests: a connection that opens and carries bytes both ways, a far end that
-goes away, a port with nothing behind it, a probe that answers with how long it
-took, and a peer that accepts and then says nothing.
+### And a paragraph that has now been wrong twice
 
-The hangup one is the path v0.4.68 made reachable. Until then the seam
-reported every event as "readable", so the only way to learn a peer had gone
-was to read and get nothing — which is also what a quiet connection looks like.
+scripts/check-userland.sh opens with an explanation of what is left. It named
+malloc as the blocker for two days after malloc worked, was corrected, and has
+since gone stale again: its middle group — *vendored headers, eight files* —
+has been empty since v0.4.48.
 
-### Two things the tests found
-
-The firewall refused them, and that is the firewall working:
-recon_net_stream_open asks before it opens anything, and an application
-nobody has said yes to does not get a socket. The first run failed on exactly
-that.
-
-And recon_net_last_probe records host:port, not the host. My check
-expected the host and was wrong — two probes to one machine on different ports
-are different probes, and an answer naming only the machine could not tell them
-apart. The header did not say which, and a test written from that paragraph
-expected the other thing. It says so now.
-
-### What is not tested, and why not the obvious way
-
-STREAM_CONNECT_MS is eight seconds. A suite that waited for it would add
-eight seconds to every ctest run to watch a clock. What is checked instead is
-the half that is cheap and is what a caller actually depends on: a connection
-nobody is speaking on stays open and is not closed by mistake. A stream torn
-down because the far end was thinking is a request that failed for no reason,
-and from outside it looks exactly like a network fault. A timeout firing late
-is a slow answer; one firing early is a wrong one.
+The file carries the rule it broke: *the list is what is measured; the
+paragraph explaining it was not.* So the paragraph says less now, points at
+port-blockers.sh, and ends by saying that a paragraph wrong twice about the
+same thing is one to stop trusting.
 
 ---

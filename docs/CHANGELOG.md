@@ -9,6 +9,69 @@ way for the two to disagree.
 
 ---
 
+## v0.4.76 — it was testable
+
+Joshua, after v0.4.75: *"is it testable?"*
+
+I had written twice that it was not. `tests/test_cookie.c` says the dispatch
+*"needs a window and a server"*; `scripts/player-close-shot.sh` says whether
+anything calls `stop_playing` on a close is something *"no headless suite
+links"*. The second was written by repeating the first rather than rechecking
+it, which is how a wrong thing becomes a settled thing.
+
+**It is testable.** `struct recon_server` is opaque to `recon_appwin.c` and
+only ever tested against NULL. `struct recon_panel` is made by one call and
+handed back to others, and never looked inside. `nm -u` on the object file
+says the whole cost is **48 undefined symbols, 44 of them ours** — so the real
+file links against a page of stubs and a dummy pointer, and the transitions
+run for real.
+
+### What it holds
+
+The rule both of the last two versions turned on:
+
+| | `visibility(false)` | `closed` |
+| --- | --- | --- |
+| **close** | fires | fires, second |
+| **minimize** | fires | **must not** |
+
+Plus the transitions that change nothing — closing a window twice, which Show
+Desktop and the taskbar can both arrange, says it once — and the shapes the
+real applications use: eight of the ten implement neither hook, and the
+browser and the player implement `closed` alone.
+
+### Proven by breaking it both ways
+
+Firing `closed` from `minimize` — **exactly the bug that would have shipped**
+— fails two checks by name. Removing it from `hide` fails three. Neither is a
+test that agrees with whatever the code does.
+
+### The stubs answer, they do not assert
+
+Nothing in the suite makes a claim about them. Every check is about which
+callbacks on the *application's* impl were reached and in what order, which is
+decided entirely inside the file under test. They are no-ops rather than
+tripwires because showing a window draws it — a stub that failed on being
+called would be asserting that a window does not draw, which is neither true
+nor the question.
+
+Two answers are deliberate: the panel is non-NULL, because `apply_visibility`
+returns early without one and a test whose transitions were all early returns
+would pass while measuring nothing; and the screen is 1280x720, because
+`center()` divides by it.
+
+### The live scripts keep their job
+
+They are still the only thing that sees the **wiring** — that a click on the X
+reaches `recon_appwin_hide`, and that a browser or a player is attached to the
+hook at all. What they are no longer the only thing that sees is the dispatch
+underneath. All three comments saying otherwise are corrected rather than
+quietly dropped.
+
+**59 suites.**
+
+---
+
 ## v0.4.75 — closing the Media Player did not stop the music
 
 v0.4.74 was not about cookies. The question it left is **what does an
