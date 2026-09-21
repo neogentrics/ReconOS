@@ -401,3 +401,45 @@ Those need the machine to be running **this** kernel, and the procedure above
 is still the way to find out. What has changed is the odds: the class of fault
 most likely to make a first bare-metal boot produce nothing at all -- a wrong
 window and a register map read from memory -- has been eliminated beforehand.
+
+---
+
+## The other machine, and a question nobody has asked it
+
+**Everything above is about `cycloneserver`.** The Gateway laptop is the other
+machine this kernel has run on, and the one where the boot report currently
+comes back as a photograph.
+
+On 20 September the graphics session was told, by this session, that *"the
+Gateway is where a boot report over the wire works today"*. **That was
+unqualified and it should not have been.** The wire path on that machine needs
+three things, and only two of them are known:
+
+| condition | state |
+|---|---|
+| the kernel command line reaches the machine, so `logport` can be asked for | **yes** — the Gateway is UEFI, and the UEFI loader has always read `\reconos\cmdline` |
+| a driver exists for whatever NIC it has | **yes, if** it is an RTL8169/8168/8161/8136 (`r8169.c`) or an 82540EM-era Intel part (`e1000.c`) |
+| that **is** its NIC | **unknown. Nobody has run `lspci` on it.** |
+
+Both dumps in `docs/hardware/` are display-only. Neither records a network
+controller, on either machine.
+
+**One line settles it, and it belongs in the pre-boot checklist rather than in
+somebody's memory:**
+
+```sh
+lspci -nn | grep -iE 'ethernet|network'
+```
+
+`10ec:8168` and the whole path is proven. An Intel I219 or similar and
+`e1000.c` will not claim it — that family needs `e1000e`, which does not exist
+here — and the Gateway stays on photographs until somebody writes it.
+
+**Which way it comes out matters before the boot rather than after.** A person
+who boots that machine expecting a log and gets a dark serial port learns
+nothing about the kernel; they learn that nobody checked the card.
+
+*Found by the graphics session correcting their own advice, after they checked
+this kernel's driver list against a tree that did not yet contain `r8169.c` and
+reached the opposite wrong answer. The machine was unreachable from here too on
+20 September — `Destination host unreachable` — so this stays open.*

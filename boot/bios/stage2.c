@@ -958,14 +958,17 @@ static u32 read_file(u8 drive, u32 cluster, u32 size, u32 dest,
 	return done;
 }
 
-#ifdef RECONOS_KEY_PRESENT
-
-/* Built only when there is a key to check against: this and the buffer below
- * exist to serve the verifier, and a keyless build has no verifier. */
-
-/* A small file, into a buffer down here. The signature is 256 bytes and has to
- * be read where it can be looked at, rather than pushed above the megabyte with
- * the kernel. */
+/* A small file, into a buffer down here, rather than pushed above the megabyte
+ * with the kernel.
+ *
+ * **Built unconditionally since 20 September**, and it used to be inside
+ * `#ifdef RECONOS_KEY_PRESENT` because the signature was its only caller. The
+ * command line is the second, and a keyless build needs it -- a keyless build
+ * is what every machine in the verification rig boots.
+ *
+ * **It refuses rather than truncates**: `size > max` returns 0 and reads
+ * nothing. That is the property the command line needs and it was already
+ * here. */
 static u32 read_small(u8 drive, u32 cluster, u32 size, u8 *out, u32 max)
 {
 	u32 done = 0;
@@ -1007,9 +1010,97 @@ static u32 read_small(u8 drive, u32 cluster, u32 size, u8 *out, u32 max)
 	return done;
 }
 
+#ifdef RECONOS_KEY_PRESENT
+
+/* Built only when there is a key to check against: the buffer below exists to
+ * serve the verifier, and a keyless build has no verifier. */
 static u8 sig_buf[256];
 
 #endif /* RECONOS_KEY_PRESENT */
+
+/* --- the kernel command line ---------------------------------------------
+ *
+ * **This loader used to write an empty string into the handoff and never read
+ * `\reconos\cmdline` at all.** (NW-013)
+ *
+ * That is not a missing nicety. `logport`, `verbose`, `noinit`, `recovery`,
+ * `poweroff` and `restart` are all switches the kernel reads off this line, so
+ * on a machine that boots through this loader **none of them could be asked
+ * for**, however well everything under them worked. The one that stings is
+ * `noinit`: `xhci.c` prints every port's `PORTSC` as the controller comes up,
+ * so the diagnostic for a USB fault was unavailable on a machine with a USB
+ * fault -- and the one that prompted this is `logport`, because a legacy-BIOS
+ * server with no screen anybody stands in front of is exactly the machine whose
+ * boot report needs to come back over the wire.
+ *
+ * **Found by the network session with a control**, which is what makes it a
+ * result rather than a suspicion: one medium, one cmdline file, read back off
+ * the image before booting, then booted twice. BIOS carried no command line;
+ * UEFI carried `logport verbose` and the port listened. Without the UEFI half,
+ * "no log port on BIOS" is equally well explained by a file written to the
+ * wrong path.
+ *
+ * **Silent when nothing is wrong, loud when the file exists and did not
+ * entirely take effect.** The same four states the UEFI loader now handles, and
+ * deliberately the same, because two loaders that disagree about one medium
+ * send the next person to whichever one is quiet:
+ *
+ *   absent               silent -- and normal. `make-medium.sh` omits the file
+ *                        on purpose, so an `install-onto=` cannot ride in.
+ *   read whole, applied  silent here. The kernel prints `command line : ...`
+ *                        itself, and that is the better report: it says what
+ *                        the kernel received rather than what this believed it
+ *                        sent.
+ *   too long             loud, and **nothing is passed.** Half of
+ *                        `recovery logport` is a different instruction from
+ *                        either word.
+ *   short read           loud, and nothing is passed.
+ */
+static char cmdline_buf[128];
+
+static void read_cmdline(u8 drive, u32 dir)
+{
+	u32 file, size = 0, got, i;
+
+	cmdline_buf[0] = '\0';
+
+	file = dir_find(drive, dir, "cmdline", &size);
+	if (!file)
+		return;			/* absent, which is normal */
+
+	if (!size)
+		return;			/* empty file, empty command line */
+
+	/* The terminator needs a byte, so a file of exactly the buffer's size
+	 * does not fit either. Checked against the directory entry's size
+	 * rather than against what was read: a short read is the thing being
+	 * guarded against, so it cannot also be the evidence. */
+	if (size >= sizeof(cmdline_buf)) {
+		print("cmdline: too long for this loader, none of it used\n");
+		return;
+	}
+
+	got = read_small(drive, file, size, (u8 *)cmdline_buf,
+			 sizeof(cmdline_buf) - 1);
+	if (got != size) {
+		cmdline_buf[0] = '\0';
+		print("cmdline: would not read whole, none of it used\n");
+		return;
+	}
+
+	cmdline_buf[size] = '\0';
+
+	/* One line, and no line ending. A file edited on Windows ends CR LF,
+	 * and a command line with a carriage return in it matches nothing --
+	 * which presents as an option being ignored for no visible reason. The
+	 * UEFI loader has stripped these since it was written; this is the
+	 * same three lines, on purpose, rather than a second opinion. */
+	for (i = 0; i < size; i++)
+		if (cmdline_buf[i] == '\r' || cmdline_buf[i] == '\n') {
+			cmdline_buf[i] = '\0';
+			break;
+		}
+}
 
 /* Reads back what was written, which is the only way to know it arrived.
  *
@@ -1726,7 +1817,7 @@ static u32 build_handoff(u8 boot_drive)
 	h->boot_disk     = boot_drive;
 
 	put_str((u8 *)h->loader, "reconboot-bios", sizeof(h->loader));
-	put_str((u8 *)h->cmdline, "", sizeof(h->cmdline));
+	put_str((u8 *)h->cmdline, cmdline_buf, sizeof(h->cmdline));
 
 	return HANDOFF_ADDR;
 }
@@ -1807,6 +1898,10 @@ void stage2_main(u32 boot_drive)
 			print("kernel: no \\reconos directory on the ESP\n");
 			goto done;
 		}
+
+		/* Before the kernel is loaded, because build_handoff runs
+		 * after this block and passes on what this leaves behind. */
+		read_cmdline((u8)boot_drive, dir);
 
 		file = dir_find((u8)boot_drive, dir, KERNEL_NAME, &size);
 		if (!file) {

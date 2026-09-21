@@ -285,11 +285,52 @@ static char cmdline_buf[128];
  * decided earlier and elsewhere. */
 static BOOLEAN recovery_chosen = FALSE;
 
+/* Silent when nothing is wrong, loud when the file exists and did not entirely
+ * take effect. (KF-262)
+ *
+ * **Four states, not two**, and the fourth is the one this used to get wrong:
+ *
+ *   absent               silent. A medium without the file is the normal case
+ *                        by design -- make-medium.sh omits it deliberately, so
+ *                        that an `install-onto=` cannot ride in on a stick.
+ *   read whole, applied  silent *here*, because the kernel already prints
+ *                        `command line : ...`. That line is the better report:
+ *                        it shows what the kernel received rather than what
+ *                        the loader believed it sent, and a second announcement
+ *                        would be two sources for one fact.
+ *   unreadable           loud.
+ *   **read, truncated**  loud -- and this returned success.
+ *
+ * `EFI_FILE_PROTOCOL.Read` fills the buffer and reports `EFI_SUCCESS` when the
+ * file is longer than the buffer: a short read is not an error, and it is
+ * indistinguishable from a complete one unless the size is checked. So a
+ * cmdline longer than this buffer was silently cut, and
+ * **`boot_cmdline_has` matches whole tokens** -- `(*q == '\0' || *q == ' ')` --
+ * so a `logport` cut to `logpo` matches nothing and the switch simply does not
+ * happen. It fails closed, which is the safe direction, and it fails silently,
+ * which is the direction that costs a day: the boot prints
+ * `command line : ...logpo` and looks like it worked.
+ *
+ * **`read_initrd`, seventy lines below, has always done this correctly** --
+ * `GetInfo` for the real size, then `want != size` and *"the initrd would not
+ * read whole"* -- under a comment stating the principle in as many words: *an
+ * initrd that was present and could not be loaded is a different fact from one
+ * that was not there.* The rule was written down in this file and not applied
+ * in this file, which is KF-261's shape and KF-200's before it.
+ *
+ * **Nothing is passed rather than a prefix.** Half of `recovery logport` is a
+ * different instruction from either word, and a command line the person did not
+ * write is worse than none. Found by the network session while answering a
+ * design question about the *other* loader.
+ */
 static void read_cmdline(EFI_FILE_PROTOCOL *root)
 {
+	EFI_GUID fi_guid = EFI_FILE_INFO_GUID;
 	EFI_FILE_PROTOCOL *file;
 	EFI_STATUS s;
-	UINTN size = sizeof(cmdline_buf) - 1;
+	UINT8 info_buf[512];
+	UINTN info_size = sizeof(info_buf);
+	UINTN size, want;
 	UINTN i;
 
 	cmdline_buf[0] = '\0';
@@ -297,13 +338,40 @@ static void read_cmdline(EFI_FILE_PROTOCOL *root)
 	s = root->Open(root, &file, (CHAR16 *)u"\\reconos\\cmdline",
 		       EFI_FILE_MODE_READ, 0);
 	if (EFI_ERROR(s))
-		return;
+		return;		/* absent, which is normal */
 
+	s = file->GetInfo(file, &fi_guid, &info_size, info_buf);
+	if (EFI_ERROR(s)) {
+		file->Close(file);
+		print("reconboot: there is a command line and its size "
+		      "could not be read\n");
+		return;
+	}
+
+	size = (UINTN)((EFI_FILE_INFO *)info_buf)->FileSize;
+	if (!size) {
+		file->Close(file);
+		return;		/* an empty file is an empty command line */
+	}
+
+	/* The terminator needs a byte, so a file of exactly the buffer's size
+	 * does not fit either. Compared against the file rather than against
+	 * what was read, because what was read is the number this fault used
+	 * to hide behind. */
+	if (size >= sizeof(cmdline_buf)) {
+		file->Close(file);
+		print("reconboot: the command line is too long for this "
+		      "loader and none of it was used\n");
+		return;
+	}
+
+	want = size;
 	s = file->Read(file, &size, cmdline_buf);
 	file->Close(file);
 
-	if (EFI_ERROR(s)) {
+	if (EFI_ERROR(s) || size != want) {
 		cmdline_buf[0] = '\0';
+		print("reconboot: the command line would not read whole\n");
 		return;
 	}
 
