@@ -371,6 +371,41 @@ struct recon_html_field {
     bool disabled;
 
     /*
+     * What shape the answer has to take.
+     *
+     * `required` above asks whether there is an answer at all. These ask
+     * whether the answer is the kind the page asked for, and until v0.4.78
+     * none of them was read -- so a page asking for an address got whatever
+     * was typed, and the server refused it a round trip later in whatever
+     * words it chose. Which is the same fault `required` was, one step along.
+     *
+     * **-1 and "" mean the page did not say**, rather than zero and "0". A
+     * `minlength` of 0 is a real thing to write and means something different
+     * from not writing it, and a `min` of "0" is a real floor.
+     *
+     * `min` and `max` are text because HTML's are: `min="1"` on a number and
+     * `min="2026-01-01"` on a date are the same attribute. The comparison is
+     * made where the kind of the control is known.
+     */
+    int min_length;
+    int max_length;
+    char min_value[32];
+    char max_value[32];
+
+    /*
+     * `type=email`, which is a claim about the shape of the text rather than
+     * about how it is drawn -- an email box is a text box in every other way.
+     *
+     * There is deliberately no `pattern`. It takes a regular expression, and
+     * ReconOS has no regular expression engine; writing one to hold a form up
+     * would be a large new thing in the browser to enforce a rule that a
+     * server checks again anyway. Recorded here as a gap somebody chose,
+     * because a gap with no note beside it is the kind nobody ever decided --
+     * which is exactly how `required` came to be parsed and ignored.
+     */
+    bool wants_email;
+
+    /*
      * Whether this control appears on the page at all.
      *
      * False for a `type=hidden`, and false for one a stylesheet put out of the

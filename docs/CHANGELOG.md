@@ -9,6 +9,72 @@ way for the two to disagree.
 
 ---
 
+## v0.4.78 — what a page asks of an answer
+
+`required` asks whether there is an answer. Everything HTML has for asking
+**what shape the answer must take** — `minlength`, `maxlength`, `min`, `max`,
+`type=email` — was not parsed at all. So a page asking for an address got
+whatever was typed, and a server refused it a round trip later in whatever
+words it chose.
+
+Which is the same fault `required` was in v0.4.65, one step along: the page
+said so, and the viewer sent it anyway.
+
+The comment in `recon_html.c` had already named it. Beside the list of input
+types it says `type=email` is absent because those types *"differ from a text
+box in what a browser validates"* — true, and there was nowhere to put it.
+
+### What is checked, and when
+
+After the empty ones, because "this needs filling in" is more useful than
+"this is too short" about a box that is empty. And **an empty box is not
+checked at all** — somebody who left a box alone should not be told it is
+three characters short of a minimum they never started typing. That guard is
+load-bearing: removing it wrongly refuses an empty box, and a test says so.
+
+| | |
+| --- | --- |
+| `minlength` / `maxlength` | text and textarea, with the count both ways |
+| `type=email` | something, an `@`, something with a dot in it |
+| `min` / `max` | **only when both sides read as numbers** |
+
+The range is the interesting one. `min` and `max` are text because HTML's are:
+`min="1"` on a number and `min="2026-01-01"` on a date are the same attribute.
+A date compared as a number would be a confident wrong answer, so a bound this
+cannot read is **left alone rather than guessed at**, and a test holds that.
+
+The email check is deliberately the loosest thing that is still a check. The
+real grammar is four hundred words of RFC 5322 and refuses addresses that
+work; turning somebody away from their own mailbox would be worse than asking
+nothing. What this catches is what people actually do, which is put their name
+in the wrong box.
+
+### There is no `pattern`, and that is written down
+
+It takes a regular expression and ReconOS has no engine for one. Writing one
+to hold a form up would be a large new thing in the browser to enforce a rule
+the server checks again anyway.
+
+Recorded in the header as a gap somebody chose — because a gap with no note
+beside it is the kind nobody ever decided, which is exactly how `required`
+came to be parsed and ignored for a year.
+
+### Checked in a suite, for the first time
+
+Until v0.4.77 the only instrument that could reach a form was a photograph.
+These are fifteen questions, and a photograph answers one.
+
+Two of them found something on the way. A form with `action="/x"` on a page
+opened **from a file** is refused before any of this runs — *"This form does
+not say where to send it."* — because a document with no address has nothing
+for a relative action to resolve against. Same root as the history finding in
+v0.4.77, and the tests use absolute actions because of it.
+
+Proven by breaking it: turning the `minlength` check off fails one check by
+name; removing the empty-box guard fails another.
+
+---
+
 ## v0.4.77 — the browser, with no compositor under it
 
 `src/recon_web.c` is **6,433 lines and had no suite at all.** Everything ever

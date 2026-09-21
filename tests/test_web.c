@@ -39,6 +39,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -262,6 +263,175 @@ static void test_a_page_that_is_not_there(void) {
     recon_appwin_destroy(win);
 }
 
+/*
+ * A form, and the control that sends it.
+ *
+ * The submit button's id is not a fixed number -- fields are numbered as they
+ * are met -- so it is found by walking the hit regions rather than guessed at.
+ * `HIT_FIELD_BASE` mirrors `src/recon_web.c`, and a drift in it shows up as
+ * the button not being found, which fails by name.
+ */
+#define HIT_FIELD_BASE (RECON_APPWIN_HIT_USER + 4000)
+
+static void submit(struct recon_appwin *win, int field_index) {
+    int x = 0;
+    int y = 0;
+    if (!recon_appwin_hit_centre(win, HIT_FIELD_BASE + (uint32_t)field_index,
+            &x, &y)) {
+        check(false, "the Send button is on the page");
+        return;
+    }
+    recon_appwin_handle_click(win, x, y, true);
+}
+
+static void test_a_form_refuses_what_the_page_said_it_would(void) {
+    printf("a form checks the shape of an answer, not only that there is one\n");
+
+    struct recon_appwin *win = recon_web_create(fake_server(), NULL);
+    if (win == NULL) {
+        check(false, "a browser to work with");
+        return;
+    }
+    recon_appwin_show(win);
+
+    /*
+     * Every value is set in the markup, so no typing is needed -- which
+     * matters, because the text field is stubbed in this suite and a test
+     * that had to type would be a test of the stub.
+     */
+    recon_web_open_path(win, page("short.html",
+        "<!doctype html><title>Short</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input name=\"pin\" minlength=\"4\" value=\"12\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+
+    submit(win, 1);
+    check_reports(win, "needs at least 4 characters, and has 2",
+        "TOO SHORT IS REFUSED, AND SAYS BY HOW MUCH");
+
+    recon_appwin_destroy(win);
+}
+
+static void test_too_long_and_not_an_address(void) {
+    printf("and the other two a page can ask for\n");
+
+    struct recon_appwin *win = recon_web_create(fake_server(), NULL);
+    if (win == NULL) {
+        check(false, "a browser to work with");
+        return;
+    }
+    recon_appwin_show(win);
+
+    recon_web_open_path(win, page("long.html",
+        "<!doctype html><title>Long</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input name=\"code\" maxlength=\"3\" value=\"abcdef\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+    submit(win, 1);
+    check_reports(win, "takes at most 3 characters, and has 6",
+        "too long is refused");
+
+    recon_web_open_path(win, page("mail.html",
+        "<!doctype html><title>Mail</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input type=\"email\" name=\"who\" value=\"not-an-address\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+    submit(win, 1);
+    check_reports(win, "needs an email address",
+        "AND SOMETHING THAT IS NOT ONE IS REFUSED");
+
+    recon_web_open_path(win, page("mail-ok.html",
+        "<!doctype html><title>Mail ok</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input type=\"email\" name=\"who\" value=\"someone@example.com\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+    submit(win, 1);
+    check(!reports(win, "needs an email address"),
+        "while an address that is one is not");
+
+    recon_appwin_destroy(win);
+}
+
+static void test_a_number_out_of_range(void) {
+    printf("a number outside the range the page gave\n");
+
+    struct recon_appwin *win = recon_web_create(fake_server(), NULL);
+    if (win == NULL) {
+        check(false, "a browser to work with");
+        return;
+    }
+    recon_appwin_show(win);
+
+    recon_web_open_path(win, page("range.html",
+        "<!doctype html><title>Range</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input name=\"n\" min=\"1\" max=\"10\" value=\"50\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+    submit(win, 1);
+    check_reports(win, "cannot be more than 10", "too big is refused");
+
+    /*
+     * And a `min` this cannot read as a number is left alone rather than
+     * guessed at. A date in `min` compared as a number would be a confident
+     * wrong answer, and refusing a form for it would be worse than the gap.
+     */
+    recon_web_open_path(win, page("dated.html",
+        "<!doctype html><title>Dated</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input name=\"when\" min=\"2026-01-01\" value=\"2020-05-05\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+    submit(win, 1);
+    check(!reports(win, "cannot be less than"),
+        "A BOUND THIS CANNOT READ IS LEFT ALONE, NOT GUESSED AT");
+
+    recon_appwin_destroy(win);
+}
+
+static void test_an_empty_box_is_required_s_business(void) {
+    printf("and an empty box is `required`'s business, not this one's\n");
+
+    struct recon_appwin *win = recon_web_create(fake_server(), NULL);
+    if (win == NULL) {
+        check(false, "a browser to work with");
+        return;
+    }
+    recon_appwin_show(win);
+
+    /*
+     * Somebody who left a box alone should not be told it is three characters
+     * short of a minimum they never started typing. The page did not say the
+     * box had to be filled in, so an empty one is an answer.
+     */
+    recon_web_open_path(win, page("empty.html",
+        "<!doctype html><title>Empty</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input name=\"pin\" minlength=\"4\" value=\"\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+    submit(win, 1);
+    check(!reports(win, "needs at least"),
+        "an empty box is not refused for being too short");
+
+    /* And with `required`, it is -- in those words rather than these. */
+    recon_web_open_path(win, page("empty-required.html",
+        "<!doctype html><title>Empty required</title>"
+        "<form action=\"http://example.com/x\">"
+        "<input name=\"pin\" minlength=\"4\" required value=\"\">"
+        "<input type=\"submit\" value=\"Send\">"
+        "</form>"));
+    submit(win, 1);
+    check_reports(win, "before it can be sent",
+        "AND REQUIRED STILL SAYS WHAT IT ALWAYS SAID");
+
+    recon_appwin_destroy(win);
+}
+
 int main(void) {
     printf("\n--- the browser, with no compositor under it ---\n\n");
 
@@ -282,6 +452,10 @@ int main(void) {
     test_history_remembers_where_it_has_been();
     test_a_second_tab();
     test_a_page_that_is_not_there();
+    test_a_form_refuses_what_the_page_said_it_would();
+    test_too_long_and_not_an_address();
+    test_a_number_out_of_range();
+    test_an_empty_box_is_required_s_business();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -1,70 +1,62 @@
-The board's pkg-sign-dep row, whose other half landed with signing in
-v0.4.13 and which has ended on the same sentence since: *"what is still
-missing is a package saying it needs another one."*
+Nineteen versions today, all of them green, and none of them had looked at the
+machine. So: a live desktop, four applications opened, and then errors log.
+
+103 faults. Every one of them an icon.
 
 
-needs = Ink
-needs = Ink 2.0
+VT-B001  A file could not be read -- '/System/Icons/Metallic/help.png': No such file or directory
+VT-B001  A file could not be read -- '/System/Icons/help.ico': No such file or directory
 
 
-### The removal half is the one that matters
+### The guard the comment described did not exist
 
-A missing dependency at install time is a package that never arrives, and
-somebody notices at once. A dependency removed from underneath a working
-program is a program that stops working later, for a reason nobody connects
-to what they just did.
+recon_fs_read raised VT-B001 whenever fopen failed, and the comment
+beside it said what that was supposed to mean:
 
-So recon_package_uninstall refuses, and names which: *"'Notes' cannot be
-removed: 'Ledger' needs it."* Named rather than counted — "something needs
-this" sends somebody looking, and the answer was already in hand.
+> B-001's first half: the file is there — resolve and readable both said so —
+> and it still would not open.
 
-There is no way past it, for the reason there is no way to install an unsigned
-package. What somebody who really wants it gone does is remove the thing that
-needs it first, which is the order that leaves a working machine at every step.
+Neither of them said so. recon_fs_resolve works on paths that do not
+exist yet, because a write has to be able to create one. readable answers a
+question about *permission* and returns true for an administrator without
+looking at the disk at all.
 
-### Three decisions worth stating
+So B-001 fired on every missing file — and looking for a file that may not be
+there is how a search works. The icon resolver tries Metallic/x.ico,
+Metallic/x.png, x.ico, x.png; finding the fourth means three faults
+logged, every time, for working correctly.
 
-A version is a minimum, never a match. There is no way to ask for a range
-or an exact version. A package that refuses to work with a *later* version of
-what it needs is describing a fault in one of the two, and the honest place to
-fix it is there rather than in a dependency grammar.
+A log that fills with normal operation is a log nobody reads, which is the
+sentence recon_apps.c already reaches about repeating a line for as long as a
+program sits there. And the error log is the thing somebody opens when
+something has actually gone wrong.
 
-Names, not files. What is checked is that a package of that name is
-installed — a question the receipts already answer. Nothing looks inside the
-other package or at what it placed: a dependency on a file is a dependency on
-somebody else's internals, and the first reorganisation breaks it.
+ENOENT is the caller's business, and a NULL return is how it is told.
+Everything else — a permission the host refused, a device that would not read,
+no descriptors left — is what B-001 is for, and is now the only thing it says.
 
-There is no resolver, and that is not a gap that got left. Nothing fetches
-what is missing and nothing works out an install order. A resolver needs
-somewhere to fetch from and ReconOS has no such place — building it first would
-be building the half that cannot work yet.
+103 to 0, measured the same way it was found.
 
-### The receipt carries it, because the manifest will not be there
+### Both halves, because narrowing a check can turn it off
 
-By the time anybody uninstalls, the manifest is long gone: it lived in a folder
-the installer read once and never owned. So the receipt records the needs
-lines in the manifest's own spelling — one format rather than two, because
-somebody reading a receipt should be reading something they recognise.
+A change that makes a check fire less often is exactly the change that can
+quietly stop it firing at all. So the suite checks that a missing file logs
+nothing *and* that a real failure still logs.
 
-And the reader stops at files:. Without that, a package could place a file
-called needs = Notes and the line would read as a dependency — which is
-somebody able to stop another package being removed by choosing a filename.
-There is a test for it, written by hand because no manifest can place such a
-file today; the point is that the reader would be wrong if it did not stop.
+Arranging a real failure took two attempts. A directory was the first, and
+it does not reach that path: fseek to the end of one gives a length nothing
+can allocate, so it comes out as "out of memory" somewhere else entirely. What
+works is a file the host refuses — chmod 000, and only for somebody who is
+not root. Which the test checks rather than assumes: run as root it would open
+the file anyway and report that B-001 still fires when nothing had failed.
 
-### A check of mine that passed for the wrong reason
+### This is the fourth comment this month claiming a guard and having none
 
-The first fixture gave the second package an icon and nothing else. A package
-with no module and nothing to place is refused — test_a_package_must_bring_
-something, an existing rule — so the install failed, the dependency checks
-went green, and they were green for a rule that has nothing to do with
-dependencies.
-
-The tell was the next test, where the same fixture failed to *sign*. Had the
-dependency checks been the only ones written, this would have shipped as a
-suite proving something it never touched.
-
-The refusal's wording is checked now as well as the refusal: both packages
-named, in both directions.
+The clock-went-backwards clamp in recon_loop.c (v0.4.58), a Caps Lock branch
+in recon_key.c (v0.4.55), the alpha == 0 shortcut in recon_ui_fb.c
+(v0.4.45), and now this. The way to find out has been the same every time:
+take the line away and see whether anything notices. Here nothing would
+have — the comment was describing a guard two functions away that answers a
+different question.
 
 ---

@@ -4990,6 +4990,126 @@ static int first_unanswered_required(struct web_tab *t, int form) {
     return -1;
 }
 
+/*
+ * Does this text look like an address?
+ *
+ * Deliberately the loosest check that is still a check: something, an `@`,
+ * something with a dot in it. **Not a grammar.** The real one is four hundred
+ * words of RFC 5322 and refuses addresses that work; a viewer that turned
+ * somebody away from their own mailbox because of a comment in a local part
+ * would be worse than one that asked nothing.
+ *
+ * What this catches is the thing somebody actually does, which is put their
+ * name or their phone number in the wrong box.
+ */
+static bool looks_like_an_address(const char *text) {
+    const char *at = strchr(text, '@');
+
+    if (at == NULL || at == text) {
+        return false;
+    }
+    if (strchr(at + 1, '@') != NULL) {
+        return false;
+    }
+
+    const char *dot = strchr(at + 1, '.');
+
+    /* A dot, with something before it and something after it. */
+    return dot != NULL && dot != at + 1 && dot[1] != '\0';
+}
+
+/*
+ * What a page asked of an answer that this one does not satisfy.
+ *
+ * `first_unanswered_required` above asks whether there is an answer at all.
+ * This asks whether the answer is the kind the page asked for, which until
+ * v0.4.78 nothing did -- the attributes were not even parsed, so a page asking
+ * for an address got whatever was typed and a server refused it a round trip
+ * later, in whatever words it chose.
+ *
+ * **An empty box is not checked here.** `required` decides whether emptiness
+ * is allowed, and a box somebody left alone should not be refused for being
+ * three characters short of a minimum they never started typing.
+ *
+ * Returns the field, and writes why. -1 when there is nothing to say.
+ */
+static int first_wrong_shape(struct web_tab *t, int form, char *why,
+        size_t why_size) {
+    for (int i = 0; i < t->field_count; i++) {
+        const struct recon_html_field *d = recon_html_field_at(t->page, i);
+
+        if (d == NULL || d->form != form || d->disabled || !d->drawn) {
+            continue;
+        }
+        if (d->kind != RECON_HTML_FIELD_TEXT &&
+                d->kind != RECON_HTML_FIELD_AREA) {
+            continue;
+        }
+
+        const char *text = t->fields[i].text;
+        if (text == NULL || text[0] == '\0') {
+            continue;
+        }
+
+        int length = (int)strlen(text);
+
+        if (d->min_length >= 0 && length < d->min_length) {
+            recon_text_printf(why, why_size,
+                "%s needs at least %d characters, and has %d.",
+                field_called(d), d->min_length, length);
+            return i;
+        }
+        if (d->max_length >= 0 && length > d->max_length) {
+            recon_text_printf(why, why_size,
+                "%s takes at most %d characters, and has %d.",
+                field_called(d), d->max_length, length);
+            return i;
+        }
+        if (d->wants_email && !looks_like_an_address(text)) {
+            recon_text_printf(why, why_size, "%s needs an email address.",
+                field_called(d));
+            return i;
+        }
+
+        /*
+         * The range, and only when both sides are numbers.
+         *
+         * `min` and `max` are text because HTML's are, and a page may put a
+         * date in them. Comparing a date as a number would be a confident
+         * wrong answer, so a pair this cannot read as numbers is left alone
+         * rather than guessed at -- the same ruling `recon_html.c` makes about
+         * a `size` it cannot parse.
+         */
+        char *end = NULL;
+        double value = strtod(text, &end);
+        if (end == text || (end != NULL && *end != '\0')) {
+            continue;
+        }
+
+        if (d->min_value[0] != '\0') {
+            char *bound_end = NULL;
+            double bound = strtod(d->min_value, &bound_end);
+            if (bound_end != d->min_value && *bound_end == '\0' &&
+                    value < bound) {
+                recon_text_printf(why, why_size, "%s cannot be less than %s.",
+                    field_called(d), d->min_value);
+                return i;
+            }
+        }
+        if (d->max_value[0] != '\0') {
+            char *bound_end = NULL;
+            double bound = strtod(d->max_value, &bound_end);
+            if (bound_end != d->max_value && *bound_end == '\0' &&
+                    value > bound) {
+                recon_text_printf(why, why_size, "%s cannot be more than %s.",
+                    field_called(d), d->max_value);
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
 static void submit_form(struct web_tab *t, int form, int submitter) {
     if (t == NULL || t->page == NULL || t->fields == NULL) {
         return;
@@ -5037,6 +5157,21 @@ static void submit_form(struct web_tab *t, int form, int submitter) {
         field_focus_at(t, missing);
         set_status(t, true, "This form needs %s before it can be sent.",
             field_called(d));
+        recon_appwin_refresh(t->win);
+        return;
+    }
+
+    /*
+     * And then whether the answers are the shape the page asked for. After
+     * the empty ones, because "this needs filling in" is a more useful thing
+     * to be told than "this is too short" about a box that is empty.
+     */
+    char why[256] = "";
+    int wrong = first_wrong_shape(t, form, why, sizeof(why));
+
+    if (wrong >= 0) {
+        field_focus_at(t, wrong);
+        set_status(t, true, "%s", why);
         recon_appwin_refresh(t->win);
         return;
     }

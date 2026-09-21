@@ -1,127 +1,120 @@
-Nothing checked what the running system loaded. A package's signature is
-verified when it is *installed*: it covers a digest for every file, so install
-proves where the files came from at that moment — and then stops proving
-anything. The digests were thrown away. The receipt recorded paths and nothing
-else, so nothing on the disk said what a module's contents should be, and
-recon_modules_load called dlopen on whatever was at the path.
+67 of 67 desktop sources build with no libc under them, up from 64. What
+does not build freestanding went from 23,549 lines to 12,363 — and eleven
+thousand of that came off in a single header split.
 
-The signing machinery was all built. This is the version that spends it.
+scripts/port-blockers.sh prints what stops each source and how many lines it
+holds, and its advice is to look for *a small marker count beside a large line
+count*. Its run at v0.4.61 had a row that could not be read any other way:
 
-### The check that was in the wrong place
 
-src/recon_modules.c did have a refusal after the load: a module declares the
-ABI it was built against, and one that does not match is turned away. That
-reads like a gate and is not one, for a reason that is easy to state and was
-easy to miss:
+recon_shell.c   7231 lines   0 markers   wayland-server-core.h
 
-dlopen runs a module's initialisers. Every constructor in the file, and
-every constructor in everything it links, runs inside the call. By the time
-the ABI check refuses the module, code from that file has already executed.
 
-So the bytes are now weighed before the file is opened, and the version
-number of that decision is the whole point of this release.
+The largest file in the desktop, not one mention of wayland in it, held by
+a single #include "recon_server.h". recon_cmd.c was the same shape at
+3,626 lines and recon_apps.c at 375.
 
-### A receipt says what each file should be
+### Fifty-five calls and not one field access
 
-Receipt file lines are now <64 hex>  <path>. Digest first, at a fixed width,
-so a path with a space in it still parses — a reader that split on whitespace
-would take /System/Wallpapers/my paper.png as /System/Wallpapers/my and
-vouch for nothing, which from the outside is indistinguishable from a file
-nobody installed.
+What crosses that include is a real interface, which is why this is a header
+rather than a deletion — but it is an interface the shell only ever *calls*.
+Measured before anything was written: fifteen functions, fifty-five calls, two
+types named, and zero reads of a field on either of them.
 
-A line that is not that shape is read as a bare path, which is every receipt
-written before this. Read, not refused: an old receipt still has to be able
-to uninstall its package, and refusing to parse one would strand the files it
-names. What an old receipt cannot do is vouch for anything, and that is the
-loader's business to say — it says it by naming the package and telling
-somebody to install it again, rather than reporting a fault in a file that does
-not have one.
+Thirty-two of those calls were already covered by
+include/recon_server_facts.h, which v0.4.46 created for this exact shape. The
+rest are a different subject, and now have a header of their own:
+include/recon_clients.h, *the windows the shell does not own*.
 
-### Five answers, not two
+That asymmetry is why struct recon_toplevel stays opaque. A built-in window
+is the shell's to take apart. A client's window is somebody else's, the shell
+cannot draw a pixel of it, and a header that showed the fields would be
+inviting it to do something it must not.
 
-recon_package_vouches_for() answers matches, changed, no digest,
-missing, or nothing installed it — because those want five different
-sentences in front of somebody, and a bool would have flattened "this file has
-been swapped" into the same reply as "no package claims this file".
+### Two more headers, for the same reason
 
-Four of the five refuse, and there is no way to say *anyway*. That is the rule
-this project has carried since packages were signed: a check that can be turned
-off is a check that is off on the day it matters.
+include/recon_inject.h — synthetic input, the four functions a test harness
+uses to pretend to be a mouse and a keyboard. Pretending to be a mouse is not
+a wayland idea; a position is two integers.
 
-The comparison is a plain strcmp rather than a constant-time one, which is a
-decision rather than an oversight. Both sides are public — the receipt is a
-file anybody holding the disk can read, and the digest of a file is computable
-by anybody holding it. There is no secret here for a timing difference to leak.
-recon_equal_constant_time stays where it belongs, in the keyring.
+And then recon_cmd.c's blocker changed rather than disappearing: it included
+<linux/input-event-codes.h> for two constants. Once the compositor's
+header was off it, those two numbers were the only thing left holding 3,626
+lines. recon_inject.h writes them down itself, and src/main.c — the one
+file that sees both these and Linux's — holds a _Static_assert on each, so a
+disagreement is a build failure rather than a right-click that does nothing.
 
-VT-E006, *a program is not what was installed*, is what a refusal raises.
+### The seam found a bug, which is the point of drawing one
 
-### The first real module in this repository
+BG-210 — "Show Desktop" minimized exactly one client window.
 
-There was not one. src/recon_modules.c is 1,514 lines whose entire job is to
-take somebody else's shared object and run it inside ReconOS, and nothing in
-the tree had ever handed it one. Every test of the install path stood the
-loader in with three functions that returned a bool.
+Replacing wl_list_for_each meant asking what shape the replacement had to be,
+and that made a question unavoidable: does anything in these loop bodies *move*
+a window within the compositor's list? It does.
+recon_toplevel_minimize sends the window to the back and focuses the next one
+still visible. wl_list_for_each reads a window's successor after the body
+has run — so the walk read the successor of a window that was now last, found
+the list head, and stopped.
 
-What kept it out was not its size. Compiled on its own, the linker asks for
-eighteen symbols and sixteen are ordinary ReconOS sources. The other two are
-_wlr_log and recon_appwin_destroy — one log call and one destructor,
-holding fifteen hundred lines out of every suite in the tree. This is the fifth
-time this month a very small thing has turned out to be holding a very large
-one, and scripts/port-blockers.sh exists because of the fourth.
+The loop immediately above it minimizes every built-in window correctly,
+because it is a plain indexed loop over an array. So from the outside the fault
+looks like client windows are the thing that does not minimize, which is
+the worst shape a bug of this kind can have: it points away from itself. And it
+needs two clients to show at all, which is presumably how it survived.
 
-So tests/example_module.c is a real module, built twice, and
-tests/test_modules.c is a suite that loads it.
+So recon_clients() hands out a copy, taken before anything happens. Not a
+matter of taste: a copy cannot be steered by what the body does.
 
-### How the suite proves a gate is a gate
+### And then it was run, twice
 
-The module has a __attribute__((constructor)) that writes a marker file. That
-turns *was this file opened?* into something observable from outside the
-process, which it otherwise is not — and it is the only question that separates
-a gate from a complaint.
+A claim about the semantics of somebody else's linked list is a claim reached
+by reading, and this project settles those by asking the machine.
+scripts/show-desktop-check.sh starts a live headless desktop, gives it two
+real decor_client windows, chooses the menu entry through the control socket
+and reads windows back:
 
-It is built twice because the tamper test needs a swap that is competent: a
-valid, loadable shared object that exports the right symbol and declares the
-right ABI, and is simply not the file the receipt vouches for. Replacing a
-module with rubbish would pass with no gate at all, since dlopen refuses
-rubbish unaided.
-
-Two mutations, to find out whether the suite can fail:
-
-| mutation | checks that died |
+| the walk | what happened |
 | --- | --- |
-| the gate never refuses anything | 10 |
-| the gate moved to *behind* dlopen | 2 |
+| wl_list_for_each, put back and rebuilt | One running, Two minimized |
+| recon_clients | both minimized |
 
-The second is the interesting number. Moving the gate three lines down still
-refuses the swapped module, with the same message, and eight of the ten checks
-stay green. The two that die are both *"and nothing in it ran"* — which is
-exactly the claim, and the only two checks in the file that could have caught
-it.
+The first row is the one that matters. The fix working shows the code works
+now; only the old walk, run, shows there was ever a bug.
 
-### A pointer that was the wrong type and said so
+### The crash standing behind it
 
-Unrelated, and found by the compiler while the above was being built:
-recon_net_loop() is declared to return struct recon_loop * and was
-returning its struct wl_event_loop * directly. They are the same pointer — the
-wayland half of the loop seam casts rather than wraps — so nothing misbehaved,
-but the cast was being written by a file that should not know it is a cast.
+BG-211 — shutting down with any client window open was a use-after-free.
 
-recon_loop_from_wl now lives in include/recon_loop_wl.h and is inline, for
-a reason worth recording: two test binaries compile src/recon_net.c against
-the plain half of the seam on purpose, so that checking how an SNTP reply
-is read does not need a compositor linked. Out of line, the cast would be a
-symbol those binaries cannot resolve without linking a second definition of
-recon_timer_create. Inline, there is no symbol and the cast is still written
-once.
+Every one of those runs ended in a segfault, with the old walk and the new one
+alike — so it was not the change being tested. It had gone unseen because
+scripts/look.sh had never had a client window to close.
 
-src/recon_net.c still holds a compositor's loop, and converting it needs the
-seam to grow writability and a way to change what a watch is waiting for.
-That is a decision, and it is not this one.
+main.c called wl_display_destroy_clients() second to last, after the
+shell, the keyring, the users, the network, the theme, the fonts, the registry
+and the filesystem had all been finished. That call does not merely free
+memory: it unmaps every client surface, and each unmap fires toplevel_unmap,
+which asks the shell to redraw its taskbar.
 
-### The numbers
+The address sanitizer said so in one report: a read of 8 bytes, 88 bytes into a
+4,944-byte region, freed by recon_shell_destroy twenty-six lines earlier.
+gdb was tried first and was the wrong instrument — its inferior's stdout is a
+pipe, so the crash report and the tail of the log both sat in a buffer nobody
+flushed.
 
-57 suites, up from 56. 43 of 45 error codes have a site that raises
-them; the two that do not are documented exceptions.
+The dangling shell was not the whole of it. Those handlers can reach the theme,
+the fonts and the filesystem too, and all of those were finished by then; the
+shell is just what happened to be read first. The clients go first now,
+immediately after the control socket closes — a client window is part of the
+running system, and the time to end one is while the system is still standing.
+
+A crash at shutdown also costs the next start: no clean-stop marker is written,
+so the following run reports an unfinished session and blames a run that did
+nothing wrong.
+
+### One more latent fault the removal exposed
+
+include/recon_shell.h uses uint32_t and never included <stdint.h>. It had
+been getting it through recon_server.h all along, from a file that had no
+business supplying it.
 
 ---

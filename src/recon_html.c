@@ -606,6 +606,15 @@ static int add_field(struct builder *b, int kind) {
     int at = b->d->field_count++;
     struct recon_html_field *f = &b->d->fields[at];
     memset(f, 0, sizeof(*f));
+
+    /*
+     * Not zero. A `minlength` of 0 is a real thing for a page to write and
+     * means something different from not writing it, so "the page did not
+     * say" needs a value the page cannot produce.
+     */
+    f->min_length = -1;
+    f->max_length = -1;
+
     f->kind = kind;
     f->form = b->form;
     f->first_option = b->d->option_count;
@@ -1229,6 +1238,26 @@ static bool attribute(const char *attrs, size_t length, const char *want,
     }
     return false;
 }
+
+/*
+ * The length limits, which a text box and a textarea both take.
+ *
+ * Separate from the range (`min`/`max`), which only an input has -- and read
+ * here rather than twice, because two copies of an attribute reader is two
+ * places for a name to be misspelled and only one of them to be noticed.
+ */
+static void read_lengths(struct recon_html_field *f, const char *attrs,
+        size_t attrs_length) {
+    char text[16] = "";
+
+    if (attribute(attrs, attrs_length, "minlength", text, sizeof(text))) {
+        f->min_length = atoi(text);
+    }
+    if (attribute(attrs, attrs_length, "maxlength", text, sizeof(text))) {
+        f->max_length = atoi(text);
+    }
+}
+
 
 /*
  * Remember that this control named a form, whichever form that turns out to be.
@@ -2204,6 +2233,14 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     secret = true;
                 }
 
+                /*
+                 * An email box is a text box in every way except what counts
+                 * as an answer, which is why it is a flag beside the kind
+                 * rather than a kind of its own. The comment above says as
+                 * much and then had nowhere to put it.
+                 */
+                bool email = strcasecmp(type, "email") == 0;
+
                 int at_field = add_field(&b, kind);
                 if (at_field >= 0) {
                     struct recon_html_field *f = &d->fields[at_field];
@@ -2223,6 +2260,20 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                         "disabled");
                     f->required = has_attribute(attrs, attrs_length,
                         "required");
+                    f->wants_email = email;
+
+                    read_lengths(f, attrs, attrs_length);
+
+                    /*
+                     * Text, because HTML's are: `min="1"` on a number and
+                     * `min="2026-01-01"` on a date are the same attribute,
+                     * and what they mean is a question about the control
+                     * rather than about the attribute.
+                     */
+                    attribute(attrs, attrs_length, "min", f->min_value,
+                        sizeof(f->min_value));
+                    attribute(attrs, attrs_length, "max", f->max_value,
+                        sizeof(f->max_value));
 
                     char size_text[16] = "";
                     if (attribute(attrs, attrs_length, "size", size_text,
@@ -2417,6 +2468,13 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                             "disabled");
                         f->required = has_attribute(attrs, attrs_length,
                             "required");
+
+                        /*
+                         * Lengths but not a range: `min` on a textarea is not
+                         * a thing HTML has, and accepting one would be this
+                         * viewer inventing a rule a page never asked for.
+                         */
+                        read_lengths(f, attrs, attrs_length);
 
                         char cols[16] = "";
                         if (attribute(attrs, attrs_length, "cols", cols,

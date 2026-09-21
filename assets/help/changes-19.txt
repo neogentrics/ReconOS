@@ -1,74 +1,57 @@
-src/recon_shell.c is seven thousand two hundred lines and mentioned a
-compositor twenty-one times. It mentions one zero times now, and what is
-left holding it off a freestanding build is a single idea: a window that
-belongs to somebody else.
+64 of 85 sources build with no libc under them, up from 62. Twenty are
+left, holding 23,478 lines — and eight of those twenty are the wayland halves
+of seams, which are supposed to be there.
 
-### Most of the twenty-one were not questions at all
+### 629 lines held by one constant
 
-Seven were wlr_log, which recon_ui_say has answered since v0.4.44 — the
-shell was behind a wayland header for the sake of eight complaints. One was
-WLR_MODIFIER_CTRL, which RECON_MOD_CTRL has answered since v0.4.51.
+src/recon_clock.c asks for a non-blocking datagram socket to send an SNTP
+question on, which is the ordinary way to write that, and this library had no
+name for SOCK_NONBLOCK. socket() also refused any type with a flag on it,
+because a type with a flag is not a type it recognised.
 
-Several more were a scene node fetched from a window and handed straight back
-to wlr_scene_node_set_enabled. The panel seam has had set_enabled all
-along; the node was travelling through seven thousand lines for no reason.
-recon_appwin_set_visible and recon_desktop_set_visible say the thing
-instead.
+Both flags are defined now, with Linux's values, and socket() strips them
+before it checks the type. What each means here is worth saying:
 
-And point_in_panel read a node's x, y and enabled — the same two
-numbers recon_panel_position already reads back on either presentation, plus
-a bool the panel now remembers when it is told.
+- SOCK_NONBLOCK is granted, and is also the only thing on offer. Nothing
+  on this kernel blocks — accept answers EAGAIN when nobody is waiting, and
+  so does a read with nothing to read. A caller *not* asking for it gets it
+  anyway, which is the difference from Linux the header already spells out.
+  Refusing the flag would be worse than granting it: the program that asks is
+  the one written for this behaviour.
+- SOCK_CLOEXEC is accepted and does nothing, because there is no exec
+  for a descriptor to survive into. Accepted rather than refused so a program
+  written the careful way still runs.
 
-### One of them was a real question
+Neither is defined as zero, which would compile identically today and be a
+trap the day either becomes real: every caller asking for the protection would
+silently stop asking. O_NOFOLLOW got the same treatment in v0.4.53 and for
+the same reason.
 
-*"Which of my windows is genuinely drawn on top at this point?"* That is not
-the same as which one contains it: a maximized window contains every point on
-the screen and would claim clicks meant for windows stacked above it.
+### And two functions nothing called
 
-recon_panel_topmost_of asks it, and the answer differs by more than
-implementation:
+recon_appwin_node and recon_desktop_node existed to hand a scene node to
+recon_shell.c, which was their only caller. The shell asks about panels since
+v0.4.59, so nothing anywhere named either of them.
 
-- wayland knows the whole scene, including windows the shell never passed
-  in — a client's. That is why it can answer *"none of yours"* for a point one
-  of your panels does contain, and why dropping it would send a click meant for
-  a client to a built-in window underneath.
-- the framebuffer has no z-order at all, and says so: *"what is in front of
-  what is decided by the order things are committed, by whoever is doing the
-  committing."* There the shell is the authority, and walking its own
-  front-to-back list is not an approximation — it is the answer.
+v0.4.57 had given recon_appwin_node a file of its own — twenty-five lines,
+with a note saying *"if it grew, the seam would be in the wrong place"*. It did
+not grow. It turned out not to be needed at all, which is the better
+outcome and the one worth recording: the seam did not relocate the compositor
+dependency, it removed it. That file is gone.
 
-So the default is the walk and a compositor installs something better, which is
-exactly the shape recon_ui_set_log already uses and is installed in the same
-place.
+src/recon_desktop.c — 1,287 lines about icons, selection rectangles and
+renaming — went with the include, once two more questions moved onto
+recon_server_facts.h: which layer the wallpaper sits in, and how light or
+dark it is at a point. That file is seven functions now, and all seven are the
+same shape: something a program wants to know, asked without naming a
+compositor to ask it of.
 
-### Checked two ways, because a hit test is a thing you can see
+### The same blunt-replace mistake, twice in two days
 
-57 checks on the default walk — that the front one wins where they overlap,
-that reversing the list reverses the answer, that a hidden panel does not claim
-the point. And two photographs of a live desktop: a click inside the Calculator
-lands on the button under it, and a click on the Recycle Bin behind the
-Calculator selects the bin and takes focus off the window.
-
-### And the freestanding check caught one the build let through
-
-struct wlr_scene was named only inside a parameter list, which scopes it to
-that parameter list and makes every declaration of it a different type. The
-ordinary build never noticed — wlroots' own header is on its path and declares
-it properly. The check that compiles with nothing on the path did, and the
-count dropped from 62 to 33 until it was fixed. That is the second time this
-week that check has been stricter than the build and right to be.
-
-### What is left, and it is one idea
-
-38 references to recon_toplevel and server->toplevels: the windows the
-shell does not own. The task bar shows them, clicks reach them, and on
-ReconOS there are none — applications are loaded into the compositor, which is
-the addr-space row on the board and a decision that has already been made.
-
-So the shell is one abstraction from building with no Linux under it, and that
-abstraction is the same one that row is about. Written down rather than
-started.
-
-62 of 85 sources build with no libc under them.
+server->shell replaced without an anchor around it hit desktop->server->shell
+and turned a member access into a call on a member that does not exist. The
+identical fault hit recon_taskmgr.c in v0.4.58. Both were caught by the
+compiler immediately, which is the only reason it is a footnote rather than an
+entry — a replacement with no anchor around it hits things nobody looked at.
 
 ---
