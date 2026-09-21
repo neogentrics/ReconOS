@@ -107,12 +107,39 @@ fi
 # confusing way to be told that a constant went stale.
 esp_lba=$(sgdisk -p "$W/target.img" 2>/dev/null |
 	awk '$6 == "EF00" { print $2; exit }')
-esp_at=$(( ${esp_lba:-2048} * 512 ))
+
+# **Refused rather than defaulted.** (KF-260)
+#
+# This was `${esp_lba:-2048}`, and that default is the same stale constant the
+# paragraph above is about: 2048 blocks is the 1 MiB that stopped being right
+# the moment a BIOS boot partition went in front of the ESP. So when sgdisk
+# found nothing -- no EF00, a damaged table, sgdisk missing -- the fallback
+# quietly rebuilt the exact wrong offset whose symptom the comment calls a
+# confusing way to be told a constant went stale.
+#
+# An empty capture becoming a plausible number is the shape that produced a
+# false "0 sectors written" here on 18 September: `$((b - a))` over two empty
+# strings is 0, and `$(( ${x:-2048} * 512 ))` is 1048576. Both are answers
+# nobody measured.
+#
+# Measured, so the three cases are on the record rather than assumed: a bare
+# empty variable is 0 silently, a `:-` default is its default silently, and an
+# empty command substitution with no default is a loud syntax error. Only the
+# last one tells you anything.
+if [ -z "$esp_lba" ]; then
+	echo "FAILED -- sgdisk found no EF00 partition on the target image."
+	echo "  Not defaulting: the old default was 2048, which is the stale"
+	echo "  offset this lookup exists to replace, and using it here would"
+	echo "  report a filesystem fault about a partition nobody located."
+	exit 1
+fi
+
+esp_at=$(( esp_lba * 512 ))
 
 say "the loader and kernel are on the target"
 if mdir -i "$W/target.img@@$esp_at" ::/EFI/BOOT 2>/dev/null | grep -qi 'BOOTX64' &&
    mdir -i "$W/target.img@@$esp_at" ::/reconos 2>/dev/null | grep -qi 'kernel'; then
-	echo "BOOTX64.EFI and a kernel, at block ${esp_lba:-2048}"
+	echo "BOOTX64.EFI and a kernel, at block $esp_lba"
 	pass=$((pass + 1))
 else
 	echo "FAILED"

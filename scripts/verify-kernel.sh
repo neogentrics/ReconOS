@@ -377,7 +377,7 @@ check_cpus() {
 
 	local found
 	found=$(sed -e 's/\r$//' "$log" |
-		sed -n 's/^  found *: \([0-9]*\), \([0-9]*\) online$/\1 \2/p' |
+		sed -n 's/^  found *: \([0-9]*\), \([0-9]*\) online.*$/\1 \2/p' |
 		head -1)
 
 	if [ "$found" != "$n $n" ]; then
@@ -392,8 +392,31 @@ check_cpus() {
 	# summary is printed late, after the self-tests, so an idle processor has
 	# had a hundred ticks' worth of opportunity.
 	local idle_ticks
+	# **Anything may follow the value.** (KF-259)
+	#
+	# Three expressions in this file read a number out of the boot report and
+	# two others were anchored the same way -- the processor count and the
+	# shootdown count. All three are loosened together, because the fault was
+	# never about the tick line: it is that **a boot report is an interface**,
+	# read by a person and parsed by seventeen sub-scripts, and adding a word
+	# to a kprintf is an ABI change to every one of them.
+	#
+	# Nothing in this tree says which lines are load-bearing. Until something
+	# does, the cheap defence is to capture what is wanted and stop caring
+	# what follows it.
+	#
+	# This was anchored `ticks$`, which is the same thing as saying "the
+	# kernel may never add a word to this line" -- and on 18 September the
+	# kernel added `, idle-for-this-cpu` to exactly this line, for a good
+	# reason: the summary could not distinguish a thread about to run from
+	# one that can never be chosen, which had made a scheduling fault look
+	# like a timer fault for a day.
+	#
+	# Six SMP paths then failed with "not one of them was preempted" about
+	# processors that had been preempted perfectly well. The anchor was
+	# right about what it wanted and wrong to insist the line end there.
 	idle_ticks=$(sed -e 's/\r$//' "$log" |
-		sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks$/\1/p' |
+		sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks.*$/\1/p' |
 		sort -n | head -1)
 
 	if [ "$n" -gt 1 ] && { [ -z "$idle_ticks" ] || [ "$idle_ticks" -eq 0 ]; }; then
@@ -422,7 +445,7 @@ check_cpus() {
 	sent=$(tr -d '\r' < "$log" |
 		sed -n 's/^  shootdowns *: [0-9]* live invalidations, \([0-9]*\) sent.*/\1/p' | head -1)
 	unanswered=$(tr -d '\r' < "$log" |
-		sed -n 's/^  shootdowns *: .*, \([0-9]*\) unanswered$/\1/p' | head -1)
+		sed -n 's/^  shootdowns *: .*, \([0-9]*\) unanswered.*$/\1/p' | head -1)
 
 	if [ -n "$sent" ] && [ "$n" -gt 1 ]; then
 		if [ "$sent" -eq 0 ] || [ "${unanswered:-1}" -ne 0 ]; then

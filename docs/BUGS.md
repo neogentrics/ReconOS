@@ -135,6 +135,43 @@ Kernel faults from here take the next free `KF-` number; desktop faults the next
 free `BG-`. Neither track can take the other's, so neither has to look at the
 other's file first.
 
+### The network track's prefix, 16 September 2026
+
+**`NW-` is the network track's** — a session working on `network`, whose subject
+is network card drivers and the device interface underneath them.
+
+The two letters mean network to a reader who has not been told what they mean,
+which is the same argument `BT-` made for itself. What is worth recording is
+the two that were rejected, because both rejections are the rule rather than
+taste.
+
+**Not `RX` or `TX`.** A network driver prints `rx` and `tx` as counter labels,
+and it prints them *in the very summaries these numbers appear in* — the line
+above this paragraph's own driver reads `4 in, 4 out`, and the device summary
+reads `rx : 4 packets`. That is precisely the argument `KF-` made against
+`KB-`: this kernel prints KB for kilobytes. A prefix that is also a unit or a
+label in the same output is a prefix that stops being a name.
+
+**Not `NF`.** It is one character from `KF`, and both would appear in the same
+file and in the same kernel-branch commit messages, because this track merges
+into `kernel`. This register already carries one deliberate renumbering —
+BG-082 through BG-093 became KF-114 through KF-125 — caused by two tracks whose
+numbers could not be told apart. `NF-201` and `KF-201` would be two different
+real faults separated by one keystroke, which is that same hazard reintroduced
+with a typo in place of a merge. The lesson of the renumbering was not "do not
+renumber"; it was that a name has to be unambiguous at the point it is read.
+
+Network faults from here take the next free `NW-` number.
+
+**A note on the scripts, and it is deliberate that they are untouched.**
+`scripts/make-issues.py` and `scripts/check-readme-badges.py` carried the
+prefix in five separate regexes each, so every session claiming one edited the
+same five lines and conflicted with every other session doing the same. The
+Bluetooth track lifted that into a single `PREFIXES` constant. `NW` is
+therefore **not added here** — it goes in one place, once that refactor reaches
+this branch, and adding it the old way in the meantime would create exactly the
+five-line conflict the refactor exists to remove. `docs/SIGNALS.md` carries the
+one-line instruction and the badge arithmetic that goes with it.
 ### A third prefix, 15 September 2026
 
 **`GX-` is the graphics track's** -- a fourth session, working on `graphics`,
@@ -158,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-16, and each entry says why. They are listed because a register that only
+18, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -173,6 +210,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-232** — Three timers did not fire, once, on one path of twenty-eight
 - **KF-237** — A power cut inside a rename left no valid superblock, once
 - **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
+- **NW-004** — Network cards are bound from a file called storage.c, once per architecture
+- **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -628,6 +667,411 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ---
 
+### The network track's first eight, 16 September 2026
+
+All eight below were found in one pass: writing a **second** driver behind
+`net.h`, which had exactly one. They are numbered in the order they were
+written up rather than the order they surfaced, because they were registered in
+a single commit and no number has ever been quoted anywhere else. From NW-009
+on, a number is taken when the fault is found.
+
+Four are fixed, four are open, and the open ones are open because **the fix is
+an interface decision that belongs to the kernel session**, not because nobody
+got to them.
+
+The common shape, and it is the reason this was worth doing at all: an
+interface with one implementation cannot tell which of its choices were about
+networking and which were about virtio. Every entry here is a place where that
+turned out to be true.
+
+### NW-001 — A card's interrupt had no way to ask to be collected from
+
+[#519](https://github.com/neogentrics/ReconOS/issues/519)
+
+- **Found in** kernel 0.2.46, by the network session, writing the interrupt
+  handler for the first card that has one.
+- **Was** `netdev_service()` — the function that drains the receive queue — had
+  four callers, and every one of them was inside a loop that was *already
+  waiting* for a packet: DHCP's wait, the boot echo's wait, a socket read, a
+  socket accept. The fifth was `rx_work_fn`, scheduled only by
+  `netdev_receive`, which a driver can only call once it holds a `netbuf`.
+
+  `irq.h` forbids a handler from allocating. So an interrupt handler could not
+  build a buffer, could not call `netdev_receive`, and could not reach
+  `work_schedule` — there was no path at all from "the card says it has a
+  frame" to "the worker thread runs". There is no timer driving it either, and
+  the idle loop does not touch it.
+- **Why it survived** virtio-net sets `enable_interrupts` to null and is
+  polled, and every path that needs it to receive is a loop that calls
+  `netdev_service()` itself. The only driver there was never needed the door,
+  so nobody noticed the door was missing.
+- **Fixed in** kernel 0.2.46 on `network`, by `netdev_wake()`: schedules the
+  drain and does nothing else, which is all a handler is allowed to do.
+  Asserted by `nic_self_test`, and the assertion was **broken on purpose and
+  watched go red** — see NW-008 for what that first attempt was worth.
+
+### NW-002 — Two drivers, and both of them called their first card eth0
+
+[#520](https://github.com/neogentrics/ReconOS/issues/520)
+
+- **Found in** kernel 0.2.46, by the network session, the moment a second
+  driver registered a device.
+- **Was** every driver composed its own name from a count of its own cards —
+  `virtio_net.c` does `name[3] = '0' + device_count`. That is correct while
+  there is one driver, because then a driver's count of its cards *is* the
+  machine's count of its cards. With two drivers both start at zero, and
+  `netdev_register` only copied the string: it asked nothing.
+
+  The result is two devices answering to `eth0`, `netdev_by_name` returning
+  whichever registered first, and a boot summary printing one name twice with
+  two different sets of counters under it.
+- **Fixed in** kernel 0.2.46 on `network`. The name is the device layer's to
+  issue — `netdev_name()` hands back the next unused one, because the device
+  layer is the only thing that can see all the devices — and
+  `netdev_register` refuses a duplicate rather than accepting it. Both halves
+  are asserted, and both assertions were broken on purpose and seen to fail.
+
+### NW-003 — A field for what the cable is doing that nothing ever read
+
+[#521](https://github.com/neogentrics/ReconOS/issues/521)
+
+- **Found in** kernel 0.2.46, by the network session, by grep, before a line of
+  driver was written.
+- **Was** `struct net_device` carries `bool link`, commented *"what the device
+  says about the cable"*. It is assigned in exactly one place in the whole
+  kernel — `virtio_net.c` setting it to `true` at attach — and read in none.
+  Nothing prints it, nothing routes on it, nothing re-runs DHCP when it
+  changes.
+- **Why it survived** it is not a field about a cable, it is a field about
+  virtio-net, and for virtio-net the honest value is a constant. A card with a
+  PHY has a link that genuinely comes and goes, and "the device is up" and
+  "there is a cable in it" are two different facts about a real machine.
+- **Fixed in** kernel 0.3.5 on `network`, in two halves a day apart.
+
+  **The writing half:** both new drivers read the real state out of the silicon,
+  report it at attach in either direction, and report every change. So the field
+  holds a fact.
+
+  **The reading half:** `netdev_route` now skips a device whose cable is out, on
+  both the unicast and the broadcast path, and `net_bring_up` says *"`eth0` has
+  no cable; not asking for an address"* instead of spending two and a half
+  seconds on DHCP and reporting that nothing offered one. Those are different
+  problems — a wire somebody can plug in, and a server somebody has to go and
+  look at — and reporting the wrong one of them after a timeout reads like an
+  answer.
+
+  **The default had to change with it.** `netdev_register` now sets `link` true,
+  because three devices in this tree never set it and all three are test devices
+  with no cable to have an opinion about; defaulting to false would have made
+  them unroutable and taken the stack self-test down. True is also the honest
+  default for a driver that cannot read a PHY: *"I do not know"* and *"there is
+  no cable"* are different answers.
+- **And the test for it could not fail, twice over.** The unicast assertion was
+  sound. The broadcast one was not: the broadcast path returns the *first*
+  qualifying device, the test's device registers last, so on a machine with a
+  real card the answer was that card no matter what the test did. Removing the
+  link check from the broadcast path on purpose left the run green. It puts
+  every other device down for the length of that assertion now, and carries a
+  control that fails if broadcasts route nowhere at all.
+
+  Worth recording because of where it happened: directly beneath a comment in
+  the same file about checks that cannot fail.
+
+### NW-004 — Open — Network cards are bound from a file called storage.c
+
+[#522](https://github.com/neogentrics/ReconOS/issues/522)
+
+- **Found in** kernel 0.2.46, by the network session, looking for where to put
+  a probe.
+- **Is** there is no device-probe layer. `arch_storage_probe()` in
+  `arch/x86_64/storage.c` and `arch/aarch64/storage.c` is the whole of device
+  binding, it exists once per architecture, and it is where network cards are
+  attached — so a driver that lives in portable `core/` and contains nothing
+  about any machine cannot be reached without editing two `arch/` files.
+- **Open because** the fix is a driver registry, and building one to hold three
+  drivers would be an interface designed before anything measured what it
+  needs — which is the fault this whole set of entries is about. Adding two
+  lines to a list is cheap and honest; the entry exists so the cost is
+  recorded rather than absorbed silently each time.
+
+### NW-005 — Open — A PCI device without MSI-X cannot be given an interrupt at all
+
+[#523](https://github.com/neogentrics/ReconOS/issues/523)
+
+- **Found in** kernel 0.2.46, by the network session, when the emulated Intel
+  card was refused a vector and fell back to polling.
+- **Is** `arch_pci_request_interrupt()` returns false for any device with no
+  MSI-X capability, and there is no other path: the PCI interrupt-line and
+  interrupt-pin registers at configuration offsets 0x3C and 0x3D are **never
+  read anywhere in the kernel**, and nothing maps a PCI interrupt pin to a
+  legacy line. `arch/x86_64/msi.c` says plain MSI "goes in beside the first
+  device that needs it"; nothing has needed it yet, and the 82540EM offers
+  neither, so it is polled.
+
+  Measured rather than assumed, and the measurement corrected a guess: the
+  RTL8168s in the server offer **both** MSI and MSI-X (capability 0x50 and
+  capability 0xb0, count 4), so that card does get a vector. It is the
+  emulated Intel that gets none.
+- **Why it matters more than it looks** the fallback is silent and polling
+  works. A driver that believes it is interrupt-driven and is being carried
+  entirely by a poll loop is indistinguishable from one that is not — so both
+  new drivers print which one is in force, and print it again in the summary
+  if a card holds a vector and has never been interrupted.
+- **Open because** whether to add legacy INTx routing, plain MSI, or neither is
+  a decision about the interrupt layer, which is the kernel session's.
+
+### NW-006 — A receive ring handed the card a buffer the stack was reading
+
+[#524](https://github.com/neogentrics/ReconOS/issues/524)
+
+- **Found in** kernel 0.2.46, by the network session, reading the boot summary
+  it had just added. Before it could ever have fired.
+- **Was** the Intel driver's receive tail register names the last descriptor the
+  card may write, and everything from the card's head up to it is available. The
+  first version advanced it to the last descriptor it had *successfully*
+  re-stocked — which under memory pressure can be a later index than one whose
+  allocation failed. Slot 1 fails, slot 2 succeeds, the tail goes to 2, and the
+  card is now free to write descriptor 1, which still holds the physical
+  address of the buffer just handed up to IP.
+
+  That is not a dropped packet. It is a card writing a new frame into one the
+  stack is parsing.
+- **Why it is worth an entry despite never running** because the Realtek
+  **cannot have this fault**, and the contrast is the finding. That card has no
+  tail register: a descriptor is available if and only if its ownership bit is
+  set, and the only place that bit is set is after an allocation succeeded — so
+  availability and having-a-buffer are one fact. On the Intel they are two
+  facts kept in step by hand, and hands slip.
+- **Fixed in** kernel 0.2.46 on `network`: the tail is computed by walking the
+  run of descriptors that all have a buffer, and stops at the first that does
+  not.
+
+  **And it has a check in front of it now**, which it did not when it was first
+  written up. The walk lives in `rx_available`, which `e1000_poll` calls, so
+  the test drives the running code rather than a copy of it -- and it can be
+  handed a ring with a hole punched in it, which is the situation the fault
+  needs and which a self-test must not create for real by exhausting the page
+  allocator. Breaking the walk so it ignores the hole is caught, and so is
+  removing the cap that keeps the tail from meeting the head. Both of those
+  broken kernels still take a DHCP lease and answer a ping.
+
+### NW-007 — The boot test caught the length mistake nobody makes
+
+[#525](https://github.com/neogentrics/ReconOS/issues/525)
+
+- **Found in** kernel 0.2.46, by the network session, breaking its own driver
+  on purpose to find out what the test could see.
+- **Is** a received frame's length is the one number the two cards disagree
+  about: the Realtek's includes the four-byte frame check sequence and the
+  Intel's does not, because the Intel is told to strip it. Getting it wrong is
+  the likeliest single fault in either driver.
+
+  Booting with the card was assumed to cover it. **It covers half.** Measured,
+  by breaking the length in each direction and booting each one:
+
+  | the receive length | result |
+  |---|---|
+  | correct | DHCP lease, ping answered |
+  | four bytes too short | no lease, no ping — caught at once |
+  | four bytes too long | lease and ping, indistinguishable from correct |
+
+  Too short fails UDP's checksum, so DHCP's reply is discarded. Too long is
+  invisible because every layer reads its own length field and ignores whatever
+  trails it — Ethernet has no length at all, IP and UDP have their own, and
+  four stray bytes of somebody's CRC sit past the end where nothing looks.
+
+  **And too long is the direction a driver errs in**, because it is what
+  forgetting the subtraction looks like.
+- **Fixed in** kernel 0.2.48 on `network`, by `r8169_self_test` and
+  `e1000_self_test`.
+
+  Each drives **the real receive loop** against a page of memory standing in
+  for the register window. Nothing is lifted out into a testable copy — that
+  objection was the whole reason this stayed open, and the two places where a
+  helper *was* extracted (`rx_available`) are called by the loop, so what the
+  test exercises is what runs.
+
+  **Thirteen faults introduced on purpose, thirteen caught**, and the column
+  that matters is the third:
+
+  | driver | break | boot said |
+  |---|---|---|
+  | r8169 | the subtraction removed | lease ✓ ping ✓ |
+  | r8169 | end-of-ring taken from the card, not the index | lease ✓ ping ✓ |
+  | r8169 | the short-length guard removed | lease ✓ ping ✓ |
+  | r8169 | a frame the card marked bad accepted | lease ✓ ping ✓ |
+  | r8169 | half of a split frame accepted | lease ✓ ping ✓ |
+  | e1000 | the Realtek's subtraction copied in | lease ✗ ping ✗ |
+  | e1000 | four bytes **too long** | lease ✓ ping ✓ |
+  | e1000 | the tail walks past a hole (NW-006) | lease ✓ ping ✓ |
+  | e1000 | the tail offers the whole ring | lease ✓ ping ✓ |
+  | e1000 | end-of-packet ignored | lease ✓ ping ✓ |
+  | e1000 | the error byte ignored | lease ✓ ping ✓ |
+  | e1000 | an empty frame accepted | lease ✓ ping ✓ |
+  | e1000 | a jumbo frame accepted | lease ✓ ping ✓ |
+
+  **Twelve of the thirteen boot perfectly** — a DHCP lease and a ping answered
+  in about 300 microseconds — while doing the wrong thing.
+
+  **That column means two different things and the difference is worth being
+  exact about**, because stating it as one claim overstates the Realtek's half.
+
+  For the **e1000** rows it is the strong statement: that card *is* the one
+  carrying the boot's traffic, so a broken driver that still gets a lease and a
+  ping is a fault a running machine genuinely cannot show you. Seven of its
+  eight breaks are that.
+
+  For the **r8169** rows it is weaker and more basic: the rig emulates no
+  Realtek part, so that driver is not on the boot path at all. A green boot
+  there does not mean the fault slipped past a running machine — it means no
+  running machine ever touched the code. Which is the reason the test had to
+  exist, but it is not the same evidence and should not be counted as though
+  it were.
+
+  A fourteenth break did not compile: removing the error-byte test entirely
+  leaves the variable unused and `-Werror=unused-but-set-variable` refuses it.
+  Worth recording as the one case where the toolchain is the check.
+
+  **One break found a fault in the test rather than the driver**, which is the
+  same shape as everything else here. The Realtek's assertions measured
+  `rx_bytes` alone, so removing the short-length guard — which turns a
+  four-byte descriptor into a frame of length **zero**, passed up the stack —
+  moved no bytes and read exactly like a correct refusal. Both tests count
+  frames as well as bytes now. Found by breaking the guard and watching the
+  test stay green.
+
+  **And one break was wrong rather than uncaught**, separated from that because
+  the difference matters: or-ing `DESC_OWN` into a Realtek descriptor instead
+  of rebuilding it does *not* lose the end-of-ring bit, because that driver
+  re-derives the bit from the index every time. The break that loses it is
+  taking the bit from what the card left — which is what Linux's driver does —
+  and the simulated card here clears it deliberately so the difference is
+  testable at all.
+
+  **The transmit side is covered too**, which it was not when this entry was
+  first closed. Both drivers now assert the descriptor they actually build —
+  length, address, the flags, the doorbell, and who owns the buffer — against
+  the same fake register window. Ten more breaks, ten more caught:
+
+  | driver | break | boot said |
+  |---|---|---|
+  | r8169 | the doorbell never rung | lease ✓ ping ✓ |
+  | r8169 | the buffer freed at send time | lease ✓ ping ✓ |
+  | r8169 | a full ring not checked | lease ✓ ping ✓ |
+  | r8169 | completed buffers never freed | lease ✓ ping ✓ |
+  | r8169 | the sent length four bytes too long | lease ✓ ping ✓ |
+  | e1000 | completion never requested (`RS`) | lease ✓ ping ✓ |
+  | e1000 | the transmit tail off by one | lease ✓ ping ✗ |
+  | e1000 | no check sequence appended (`IFCS`) | lease ✓ ping ✓ |
+  | e1000 | not marked end-of-packet | lease ✗ ping ✗ |
+  | e1000 | a full ring not checked | lease ✓ ping ✓ |
+
+  **The `RS` one is the entry's whole argument in miniature.** Without that bit
+  the card is never asked to report completion, so the status byte is never
+  written, so nothing is ever reclaimed — and the machine gets a DHCP lease,
+  answers pings in 300 microseconds, and leaks a page per frame until it dies
+  hours later with nothing to point at. A far end that replies cannot see it,
+  because the parts of a frame a far end validates are not the parts a driver
+  gets wrong.
+
+  **What is still not covered, so that it is not assumed:** a simulated card
+  cannot say that the real chip behaves the way the simulation pretends.
+  Register offsets, the reset sequence, and the meaning of every bit are proved
+  by booting with the card and nowhere else — which for the Realtek has not
+  happened at all.
+
+### NW-009 — A script that writes to a public tracker treated an unknown argument as consent
+
+[#527](https://github.com/neogentrics/ReconOS/issues/527)
+
+- **Found in** the tooling, on 17 September 2026, by the network session, by
+  running `python scripts/make-issues.py --help` to find out what the options
+  were.
+- **Was** `make-issues.py` has three modes. `--check` and `--dry-run` are
+  read-only; the default **creates issues on GitHub, closes them and edits
+  their labels**. It parsed its arguments by asking whether each known flag was
+  present and doing the default otherwise — so an argument it did not
+  recognise, including `--help`, which it never implemented, selected the one
+  mode that changes something outside the repository.
+
+  Eight issues were created — #519 to #526, the whole `NW-` set — by a command
+  typed to ask a question.
+- **Why it is worth an entry even though the result was right.** The issues are
+  correct: right titles, bodies straight from the register, and states that
+  match it — the four fixed entries closed, the four open ones open. `--check`
+  went from `8 entries unlinked` to `0 entries unlinked`. It is exactly what the
+  project's own process says must happen, and the kernel session would have run
+  it on merge.
+
+  **That is what makes it dangerous rather than harmless.** A mistake that
+  produces the right answer leaves nothing to notice and no reason to change
+  anything, so it waits. The next time the register is half-written, or the
+  argument is `--dry-run` misspelt, the same path runs against a public tracker
+  with nobody having decided to.
+- **Fixed in** kernel 0.2.49 on `network`. An unrecognised argument now prints
+  the usage and exits 2 without touching anything, `--help` exists and is
+  read-only, and the docstring states the rule it settles: *a tool whose
+  default is the side-effecting mode must treat an unknown argument as a
+  question, not as consent.*
+
+  Checked by running `--help`, `--wat` and `--check` and confirming the first
+  two reach no network and the third is unchanged.
+- **Not reverted.** The eight issues stand, because the end state is the correct
+  one and deleting them would leave the register pointing at nothing. The fault
+  was the path, not the outcome.
+
+### NW-008 — A hook in the device interface that nothing ever called
+
+[#526](https://github.com/neogentrics/ReconOS/issues/526)
+
+- **Found in** kernel 0.2.46, by the network session, by grep, looking for how
+  to turn a card's interrupts on.
+- **Was** `struct net_device_ops` declares
+  `bool (*enable_interrupts)(struct net_device *dev)` with a paragraph of
+  comment explaining when a driver should implement it. All three
+  implementations set it to `NULL`, and **no code in the kernel ever calls
+  it** — there is no `ops->enable_interrupts` anywhere. A driver that filled it
+  in would sit there never being asked.
+- **Why it survived** it is null in every implementation, so a missing call
+  site and a correctly-skipped optional hook look identical from every angle
+  except grepping for the call.
+- **Not removed here, and that is the finding.** It is the member the interface
+  *should* have — a card's interrupts genuinely need turning on at a moment the
+  device layer chooses, which is why NW-001's `netdev_wake` exists on the
+  driver's side of the same wire. Deleting it would throw away the right idea
+  because of a missing call; wiring it up is a device-layer decision. Both new
+  drivers leave it null and arm their own interrupts at attach, and say so.
+- **Fixed in** kernel 0.3.7 on `network`. `netdev_register` calls it, after the
+  device is in the table and before the driver's attach returns. Both card
+  drivers implement it, and both now claim their interrupt vector *before*
+  registering so the hook has something to arm.
+
+  **The ordering is the reason the hook is worth having** rather than each
+  driver arming its own mask at the end of attach: an interrupt arriving the
+  instant the mask opens asks the worker thread to poll every registered
+  device, and a card that armed itself first is not on that list yet. Asserted
+  separately from "was it called at all", and broken separately to prove it —
+  moving the registration after the call makes the run red on its own.
+
+  Deleting the member was the other option and it was refused. It is the right
+  idea with a missing call site; throwing it away because nobody had wired it
+  up would have lost the design and kept the problem.
+- **What it is worth, on this rig, is nothing yet** — and that is worth saying
+  rather than leaving the fix looking bigger than it is. Both real drivers
+  return **false** from it, because `arch_pci_request_interrupt` can give them
+  no vector (NW-005). The only implementation in the tree that returns true is
+  the self-test's, which is why the test does not accept false as proof. The
+  boot now says so outright: `interrupts : 1 card(s) can raise one, 2 cannot
+  and are polled`.
+
+  This is also the entry that nearly did not get written. The first version of
+  NW-001's test **passed with `netdev_wake` gutted** — it measured whether the
+  machine was busy rather than what the call did, because the receive drain was
+  usually already queued by something else. It took breaking the function on
+  purpose to find that out, and then a second attempt at the break, because the
+  first one patched the wrong function and produced a green run that proved
+  nothing. A check that cannot fail looks exactly like one that passes, and it
+  looks that way twice.
 ### GX-010 — The attach path of both hardware backends had no test, and the first test written for it could not fail
 
 [#506](https://github.com/neogentrics/ReconOS/issues/506)
@@ -7962,6 +8406,8 @@ lands on any screen. Verified by photograph at 800x600, 1280x800 and 1920x1200.
 
 ### KF-216 — The loader drew on a fifth of the screen the machine had
 
+[#450](https://github.com/neogentrics/ReconOS/issues/450)
+
 > **The panel is not 1920x1080, measured 17 September 2026.** Kali on the
 > Gateway reports the connector directly:
 >
@@ -8332,7 +8778,219 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-260 — A fallback that rebuilt the exact wrong number it was written to replace
+
+[#544](https://github.com/neogentrics/ReconOS/issues/544)
+
+- **Found:** 18 September 2026, auditing this tree for one shape after producing
+  it myself: **an empty capture becoming a plausible number.**
+
+- **What it was.** `install-then-boot-test.sh` looks up where the EFI partition
+  landed, because a literal 1 MiB went stale when a BIOS boot partition was put
+  in front of the ESP. The comment explaining that is still there and is good.
+  The line under it was:
+
+  ```sh
+  esp_lba=$(sgdisk -p "$W/target.img" | awk '$6 == "EF00" { print $2; exit }')
+  esp_at=$(( ${esp_lba:-2048} * 512 ))
+  ```
+
+  **2048 blocks is the stale 1 MiB.** So whenever the lookup found nothing --
+  no EF00 partition, a damaged table, `sgdisk` absent -- the fallback silently
+  reinstated the exact offset the lookup exists to replace, and the test then
+  read a BIOS boot partition as a filesystem and reported *"non DOS media"*.
+  Which the comment four lines above calls *a confusing way to be told that a
+  constant went stale.*
+
+- **Measured rather than assumed**, because the three cases behave differently
+  and only one of them is safe:
+
+  | written as | when empty |
+  |---|---|
+  | `$(( var * 512 ))` | **0**, silently |
+  | `$(( ${var:-2048} * 512 ))` | **1048576**, silently |
+  | `$(( $(cmd) * 512 ))` | **syntax error**, loudly |
+
+  `install-onto-test.sh` uses the third form and is safe by accident. This one
+  used the second.
+
+- **Why it was looked for at all.** The same shape had just produced a false
+  fact in this register: a probe reported `0 sectors written` for a deliberate
+  200 MB write, and that zero was `$((b - a))` over two empty strings after an
+  awk syntax error the author's own `2>/dev/null` had hidden. It was published
+  as *"`/proc/diskstats` is broken on this machine"* and retracted an hour
+  later. Grepping the tree for arithmetic over captured values found this in
+  two minutes.
+
+- **Fixed** by refusing instead of defaulting: an empty `esp_lba` now fails with
+  the reason, and says why it is not falling back. The dead `${esp_lba:-2048}`
+  left in the success message went too -- a default in a message implies a
+  fallback that no longer exists.
+
+- **Latent, not live.** Every image the matrix builds has an EF00 partition, so
+  this has never fired. It is recorded because the conditions that make it fire
+  -- `sgdisk` missing, a table damaged by the thing under test -- are exactly
+  the conditions under which somebody would be reading the output most closely.
+
+- **Status:** fixed, kernel 0.5.0.
+
+### KF-259 — Six paths failed about processors that had been preempted perfectly well
+
+[#540](https://github.com/neogentrics/ReconOS/issues/540)
+
+- **Found:** 18 September 2026, matrix 73, six paths red at once:
+
+  ```
+  PVH 2 processors, no ticks
+  PVH 4 processors, no ticks
+  PVH 8 processors, no ticks
+  device tree 2 processors, no ticks
+  ...
+      PVH, 2 processors    FAILED -- online, and not one of them was preempted
+        cpu 0        : online, hw 0x0, 4 ticks, 0 switches
+        cpu 1        : online, hw 0x1, 0 ticks, 0 switches
+  ```
+
+- **Six paths at once, immediately after a merge, is a story that writes
+  itself** -- and the story was wrong. The merge before it brought two network
+  drivers and an interrupt hook that claims a vector, so "the NIC drivers broke
+  SMP interrupts" was sitting there ready to be believed.
+
+  **It reproduced with no network device attached at all**, which killed that in
+  one command. Then the pre-merge kernel reproduced the same `cpu 1: 0 ticks`
+  while *passing* -- so the tick counts printed beside the failure were not the
+  failure either, and the merge was innocent.
+
+- **What it actually was.** `verify-kernel.sh` reads the preemption evidence out
+  of the boot report with an anchored expression:
+
+  ```sh
+  sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks$/\1/p'
+  ```
+
+  Note `ticks$`. **And the commit before the merge appended a field to exactly
+  that line**, for KF-258: the summary could not distinguish a thread that is
+  about to run from one that can never be chosen, so it now says which.
+
+  ```
+  thread 2     : idle-001, running, 2 ticks, idle-for-this-cpu
+  ```
+
+  The anchor stops matching, `idle_ticks` comes back empty, and the check
+  reports that nothing was preempted about a machine that preempted normally.
+
+- **A boot report is an interface.** It is read by a person, and it is also
+  parsed by seventeen sub-scripts and the run that drives them. Adding a word to
+  a line is an ABI change to every one of them, and nothing in this tree says so
+  -- there is no list of which lines are load-bearing, and the only way to find
+  out is `grep` before editing a `kprintf`.
+
+- **It failed closed, and that is the only reason this was cheap.** An anchored
+  expression that stops matching produces an empty answer, and the check treats
+  empty as failure. The same fault in the other direction -- a looser pattern
+  that matched something wrong -- would have gone on reporting `pass` about
+  preemption nobody was measuring any more, on every SMP path, indefinitely.
+  **This is the shape of KF-247 with the sign flipped**, and it is the good sign.
+
+- **Fixed:** `ticks.*$`. The expression wanted the number and had no business
+  insisting the line ended there. Verified by feeding it both the new
+  `running, ... , idle-for-this-cpu` line and the `ready` line beside it: it
+  takes the first and ignores the second, which is what it always meant.
+
+- **Status:** fixed, kernel 0.5.0. No kernel code changed -- the kernel was
+  right and its reader was not.
+
 ### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
+
+[#534](https://github.com/neogentrics/ReconOS/issues/534)
+
+> ### Narrowed, 18 September 2026, and it is not the idle path
+>
+> The entry below blames the idle path. **That was wrong**, and it is left
+> standing above this note because the reasoning that produced it is the
+> reasoning somebody else would repeat.
+>
+> **The discriminator is a user program, not an idle machine.** Counting
+> completed sleeps in the same kernel, same command, one word apart:
+>
+> ```
+> with the first screen : 1
+> with noinit           : 4
+> ```
+>
+> `noinit` is the only difference, and all it does is not start `recon-init`.
+> A machine that runs no user program sleeps and wakes indefinitely; a machine
+> that starts one stops after the first sleep. So the idle path is a bystander
+> -- it was suspect only because "the machine has gone quiet" and "the first
+> program has started" happen at nearly the same moment, and I took the first.
+>
+> **The thread table at the moment it wedges**, printed from inside the
+> sleeper immediately after its first sleep returns:
+>
+> ```
+> thread 0  : boot,       ready,   188 ticks
+> thread 31 : recon-init, ready,     0 ticks
+> thread 30 : logport,    running,   0 ticks
+> thread 2  : kworker,    finished,  1 ticks
+> thread 1  : idle-000,   ready,     4 ticks
+> ```
+>
+> **`recon-init` is READY and has had zero ticks.** It has never been given the
+> processor. `pick_next` takes a thread only when
+> `t->state == THREAD_READY && t->off_cpu` and its `idle_for` and `pinned_to`
+> allow this processor -- so a thread that is READY and never picked is either
+> not `off_cpu`, or is being passed over for a reason the summary does not
+> show. Both the boot thread and `idle-000` are marked idle-for-this-processor
+> and are last resorts, so with a program *ready*, the picker believes there is
+> work and the two waiters are skipped.
+>
+> That is a **scheduling** fault, and it is a much better place to look than
+> the timer wheel: the sleeper's timer fires correctly (`timer_next_deadline`
+> was observed returning the right deadline, 107 ms out, and the idle path
+> armed it).
+>
+> **Adding a `kprintf` to `power_idle_wait` makes it go away** -- four sleeps
+> complete instead of one. So it is timing-sensitive, which is consistent with
+> a race around a thread becoming runnable rather than with a wrong constant.
+>
+> **Its likely relative is KF-150** -- *about one boot in sixty, a user program
+> does not finish, and nothing says why* -- which has been open since before
+> any of this and is a user program not being run. That is the same sentence.
+>
+> **Deliberately not patched.** The fix belongs in `pick_next` or in whatever
+> sets `off_cpu`, and the scheduler is the one file in this tree where a wrong
+> guess produces intermittent faults nobody can attribute -- KF-150 may already
+> be one. The evidence above is worth more than a patch written from it in the
+> same hour.
+>
+> **That next step is done, and it eliminated its own hypothesis.**
+> `sched_print_summary` now prints whether a READY thread is actually pickable
+> and whether it is an idle thread, and the wedge re-run says:
+>
+> ```
+> thread 0  : boot,       ready,  195 ticks, idle-for-this-cpu
+> thread 31 : recon-init, ready,    0 ticks
+> thread 30 : logport,    running,  0 ticks
+> thread 1  : idle-000,   ready,    4 ticks, idle-for-this-cpu
+> ```
+>
+> `recon-init` carries **neither** marker: it is READY, it *is* `off_cpu`, and
+> it is not an idle thread. So it is fully eligible and `pick_next` should
+> return it on the next call. **It is not a picker-eligibility fault**, which
+> was the leading candidate an hour ago and is now ruled out by one word of
+> output.
+>
+> What remains is the program's **lifetime**: `noinit` -- which differs only by
+> not starting it -- sleeps indefinitely, so it is `recon-init` running and
+> exiting that breaks the sleeper, not its existing. The next thing to look at
+> is teardown: `timer_sleep_ns` keeps its `struct sleeper` and `struct timer`
+> **on the caller's stack**, and a timer still filed against freed or corrupted
+> memory is a callback writing somewhere it does not own. KF-209 was a teardown
+> freeing pages it should not have, in this same path.
+>
+> Then re-measure KF-150 -- *about one boot in sixty, a user program does not
+> finish* -- against whatever it turns out to be.
+
 
 [#534](https://github.com/neogentrics/ReconOS/issues/534)
 
@@ -9359,6 +10017,302 @@ boot log.
 - **Status:** fixed, kernel 0.2.45.
 
 ### KF-237 - A power cut inside a rename left no valid superblock, once
+
+> ### A third sighting, 18 September 2026 — and it stops being "intermittent"
+>
+> Reported by the **graphics session**, from their own matrix run, on a branch
+> whose only changes are `intel_modeset.c`, a script, docs and a badge. They
+> took no number because the prefix is this track's, and they were right to
+> report it rather than sit on it.
+>
+> ```
+> a rename survives the power going out       FAILED
+>       proving the checker first:
+>           checksum: caught
+>           unallocated: caught
+>           torn: caught
+>
+>       round 1 (cut at 271ms):
+>           unreadable no valid superblock
+>
+>     6 cuts inside a rename on x86_64: 1 inconsistent.
+> ```
+>
+> **The checker proved itself on all three fault shapes in the same run**, so
+> this is not a broken reader — which is the first thing that would have to be
+> ruled out and was, without being asked.
+>
+> Three sightings, three different cut moments: **1115 ms** (matrix 57),
+> **904 ms** (matrix 70), **271 ms** (theirs). One round of six each time. That
+> is not one unlucky instant; it is a window that exists across the whole write
+> sequence.
+>
+> #### The argument that changes what this entry is
+>
+> All three happened on a **contended machine**. Theirs had four
+> `verify-kernel.sh` processes from the `ReconOS-matrix` worktree running
+> against it — this session's — and its first attempt failed `clock and tick`
+> at **14 Hz against an expected 100**, which is the starvation signature.
+>
+> The easy conclusion is *the harness is flaky under load*. They refused it, and
+> the refusal is the most useful sentence anybody has written about this bug:
+>
+> > **A window that only opens under load is still a window.** A real power cut
+> > does not wait for the machine to be idle. If anything, a starved host is a
+> > better model of a laptop losing power mid-save than an idle one is.
+>
+> That is correct and it inverts the reading. Contention is not an excuse for
+> the failure; **contention is the test condition that finds it.** A filesystem
+> whose crash consistency holds only when nothing else is happening is a
+> filesystem that has not been tested, and this rig has been quietly grading it
+> on the easy case.
+>
+> #### And it explains why two reproduction attempts failed
+>
+> KF-250 records the same caveat from the other side: *the load I reproduced was
+> the wrong load.* Six CPU spinners were run against `install-then-boot-test.sh`
+> and it passed twice; twelve plain boots six at a time found nothing. **Spinning
+> CPUs is not disk contention**, and four concurrent matrices — each formatting
+> and writing disk images — is.
+>
+> So the reproduction to attempt is not "a busy machine" but **"a machine whose
+> disk is busy"**, and the cheapest version of it is to run
+> `rename-crash-test.sh` beside something doing heavy I/O rather than beside
+> something burning CPU.
+>
+> #### One operational fact this surfaced — and the first version of it, written here, was wrong
+>
+> Three matrices were running at once when the graphics session saw 14 Hz. I
+> wrote that `RECON_TREE_LOCK` makes the lock per-worktree and that its
+> granularity is wrong for the scarce resource. **That is backwards**, and the
+> graphics session corrected it with the line itself:
+>
+> ```sh
+> LOCKFILE=${RECON_TREE_LOCK:-/tmp/reconos-kernel-tree.lock}
+> ```
+>
+> **The default is one path for the whole machine.** A session that leaves the
+> variable alone serialises with every other session that leaves it alone. The
+> granularity is right by design; it is being *overridden* — and this session
+> is one of the two overriding it:
+>
+> ```
+> ReconOS-matrix    RECON_TREE_LOCK=/tmp/reconos-matrix-tree.lock   <- mine
+> ReconOS-network   RECON_TREE_LOCK=/tmp/reconos-network-tree.lock
+> ReconOS-graphics  unset -> the shared default
+> ```
+>
+> So the starvation is not a missing mechanism somebody has to build. It is two
+> sessions opting out of one that already works, and the fix is a line each
+> rather than a design.
+>
+> **Why this session set it** is in `reference-reconos-matrix-worktree`: so a
+> matrix could run while the other session edited the kernel worktree. That
+> reason is still sound for *trees* — two worktrees genuinely are two trees —
+> and it silently gave up the machine-wide serialisation that came free with the
+> default. The cost was recorded as "processor contention"; the bill is a
+> filesystem test failing on a starved host.
+>
+> Their failure images are kept at
+> `/home/neoge/reconos-verify-failures/20260918-054447`.
+>
+> #### The first hunt with the right idea and the wrong instrument
+>
+> 18 September, acting on the reading above: ten rounds of six cuts, run
+> deliberately while the graphics session's matrix held the machine. Every round
+> printed `contended=yes`, taken from `fuser` on the shared lock. All sixty cuts
+> came back clean.
+>
+> **The result is worthless and the reason is the entry.** Load average during
+> those sixty cuts was **1.78 on sixteen cores** -- about eleven per cent. Their
+> run was in a serial phase with one guest, so the lock was held and the machine
+> was idle.
+>
+> **A held lock means a matrix is running. It says nothing about whether the
+> machine is busy**, and an entire experiment was built on the two being the
+> same thing. So that is three failed reproductions on quiet machines, two of
+> them believed to be loaded at the time: six CPU spinners, twelve parallel
+> boots, and a lock file.
+>
+> This bug keeps producing the same fault in the people hunting it -- **a test
+> that reports the condition it wanted rather than the condition it had**, which
+> is the shape of KF-247, KF-250 and KF-259 in a different costume.
+>
+> #### The dose indicator was in the report all along
+>
+> The graphics session's failing run said `clock and tick` was running at
+> **14 Hz against an expected 100**. That is the kernel measuring its own
+> starvation, and it answers exactly the question the lock check was pretending
+> to: *is this machine actually starved?* It went unread twice.
+>
+> **So the condition to reproduce is not "another matrix is running" but "the
+> guest's own tick rate has collapsed"**, and any future attempt should establish
+> that before it starts cutting -- otherwise a clean sweep says nothing except
+> that the load was never built.
+>
+> #### The second hunt, and why this line of attack is closed for now
+>
+> The graphics session read the plan before the data and caught the same error
+> one level up: **14 Hz is a CPU-starvation number, measured inside the guest,
+> and the plan was to apply disk load.** An indicator on one axis and a variable
+> on another -- a mirror of the lock column. They were right, and the reality
+> turned out worse than their prediction in two further ways.
+>
+> **The load generator was CPU, not disk.** Eight `dd if=/dev/urandom ...
+> conv=fsync` writers sat at about 25 per cent CPU each. Generating sixty-four
+> megabytes of randomness is expensive; the write is cheap. So the second hunt
+> was a **CPU** load built by someone who had, minutes earlier, thrown out an
+> experiment for confusing two conditions.
+>
+> **And then I claimed the instrument was broken, which was false.** Retracted
+> in full, because it is the one conclusion here that would have cost somebody
+> else something: it removes a working gauge from everyone who reads this.
+>
+> The claim was that `/proc/diskstats` does not advance for writes under WSL2,
+> from this probe:
+>
+> ```
+> sectors written during a deliberate 200 MB fsync write: 0
+> ```
+>
+> **It advances perfectly well.** Measured properly, with the whole line printed
+> before and after rather than one field picked in advance:
+>
+> ```
+> $10 sectors_written   788942992 -> 789353000   delta 410008
+> ```
+>
+> 410,008 sectors of 512 bytes is 209.9 MB, which is the 200 MiB that was
+> written. `writes_completed` moved by 207, `ms_writing` by 173, `io_ticks` by
+> 88.
+>
+> **What produced the zero is the part worth keeping.** The awk program never
+> ran. Passed through `wsl.exe` into `bash -c "..."`, the field references were
+> consumed by the outer shells before awk saw them, and what arrived was:
+>
+> ```
+> awk: cmd. line:1: =="sdd"{print 0}
+> awk: cmd. line:1: ^ syntax error
+> ```
+>
+> `$3` became empty and `$10` became `0`. awk exited with a syntax error, the
+> command substitution captured an empty string, `$((b-a))` subtracted two empty
+> strings and produced **0** -- and the error itself went to `/dev/null`, by a
+> redirect I had written into the same line.
+>
+> So the figure was not a measurement of an idle disk. **It was a failed command,
+> silenced by its own author, whose empty output became a plausible number.**
+> That is the shape of KF-247, KF-250 and KF-259, produced by the person who had
+> written all three up the same day.
+>
+> Caught by the graphics session, who were right that the instrument works and
+> wrong about why -- they diagnosed an off-by-three field index, and the actual
+> cause was shell quoting eating the references. **Their conclusion was right and
+> their reasoning was not, which is why it still had to be measured rather than
+> accepted.**
+>
+> Two caveats on the gauge, theirs and worth keeping: `io_ticks` is coarse under
+> a virtual disk -- 88 ms of busy for a write that took far longer in wall clock
+> -- so it is usable as a *relative* dose between rounds and not as an absolute
+> utilisation. And it is the host's view of the virtual disk; what a guest
+> experiences is a layer further down. `sectors_written` is the trustworthy
+> field.
+>
+> #### Four instruments, four failures, in one hour
+>
+> | instrument | what it was believed to say | what it said |
+> |---|---|---|
+> | `fuser` on the shared lock | the machine is busy | a matrix process exists |
+> | `dd if=/dev/urandom` | disk load | CPU load |
+> | `/proc/diskstats` io_ticks | disk utilisation | it works -- my *reading* of it was a silenced syntax error |
+> | guest tick at 14 Hz | (correct, but) CPU starvation | measured on the wrong axis for this plan |
+>
+> **Every one was caught by measuring rather than by reasoning**, and three of
+> the four were caught only because somebody asked the next question instead of
+> accepting the previous answer. That is the whole method, and this bug keeps
+> finding people who stop one question early -- including, three times in one
+> hour, the person hunting it.
+>
+> #### What is actually established
+>
+> **Nothing about the bug.** Sixty cuts on a quiet machine and an aborted sweep
+> on a CPU-loaded one say only that the condition was never built. The three
+> sightings stand; the four reproduction attempts say nothing about them.
+>
+> #### What the experiment would have to be
+>
+> The graphics session's proposal, and it is the right one because it is the
+> only condition ever observed to produce this:
+>
+> **Run two or three matrices concurrently and sweep the cuts under them.** All
+> three sightings happened with three running. That saturates every axis at once
+> -- CPU, disk, and the I/O *pattern* that matters, which is many small metadata
+> commits with barriers rather than one sequential stream. It also cannot be
+> faked on this host, because the only workload whose disk load can be confirmed
+> is one whose effects are visible in the guests themselves.
+>
+> **Cost: roughly an hour of the machine, and it starves every other session
+> while it runs.** That is a decision about somebody's computer rather than a
+> technical call, so it waits to be asked for rather than being taken.
+>
+> One measured aside: `lsblk` reports `ROTA=1` for every disk here, including
+> the 1 TB. If that is real rather than a virtualisation artefact, seek time is
+> a variable and scattered concurrent commits contend far more sharply than one
+> stream -- which would help explain why several guests doing small commits
+> reproduce this and one process writing hard does not.
+>
+> #### A fourth sweep, sampled rather than assumed — and it is a quiet-machine sample too
+>
+> The graphics session's matrix ran the rename path on 18 September and came
+> back `6 cuts inside a rename on x86_64: 0 inconsistent`. Their run was holding
+> the shared lock throughout, so it would have been filed as *"clean under
+> contention, one matrix"* — which is the first hunt's error exactly.
+>
+> **They sampled instead of assuming**, every five seconds for the last eight
+> minutes of the run:
+>
+> ```
+> 93 samples   load: mean 0.59, max 0.98 on 16 cores  (~4%)
+>              disk: 780 MB written over the window, one 485 MB burst,
+>                    the rest near zero
+> reconfs section:  load 0.21..0.37, sectors_delta mostly 0-184
+> ```
+>
+> **So the fourth sweep is a fourth quiet-machine sweep**, not a fifth data
+> point at a different dose. It joins the pile rather than adding to it. Five
+> attempts now, all at roughly the same condition, and the three sightings stand
+> where they were.
+>
+> #### The finding that actually matters, and it is about the experiment rather than the bug
+>
+> **A single matrix writes 780 MB in eight minutes and almost all of it in one
+> 485 MB burst.** The load average across the same window averaged four per cent
+> of sixteen cores.
+>
+> That kills a design assumption nobody had stated. *"Run three matrices and
+> sweep the cuts under them"* sounds like applying a dose; it is really three
+> bursty sources that may or may not overlap, separated by long quiet gaps. A
+> sweep of sixty cuts under three concurrent matrices could easily place most of
+> its cuts **in the gaps** and come back clean for a reason having nothing to do
+> with whether the window exists.
+>
+> **So the concurrent-matrix run is only worth doing with per-cut instrumentation**:
+> record the `sectors_written` delta and the load across each individual cut, and
+> label every round by what it actually coincided with. Without that it is an
+> expensive way to generate another ambiguous clean sweep, and this entry already
+> has five of those.
+>
+> And read by address, with the field escaped for both shells, so it cannot
+> degrade into the silent zero that produced the retracted claim above:
+>
+> ```sh
+> awk -v d=sdd "\$3==d {print \$10}" /proc/diskstats
+> ```
+
+
+
+
+[#496](https://github.com/neogentrics/ReconOS/issues/496)
 
 > **Seen a second time, 17 September 2026, matrix 70** -- and the heading's
 > *once* is now wrong, which is left standing rather than edited so the change

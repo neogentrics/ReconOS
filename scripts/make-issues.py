@@ -229,6 +229,8 @@ AREA = {
     'KF-256': 'storage',
     'KF-257': 'network',
     'KF-258': 'kernel',
+    'KF-259': 'build',
+    'KF-260': 'build',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
@@ -563,7 +565,46 @@ def check_open(text):
     return 1 if (missing or extra) else 0
 
 
+USAGE = """usage: make-issues.py [--dry-run | --check]
+
+  --dry-run   say what would be created, closed and relabelled
+  --check     verify the register against itself and against the issues
+  (none)      create, close and relabel issues on %s
+
+Run from the top of the repository, with `gh` authenticated.
+""" % REPO
+
+
 def main():
+    """
+    An argument this script does not recognise is a **refusal**, not a run.
+
+    The default mode writes to a public issue tracker -- it creates issues,
+    closes them and edits their labels -- and every other mode is read-only.
+    So "no recognised flag" and "no flag at all" used to mean the same thing,
+    and `--help`, which this file did not implement, fell through to the one
+    branch that mutates something outside the repository.
+
+    That is NW-009, and it happened: eight issues were created by a command
+    typed to ask what the options were. The result was correct, because the
+    register was correct -- which is exactly what makes it worth a guard. A
+    mistake that produces the right answer teaches nothing and repeats.
+
+    The rule this settles: **a tool whose default is the side-effecting mode
+    must treat an unknown argument as a question, not as consent.**
+    """
+    known = ('--dry-run', '--check', '--help', '-h')
+    unknown = [a for a in sys.argv[1:] if a not in known]
+
+    if unknown:
+        sys.stderr.write('unrecognised: %s\n\n' % ' '.join(unknown))
+        sys.stderr.write(USAGE)
+        sys.exit(2)
+
+    if '--help' in sys.argv or '-h' in sys.argv:
+        sys.stdout.write(USAGE)
+        sys.exit(0)
+
     dry = '--dry-run' in sys.argv
     if '--check' in sys.argv:
         text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')

@@ -206,7 +206,67 @@
 # check -- rows 1.1 to 1.9 of the blueprint audit all built. No such gate was
 # ever written for 0.3.0, so this bump rests on the rule above rather than on a
 # checklist, and saying so is the honest version of stamping it.
-VERSION := 0.4.0
+#
+# **0.5.0 on 18 September 2026: two network cards the kernel could not drive.**
+#
+# The network branch's own record is kept below, unedited, because it is their
+# work and their reasoning. What this line adds is the merge's arithmetic.
+#
+# They asked for a minor and said why: *the capability is "the kernel can drive
+# a network card that is not virtio", and it arrives once* -- one bump, not one
+# per driver. That is right, and their branch reached 0.3.7 from a base of
+# 0.2.49 while this one reached 0.4.0 independently. A minor zeroes the patch
+# either way, so the two sequences lay end to end at **0.5.0** rather than
+# interleaving; both sets of entries stand and mean what they say.
+#
+#
+# **0.3.5 on 17 September 2026: five patches from the network track, and
+# deliberately not a minor.**
+#
+# `network` brings two card drivers -- r8169 for the Realtek gigabit family and
+# e1000 for Intel's 8254x -- where `net.h` had exactly one implementation behind
+# it, plus the self-tests for both. Five faults fixed along the way, so five
+# patches by the rule this file has followed since 0.1.x: NW-001, NW-002,
+# NW-006, NW-007 and NW-009.
+#
+# **The case for calling it 0.4.0 was made and refused, and the refusal is the
+# part worth writing down.** By the letter of the rule above it looks like an
+# update: a second display backend was one, and this is a second and third
+# network backend. The reason it is not:
+#
+#   **the Realtek has never touched silicon.** QEMU emulates no Realtek gigabit
+#   part, so that driver compiles and passes its own tests and has never met a
+#   card. The Intel is proved against an emulated 82540EM.
+#
+# So what the kernel *demonstrably* gained is two more implementations behind an
+# interface it already had, exercised in the same hypervisor virtio-net was
+# already exercised in. **"The kernel can network on real hardware" is the claim
+# that would earn a minor, and nobody can make it yet.** `docs/BARE-METAL.md` is
+# the procedure that would settle it; when a Realtek answers a ping on the
+# server, that is 0.4.0 and it will have been earned rather than assumed.
+#
+# Four of the nine entries are open and are interface decisions rather than
+# driver faults, so they buy nothing here either.
+# **0.3.7 on 17 September 2026: two more, and both are the same shape.**
+#
+# NW-003 and NW-008 were the two open entries that turned out to be this
+# track's rather than the kernel session's, and they are the same fault twice:
+# a member of an interface that one implementation could not make mean
+# anything.
+#
+# `net_device.link` was written once by virtio-net as a constant `true` and
+# read by nothing. `netdev_route` consults it now, on both the unicast and the
+# broadcast path, so a machine with two cards sends out of the live one --
+# which is the whole reason the server has two.
+#
+# `net_device_ops.enable_interrupts` was declared, documented in a paragraph,
+# and called by nothing. `netdev_register` calls it now, after the device is in
+# the table, and both drivers claim their vector before registering so the hook
+# has something to arm.
+#
+# Neither could have been seen with one driver behind the interface, which is
+# the point the whole branch has been making.
+VERSION := 0.5.0
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

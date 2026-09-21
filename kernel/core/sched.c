@@ -771,10 +771,38 @@ void sched_print_summary(void)
 		return;
 
 	do {
-		kprintf("  thread %lu     : %s, %s, %lu ticks\n", t->id, t->name,
+		/* **`off_cpu` and `idle_for`, because READY does not mean
+		 * pickable.** (KF-258)
+		 *
+		 * `pick_next` takes a thread only when it is READY *and*
+		 * `off_cpu` -- the second says the processor that was running
+		 * it has finished leaving it, and resuming one that has not
+		 * would use a stack pointer nobody has written yet. So a
+		 * thread can sit READY for ever and never be chosen, and this
+		 * line used to print it identically to one that is about to
+		 * run.
+		 *
+		 * That is not hypothetical: KF-258's thread table showed
+		 * `recon-init, ready, 0 ticks` -- a program that had never been
+		 * given the processor -- and the table could not say whether it
+		 * was waiting to be picked or ineligible to be. One word
+		 * settles it, and a summary that cannot distinguish those two
+		 * is a summary that made a scheduling fault look like a timer
+		 * fault for a day.
+		 *
+		 * `idle_for` for the same reason one layer along: an idle
+		 * thread is a last resort rather than a turn in the round, so a
+		 * machine whose only READY threads are idle ones is a machine
+		 * with nothing to run, however busy this list looks. */
+		kprintf("  thread %lu     : %s, %s%s, %lu ticks%s\n",
+			t->id, t->name,
 			t->state == THREAD_RUNNING ? "running" :
 			t->state == THREAD_READY   ? "ready" : "finished",
-			t->ran_ticks);
+			(t->state == THREAD_READY && !t->off_cpu)
+				? " (not yet off its processor, so not pickable)"
+				: "",
+			t->ran_ticks,
+			t->idle_for >= 0 ? ", idle-for-this-cpu" : "");
 		t = t->next;
 	} while (t != ring);
 }
