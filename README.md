@@ -3,8 +3,8 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.4.79-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
-[![release](https://img.shields.io/badge/latest_release-v0.4.79-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.79)
+[![version](https://img.shields.io/badge/version-0.4.80-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.4.80-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.80)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-61_suites,_4475903_checks-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-327-da3633?style=flat-square)](docs/BUGS.md)
@@ -88,7 +88,7 @@ in the Control Panel itself, page by page, and in
 
 ## Where it is at, and why
 
-**v0.4.79.** The number tracks what works, not what is planned, and it is at
+**v0.4.80.** The number tracks what works, not what is planned, and it is at
 0.4 rather than 1.0 for one reason: **the desktop does not yet run on the
 kernel.** Both halves are real and neither is finished into the other. Until a
 ReconOS kernel can hold a display and a filesystem for a ReconOS desktop, this

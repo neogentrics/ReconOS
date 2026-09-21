@@ -1,49 +1,49 @@
-src/recon_explorer.c is 2,955 lines and had no suite. It is also the one
-application here that deletes things, and the rule keeping that safe is a
-rule about *order*: it asks first, and the file is still there while it is
-asking.
+Opening the raw settings editor takes an administrator and their password.
+On unlocking, it says so out loud:
 
-No photograph can check that. A picture of a dialog proves a dialog appeared;
-it cannot prove the file survived to the moment the picture was taken. In a
-suite the question and the directory are read in the same breath — and a
-mutation that moves the file before raising the question fails on exactly
-that line.
+> *"Unlocked. This does not outlive the window."*
 
-### Picked by measurement, not by hunch
+It did. Unlock it, close the window, open it again — still unlocked, no
+password asked for. Anybody at the machine afterwards had the editor open.
 
-The biggest desktop sources with no suite linking them:
+### The fourth instance, and the worst
 
-| | lines |
-| --- | --- |
-| recon_control_panel.c | 8,979 |
-| recon_shell.c | 7,264 |
-| recon_cmd.c | 3,668 |
-| recon_explorer.c | 2,955 |
+Same class as v0.4.74, v0.4.75 and the Mail half of v0.4.75: closing a
+built-in application hides its window and keeps it, so panel_destroy runs
+at shutdown and nothing runs on a close. The browser kept a session cookie,
+the player kept playing, Mail kept a password — and this keeps a security
+control open.
 
-And the cost of reaching them is mostly shared: 82 stubs already existed,
-the explorer needed 49 more, the control panel 55 — largely the same 49. Most
-of those turned out to have real sources worth linking instead, so what was
-actually written is 34 stubs and nine more files in the target.
+A claim a program makes about itself and does not keep is worse than one it
+never made. Somebody who read that line was told the lock resets.
 
-### An unfocused window refuses keys, which a test found by doing nothing
+### And what was typed on the way
 
-recon_appwin_handle_key returns false unless the window is focused. That is
-right — a keystroke belongs to whatever is in front — and the first run of this
-suite found it the way such things are found: a test pressed Down, nothing
-moved, and the report said selected: [-1] (none).
+panel_destroy was free(user) and nothing else. The struct holds two
+recon_edits that carry secrets — unlock, an administrator's password, and
+password, one being set for an account — and neither was erased, on close or
+on destroy. Both are wiped now, and the struct is erased before it is freed,
+for the reason recon_mailwin.c already erases itself.
 
-### What it found that is a question rather than a fault
+The text, not the field. A blanket wipe over a struct recon_edit zeroes
+masked with it, and a password box that has stopped drawing dots is a worse
+fault than the one being fixed. Third time that distinction has mattered.
 
-path_is_protected guards RECON_DIR_SYSTEM and nothing else. So a file
-manager opened at the root will offer to move /Users — every account's files
-— to the Recycle Bin on one keystroke, and the bin is on the same volume.
+### Found by fixing it, which is the part worth keeping
 
-Deliberately not changed here. Whether the top-level folders should be
-undeletable is a ruling about what a file manager is *for*, and the answer
-that suits an administrator may not suit a workstation. It is on the board.
-What the suite holds is that the refusal which does exist is real: /System
-raises no question at all and says why.
+With the lock fixed, the window still read "Unlocked. This does not outlive
+the window." over a registry that was now locked — the same false claim
+pointing the other way. The status line is cleared on close too.
 
-61 suites.
+### Both halves, photographed
+
+| | closed and reopened | minimized and restored |
+| --- | --- | --- |
+| before | unlocked | — |
+| after | locked, status empty | unlocked, still usable |
+
+The second column is the one worth having. Re-locking on visibility(false)
+would take the key away from somebody who put the window down for a second,
+and would have looked like the same fix.
 
 ---

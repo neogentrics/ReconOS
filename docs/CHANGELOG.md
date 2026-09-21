@@ -9,6 +9,58 @@ way for the two to disagree.
 
 ---
 
+## v0.4.80 — closing the registry editor did not lock it again
+
+Opening the raw settings editor takes **an administrator and their password**.
+On unlocking, it says so out loud:
+
+> *"Unlocked. This does not outlive the window."*
+
+It did. Unlock it, close the window, open it again — **still unlocked**, no
+password asked for. Anybody at the machine afterwards had the editor open.
+
+### The fourth instance, and the worst
+
+Same class as v0.4.74, v0.4.75 and the Mail half of v0.4.75: closing a
+built-in application **hides** its window and keeps it, so `panel_destroy` runs
+at shutdown and nothing runs on a close. The browser kept a session cookie,
+the player kept playing, Mail kept a password — and this keeps a security
+control open.
+
+**A claim a program makes about itself and does not keep is worse than one it
+never made.** Somebody who read that line was told the lock resets.
+
+### And what was typed on the way
+
+`panel_destroy` was `free(user)` and nothing else. The struct holds two
+`recon_edit`s that carry secrets — `unlock`, an administrator's password, and
+`password`, one being set for an account — and neither was erased, on close or
+on destroy. Both are wiped now, and the struct is erased before it is freed,
+for the reason `recon_mailwin.c` already erases itself.
+
+**The text, not the field.** A blanket wipe over a `struct recon_edit` zeroes
+`masked` with it, and a password box that has stopped drawing dots is a worse
+fault than the one being fixed. Third time that distinction has mattered.
+
+### Found by fixing it, which is the part worth keeping
+
+With the lock fixed, the window still read **"Unlocked. This does not outlive
+the window."** over a registry that was now locked — the same false claim
+pointing the other way. The status line is cleared on close too.
+
+### Both halves, photographed
+
+| | closed and reopened | minimized and restored |
+| --- | --- | --- |
+| **before** | `unlocked` | — |
+| **after** | `locked`, status empty | `unlocked`, still usable |
+
+The second column is the one worth having. Re-locking on `visibility(false)`
+would take the key away from somebody who put the window down for a second,
+and would have looked like the same fix.
+
+---
+
 ## v0.4.79 — the file manager asks before it acts, and now something checks
 
 `src/recon_explorer.c` is 2,955 lines and had no suite. It is also **the one

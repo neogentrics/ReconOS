@@ -20,6 +20,7 @@
 #include "recon_appwin.h"
 #include "recon_avatar.h"
 #include "recon_control_panel.h"
+#include "recon_crypt.h"
 #include "recon_clock.h"
 #include "recon_display.h"
 #include "recon_firewall.h"
@@ -8695,8 +8696,94 @@ static void panel_describe(void *user, char *out, size_t size) {
         cp->status);
 }
 
+/*
+ * Wipe a field that held a secret, without unmaking the field.
+ *
+ * `recon_secure_erase` over the whole `struct recon_edit` would zero `masked`
+ * along with the text, and a password box that has stopped drawing dots is a
+ * worse fault than the one being fixed. `anchor` is -1 for "nothing selected"
+ * and zero is a real position, so it goes back by hand.
+ */
+static void forget_secret(struct recon_edit *edit) {
+    recon_secure_erase(edit->text, sizeof(edit->text));
+    edit->length = 0;
+    edit->caret = 0;
+    edit->anchor = -1;
+    edit->active = false;
+}
+
+/*
+ * The window was closed, so lock the registry again and forget what was typed.
+ *
+ * --- What this is fixing ---
+ *
+ * Unlocking the registry editor takes an administrator **and** their password.
+ * On unlocking it says, out loud, *"Unlocked. This does not outlive the
+ * window."*
+ *
+ * It did. Closing a built-in application hides its window and keeps it, so
+ * `panel_destroy` runs at shutdown and nothing ran on a close -- and the next
+ * person to open Registry got it unlocked, with no password asked for.
+ * Photographed: unlock, close, reopen, still unlocked.
+ *
+ * A claim a program makes about itself and does not keep is worse than one it
+ * never made. Somebody reading that line has been told the lock resets.
+ *
+ * --- And what was typed on the way ---
+ *
+ * `unlock` held an administrator's password and `password` holds one being
+ * set for an account. Both stayed in this process's memory after the window
+ * was gone, and `panel_destroy` freed the struct without erasing either.
+ *
+ * --- `closed` and not `visibility` ---
+ *
+ * `visibility(false)` fires on minimize too, and re-locking a window somebody
+ * put down for a second -- losing the key they are half way through editing --
+ * would be its own fault. `include/recon_appwin.h` says which is which.
+ */
+static void panel_closed(void *user) {
+    struct control_panel *cp = user;
+
+    cp->registry_unlocked = false;
+    cp->registry_editing = false;
+    cp->registry_adding = false;
+    recon_edit_end(&cp->reg_key);
+    recon_edit_end(&cp->reg_value);
+
+    forget_secret(&cp->unlock);
+    cp->unlock.masked = true;
+
+    /*
+     * A half-finished account goes with it. Reopening to a form already
+     * holding a name and a password, from whoever used this last, is not a
+     * form anybody should be handed.
+     */
+    cp->editing = false;
+    cp->editing_password_only = false;
+    cp->password_focused = false;
+    recon_edit_end(&cp->name);
+    forget_secret(&cp->password);
+    cp->password.masked = true;
+
+    /*
+     * And the line underneath, which would otherwise still read "Unlocked.
+     * This does not outlive the window." over a window that is now locked --
+     * the same false claim as before, pointing the other way. Found by fixing
+     * the first half and looking at what the window said afterwards.
+     */
+    cp->status[0] = 0;
+}
+
 static void panel_destroy(void *user) {
-    free(user);
+    struct control_panel *cp = user;
+
+    /*
+     * Erased rather than freed. `free` does not clear what it hands back, and
+     * this struct has held two passwords -- the same reason `recon_mailwin.c`
+     * erases itself before going.
+     */
+    recon_secure_erase(cp, sizeof(*cp));
+    free(cp);
 }
 
 static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
@@ -8716,6 +8803,7 @@ static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
     .key = panel_key,
     .scroll = panel_scroll,
     .describe = panel_describe,
+    .closed = panel_closed,
     .destroy = panel_destroy,
 };
 
