@@ -22,7 +22,7 @@ same time.**
 | What it is | The compositor, window management, the shell, the applications | Boot, memory, drivers, processes |
 | Where | `src/`, `include/`, `modules/` | `kernel/` |
 | Built against | wlroots and the Linux kernel | no libc, no wlroots, nothing |
-| State | A usable desktop. v0.2.17 released | Runs user mode, its own memory, threads and clocks. v0.0.11 |
+| State | A usable desktop. v0.4.78 | Its own memory, processes, drivers, filesystems and a display it sets itself. v0.5.0 |
 
 **The kernel today** boots on x86_64 and aarch64 — under legacy BIOS, under
 UEFI, and via device tree, **from a bootloader we wrote**; GRUB left the boot
@@ -32,14 +32,20 @@ itself, allocates by the byte, reports a fault instead of resetting the
 machine, keeps a monotonic clock and a wall clock read off the hardware, and
 runs threads it can take execution away from.
 
-Checkpoint 10 has since landed — user mode, the first system call and the
-higher half — so there is now a privilege boundary and a process to put
-something behind. It still runs nothing of the desktop's. That sentence stays
-in every time this paragraph is rewritten, because the one before it is
-impressive enough to be misread.
+Since then: **an address space per process**, with demand paging and
+copy-on-write; an ELF loader, so a program comes off a volume rather than out
+of the kernel image; a network stack with a socket a program can open; USB
+input; ext2; and — as of the 0.5.x line — **a display it sets itself**, a mode
+chosen through a controller's own registers rather than whatever the firmware
+happened to leave.
 
-What it does not yet have is **an address space per process**, and that is now
-the thing the desktop is waiting on: it is what
+**It still runs nothing of the desktop's.** That sentence stays in every time
+this paragraph is rewritten, because everything before it is impressive enough
+to be misread.
+
+What stands between the two halves now is no longer a missing capability on
+the kernel's side. It is the desktop's own move to being a set of clients
+rather than one program, which is what
 [docs/APPLICATIONS.md](docs/APPLICATIONS.md) decided installed applications
 would need.
 
@@ -500,15 +506,6 @@ is the gate on networking as well as storage.
 
 This is the honest list, and it is the reason the desktop is not on it.
 
-- **Display.** A framebuffer console on whatever the firmware left. No mode
-  setting, no surface for a compositor. This is the one that stands between the
-  kernel and the desktop.
-- **A way for a program to reach the network.** The network itself is built,
-  and so is a socket layer over it — `core/socket.c` has create, bind, listen,
-  accept, connect, send and receive. What it has no caller for outside the
-  kernel: there is no socket system call and no file descriptor that names a
-  connection, so the only thing that opens one today is the network's own
-  self-test. Pipes, shared memory and signals exist.
 - **EHCI.** xHCI works, hubs are enumerated, and a device plugged in or pulled
   out after boot is noticed (KF-199). Older EHCI controllers are not driven —
   on Joshua's ruling, because USB works on the machines this runs on.
@@ -517,6 +514,16 @@ This is the honest list, and it is the reason the desktop is not on it.
 - **ext4.** `core/ext2.c` reads ext2 and refuses EXTENTS, RECOVER and 64BIT by
   name — reading a filesystem through a wrong assumption about where its blocks
   are is worse than refusing to mount it.
+
+**Two more went the same way, and this is the third time.** Until 20
+September this list still said the kernel had no mode setting and no socket a
+program could open — *"the one that stands between the kernel and the
+desktop"*. Both are built: `core/display.c` sets a mode through a controller's
+own registers, with AMD and Intel drivers beside it, and `SYS_SOCKET` is in
+`user.h` with `sys_socket` in `core/user.c`. The desktop branch's copy of
+`kernel/` was 25 commits and one whole version line behind, so nobody on this
+side could have read it against the tree — which is the paragraph at the end
+of this section, not being followed.
 
 Four things this list used to claim are built, and were still listed as missing
 until 12 September: **input** (PS/2 and USB HID, `input_init` on every boot),

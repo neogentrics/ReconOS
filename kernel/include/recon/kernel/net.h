@@ -265,10 +265,39 @@ struct net_device {
 	u64 tx_packets, tx_bytes, tx_dropped, tx_errors;
 };
 
-/* Called by a driver once it has a working card. Returns null at the cap. */
+/* Called by a driver once it has a working card. Returns null at the cap, and
+ * null for a name another device already answers to -- see `netdev_name`. */
 struct net_device *netdev_register(const char *name,
 				   const struct net_device_ops *ops,
 				   void *driver, const struct mac_addr *mac);
+
+/* The next unused name beginning with `prefix`, into a caller's buffer.
+ *
+ * A driver must not compose this itself from a count of its own devices. Every
+ * driver that did would start at zero, so the second driver on a machine names
+ * its first card `eth0` when there is already an `eth0` -- and nothing refuses
+ * it, because `netdev_register` only copied the string. The machine then has
+ * two devices with one name, `netdev_by_name` answers with whichever
+ * registered first, and the summary prints the name twice with different
+ * counters beside it.
+ *
+ * That is NW-002, and it could not be seen while there was one driver: a count
+ * kept by the only driver there is *is* the count of devices. The name is the
+ * device layer's to issue, because the device layer is the only thing that can
+ * see all of them.
+ *
+ * False when the buffer is too small or every index is taken. */
+bool netdev_name(const char *prefix, char *out, unsigned len);
+
+/* "The next refusal is one I am about to cause on purpose."
+ *
+ * Only the self-test calls this. It registers a duplicate deliberately --
+ * that *is* the assertion -- and without this every boot prints a line about a
+ * name collision that did not happen. A message present on every boot is one a
+ * reader stops seeing, and the real one would go past underneath it. The
+ * refusal is still counted and still reported in the summary; what this
+ * suppresses is the alarm, not the fact. */
+void netdev_note_expected_refusal(void);
 
 unsigned netdev_count(void);
 struct net_device *netdev_at(unsigned i);
@@ -291,6 +320,28 @@ bool netdev_transmit(struct net_device *dev, struct netbuf *b);
  * thread, and directly by anything that is waiting for a reply and would
  * otherwise sleep with a full queue behind it. */
 void netdev_service(void);
+
+/* "There is something on my card." Safe from an interrupt handler, and meant
+ * for one.
+ *
+ * A driver's interrupt may not allocate -- `irq.h` says so, and means it -- so
+ * it cannot build a `netbuf`, so it cannot call `netdev_receive`, which is the
+ * only thing that was asking the worker thread to run. Without this a card
+ * that signals by interrupt has no way to be collected from: the frame sits in
+ * the ring, the worker sleeps, and the machine receives nothing while every
+ * counter reads healthy.
+ *
+ * That is NW-001, and it was invisible with one driver. virtio-net leaves
+ * `enable_interrupts` null and is polled -- and every path that needs it to
+ * receive (DHCP's wait, the boot echo, a socket read) is a loop that calls
+ * `netdev_service` itself. So the *only* caller of the receive path was one
+ * that had already been woken by hand, and nothing noticed that a driver could
+ * not wake it.
+ *
+ * Does nothing but schedule the drain. Scheduling an already scheduled drain
+ * is refused by `work_schedule` and that refusal is correct: the item has not
+ * run yet, so it will see this frame when it does. */
+void netdev_wake(void);
 
 void netdev_init(void);
 void netdev_print_summary(void);
@@ -442,12 +493,48 @@ void tcp_shutdown(int idx);
 /* --- Drivers -------------------------------------------------------------- */
 
 struct virtio_device;
+struct pci_device;
 
 /* Takes a probed virtio device and makes it a network card, if that is what it
  * is. False, quietly, for anything else. */
 bool virtio_net_attach(const struct virtio_device *probed);
 unsigned virtio_net_count(void);
 void virtio_net_print_summary(void);
+
+/* The Realtek gigabit family: RTL8169, RTL8168/8111, RTL8161, RTL8101/8102.
+ *
+ * Takes a PCI device and makes it a network card, if that is what it is.
+ * False, quietly, for anything else -- with one exception that says why out
+ * loud: an RTL8125 is refused with a line naming what differs, because a card
+ * that attaches and never receives is worse than one that was never claimed. */
+bool r8169_attach(const struct pci_device *d);
+unsigned r8169_count(void);
+void r8169_print_summary(void);
+
+/* The receive loop, driven against a page of memory standing in for the
+ * register window. The card is the only part that is faked; the loop is the
+ * real one. See the head of the test for what that can and cannot prove. */
+bool r8169_self_test(void);
+
+/* Intel's 8254x gigabit controllers: 82540EM and the parts around it.
+ *
+ * Here beside the Realtek on purpose rather than instead of it. The Realtek is
+ * the card this project owns and the verification rig cannot reach; this is
+ * the card the rig emulates on every run. Two implementations behind one
+ * `net_device_ops`, one of which can be booted, is what makes a claim about
+ * the interface something other than an opinion. */
+bool e1000_attach(const struct pci_device *d);
+unsigned e1000_count(void);
+void e1000_print_summary(void);
+
+/* The receive loop and the tail rule, driven against a page of memory standing
+ * in for the register window. The mirror of the Realtek's: that one asserts
+ * four bytes come off, this asserts nothing does -- and both are right. */
+bool e1000_self_test(void);
+
+/* Both drivers' off-hardware checks: the descriptor arithmetic, the ring
+ * bookkeeping and the wake path, on a machine with neither card in it. */
+bool nic_self_test(void);
 
 /* --- Sockets --------------------------------------------------------------- */
 

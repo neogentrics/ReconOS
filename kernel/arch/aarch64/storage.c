@@ -15,6 +15,7 @@
 
 #include <recon/kernel/block.h>
 #include <recon/kernel/virtio.h>
+#include <recon/kernel/virtio_gpu.h>
 #include <recon/kernel/net.h>
 #include <recon/kernel/pci.h>
 #include <recon/kernel/xhci.h>
@@ -74,7 +75,8 @@ static void probe_slot(u64 base, u64 size)
 	if (!virtio_mmio_probe(regs, &v))
 		return;
 
-	if (virtio_blk_attach(&v) || virtio_net_attach(&v))
+	if (virtio_blk_attach(&v) || virtio_gpu_attach(&v) ||
+	    virtio_net_attach(&v))
 		devices_found++;
 }
 
@@ -112,11 +114,27 @@ void arch_storage_probe(void)
 		if (ahci_attach(d))
 			continue;
 
+		/* The two real network cards. Listed on this architecture as
+		 * well as on x86_64 because neither driver contains anything
+		 * about a machine -- both live in `core/` and reach their
+		 * registers through `pci_map_bar`. An aarch64 board with a
+		 * Realtek on it is an ordinary thing, and a driver that worked
+		 * only on the architecture its author happened to boot would
+		 * be a portability claim nobody checked. NW-004 is about this
+		 * list needing to exist once per architecture at all. */
+		if (r8169_attach(d))
+			continue;
+
+		if (e1000_attach(d))
+			continue;
+
 		if (!virtio_pci_probe(d, &v))
 			continue;
 
-		/* Disk or card, decided by the device id each attach checks. */
-		if (virtio_blk_attach(&v) || virtio_net_attach(&v))
+		/* Disk, screen or card, decided by the device id each
+		 * attach checks. */
+		if (virtio_blk_attach(&v) || virtio_gpu_attach(&v) ||
+		    virtio_net_attach(&v))
 			devices_found++;
 	}
 }
