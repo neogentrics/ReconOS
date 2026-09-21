@@ -89,6 +89,43 @@ would hide that an earlier one died without unwinding. That is the same argument
 as this branch's checker exiting 2 rather than 0 when it cannot tell: **the
 failure mode to protect is not being wrong, it is being confidently fine.**
 
+#### Where this landed, which is not where either of us started
+
+The rule above is **withdrawn as a rule**. The kernel session falsified it with
+`b34bc36` — a bump declined on the strength of KF-200's comment, after two had
+been taken, which is a comment stopping a pattern-continuation. And the deeper
+objection is the one that settles it: **the categories are assigned after the
+outcome is known.** Every failure can be recast as pattern and every success as
+decision, and nothing in it says which a future situation is. That is a
+vocabulary for describing results already in hand, not a rule.
+
+What survives is the single forward claim — that a check belongs first where the
+fault lives in merge resolution, because nobody stops to decide a version during
+a merge, they take what resolved. That was made before the situation was
+classified, so it was the only part that could have been wrong.
+
+**And the evening's actual shape, which is better than the rule was.** Six
+faults. Four sat in files that were being read at the time, one sat in a comment
+directly above the line that committed it, and one sat in a check's own output
+being read by the person who wrote the check. The common factor is not that
+nobody looked:
+
+> **The reader already had an explanation, and the artefact was consistent with
+> it.**
+
+Five had a check-shaped answer and now have one. The sixth did not and cannot:
+the check was running, correct, and exiting 2 exactly as designed — the failure
+was in the sentence it printed and in a reader recognising his own expected case
+in it. There is no check for *"this message names a cause that is not this
+one"*. The defences are to report the causes apart, and to be suspicious when a
+check's output matches the case you had in mind when you wrote it. The second is
+not mechanisable and this file will not pretend it is.
+
+**A true-sounding sentence about the wrong cause is worse than a vague one.** It
+is actionable in the wrong direction: somebody runs the fix for the cause it
+named, watches it not help, and concludes the check is broken rather than the
+sentence.
+
 #### And the one I will not round off
 
 *"Fixed on `kernel`" and "fixed everywhere" are different states, and nothing
