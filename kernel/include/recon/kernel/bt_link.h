@@ -50,9 +50,12 @@
 #define RECON_KERNEL_BT_LINK_H
 
 #include <recon/kernel/bluetooth.h>
+#include <recon/kernel/bt_bytes.h>
 #include <recon/kernel/types.h>
 
-#define BT_ADDR_LEN		6
+/* `BT_ADDR_LEN` and the byte-order helpers come from `bt_bytes.h`, which is
+ * where `bt_addr_equal` lives -- and that had to be somewhere both this file
+ * and `bt_pair.c` could reach, since each had its own copy of it. */
 
 /* Opcode groups, and the commands this needs from them. */
 #define HCI_OGF_LINK_CTL	0x01

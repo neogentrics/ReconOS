@@ -19,23 +19,6 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 
-static void put_le16(u8 *p, u16 v)
-{
-	p[0] = (u8)(v & 0xFFu);
-	p[1] = (u8)(v >> 8);
-}
-
-static bool same_addr(const u8 *a, const u8 *b)
-{
-	unsigned i;
-
-	for (i = 0; i < BT_ADDR_LEN; i++)
-		if (a[i] != b[i])
-			return false;
-
-	return true;
-}
-
 /* May this device be answered at all?
  *
  * Both halves matter and they fail differently. A closed window means nobody
@@ -46,7 +29,7 @@ static bool may_answer(struct bt_pairing *p, const u8 *addr)
 	if (!p->window_open || !p->have_target)
 		return false;
 
-	return same_addr(addr, p->target);
+	return bt_addr_equal(addr, p->target);
 }
 
 /* A command whose only parameter is an address. Four of the replies below are
@@ -120,7 +103,7 @@ u32 hci_auth_requested_build(u8 *out, u16 handle)
 {
 	u8 body[2];
 
-	put_le16(body, (u16)(handle & 0x0FFFu));
+	bt_put_le16(body, (u16)(handle & 0x0FFFu));
 
 	return hci_command_build(out, HCI_OP_AUTH_REQUESTED, body,
 				 sizeof(body));
@@ -130,7 +113,7 @@ u32 hci_set_conn_encrypt_build(u8 *out, u16 handle, bool on)
 {
 	u8 body[3];
 
-	put_le16(body, (u16)(handle & 0x0FFFu));
+	bt_put_le16(body, (u16)(handle & 0x0FFFu));
 	body[2] = on ? 1u : 0u;
 
 	return hci_command_build(out, HCI_OP_SET_CONN_ENCRYPT, body,
@@ -158,7 +141,7 @@ u32 bt_pairing_event(struct bt_pairing *p, const u8 *ev, u32 len, u8 *out,
 		 * for a device that is asking for it reveals nothing that
 		 * device does not have, and refusing would force a needless
 		 * re-pair. The gate is on *making* keys, below. */
-		if (p->have_key && same_addr(addr, p->key_addr)) {
+		if (p->have_key && bt_addr_equal(addr, p->key_addr)) {
 			u8 body[BT_ADDR_LEN + BT_LINK_KEY_LEN];
 
 			kmemcpy(body, addr, BT_ADDR_LEN);
@@ -330,8 +313,20 @@ bool bt_pairing_self_test(void)
 	static const u8 addr[BT_ADDR_LEN] = {
 		0x55, 0x44, 0x33, 0x22, 0x11, 0x00
 	};
+	/* **Differs in the *last* byte, not the first.**
+	 *
+	 * It used to be `0x99, 0x44, 0x33, ...` -- different in byte zero.
+	 * Every address test on this branch used a pair like that, so an
+	 * address comparison that looked at only the first byte would have
+	 * satisfied all of them. Shortening `bt_addr_equal` to three bytes of
+	 * six was tried and **every test still passed**.
+	 *
+	 * That matters here more than anywhere: this address decides whether
+	 * a device that is not the one being paired with gets answered. A
+	 * comparison that stops early would have let in any device sharing a
+	 * prefix, and nothing would have said so. */
 	static const u8 other[BT_ADDR_LEN] = {
-		0x99, 0x44, 0x33, 0x22, 0x11, 0x00
+		0x55, 0x44, 0x33, 0x22, 0x11, 0x99
 	};
 
 	/* An IO Capability Request from `addr`. */
@@ -538,7 +533,7 @@ bool bt_pairing_self_test(void)
 			ok = false;
 		}
 
-		if (!same_addr(p.key_addr, addr)) {
+		if (!bt_addr_equal(p.key_addr, addr)) {
 			kputs("  btpair: the key was stored against the "
 			      "wrong address\n");
 			ok = false;

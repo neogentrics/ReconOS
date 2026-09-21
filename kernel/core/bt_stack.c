@@ -10,12 +10,6 @@
 #include <recon/kernel/hid_report.h>
 #include <recon/kernel/kstring.h>
 
-static void put_le16(u8 *p, u16 v)
-{
-	p[0] = (u8)(v & 0xFFu);
-	p[1] = (u8)(v >> 8);
-}
-
 static void fail(struct bt_stack *s, const char *why)
 {
 	/* First reason wins, as in `hid_report.c`: the later ones are usually
@@ -508,10 +502,10 @@ bool bt_stack_self_test(void)
 		u32 blen;
 
 		/* Connection Response: their CID 0x0050, ours 0x0040. */
-		put_le16(body, 0x0050);
-		put_le16(body + 2, BT_CID_CONTROL);
-		put_le16(body + 4, L2CAP_CONN_SUCCESS);
-		put_le16(body + 6, 0);
+		bt_put_le16(body, 0x0050);
+		bt_put_le16(body + 2, BT_CID_CONTROL);
+		bt_put_le16(body + 4, L2CAP_CONN_SUCCESS);
+		bt_put_le16(body + 6, 0);
 		blen = l2cap_signal_build(pdu + L2CAP_HEADER,
 					  L2CAP_SIG_CONNECT_RESPONSE, 1,
 					  body, sizeof(body));
@@ -530,9 +524,9 @@ bool bt_stack_self_test(void)
 		}
 
 		/* Their Configure Response, then their Configure Request. */
-		put_le16(body, BT_CID_CONTROL);
-		put_le16(body + 2, 0);
-		put_le16(body + 4, L2CAP_CONF_SUCCESS);
+		bt_put_le16(body, BT_CID_CONTROL);
+		bt_put_le16(body + 2, 0);
+		bt_put_le16(body + 4, L2CAP_CONF_SUCCESS);
 		blen = l2cap_signal_build(pdu + L2CAP_HEADER,
 					  L2CAP_SIG_CONFIG_RESPONSE, 2,
 					  body, 6);
@@ -541,8 +535,8 @@ bool bt_stack_self_test(void)
 			     L2CAP_HEADER + blen, out, sizeof(out), &moved,
 			     &ms);
 
-		put_le16(body, BT_CID_CONTROL);
-		put_le16(body + 2, 0);
+		bt_put_le16(body, BT_CID_CONTROL);
+		bt_put_le16(body + 2, 0);
 		blen = l2cap_signal_build(pdu + L2CAP_HEADER,
 					  L2CAP_SIG_CONFIG_REQUEST, 0x30,
 					  body, 4);
@@ -597,10 +591,10 @@ bool bt_stack_self_test(void)
 		}
 
 		/* Bring the interrupt channel up the same way. */
-		put_le16(body, 0x0051);
-		put_le16(body + 2, BT_CID_INTERRUPT);
-		put_le16(body + 4, L2CAP_CONN_SUCCESS);
-		put_le16(body + 6, 0);
+		bt_put_le16(body, 0x0051);
+		bt_put_le16(body + 2, BT_CID_INTERRUPT);
+		bt_put_le16(body + 4, L2CAP_CONN_SUCCESS);
+		bt_put_le16(body + 6, 0);
 		blen = l2cap_signal_build(pdu + L2CAP_HEADER,
 					  L2CAP_SIG_CONNECT_RESPONSE,
 					  s.interrupt.pending_ident, body, 8);
@@ -609,9 +603,9 @@ bool bt_stack_self_test(void)
 			     L2CAP_HEADER + blen, out, sizeof(out), &moved,
 			     &ms);
 
-		put_le16(body, BT_CID_INTERRUPT);
-		put_le16(body + 2, 0);
-		put_le16(body + 4, L2CAP_CONF_SUCCESS);
+		bt_put_le16(body, BT_CID_INTERRUPT);
+		bt_put_le16(body + 2, 0);
+		bt_put_le16(body + 4, L2CAP_CONF_SUCCESS);
 		blen = l2cap_signal_build(pdu + L2CAP_HEADER,
 					  L2CAP_SIG_CONFIG_RESPONSE,
 					  s.interrupt.pending_ident, body, 6);
@@ -620,8 +614,8 @@ bool bt_stack_self_test(void)
 			     L2CAP_HEADER + blen, out, sizeof(out), &moved,
 			     &ms);
 
-		put_le16(body, BT_CID_INTERRUPT);
-		put_le16(body + 2, 0);
+		bt_put_le16(body, BT_CID_INTERRUPT);
+		bt_put_le16(body + 2, 0);
 		blen = l2cap_signal_build(pdu + L2CAP_HEADER,
 					  L2CAP_SIG_CONFIG_REQUEST, 0x31,
 					  body, 4);
@@ -774,8 +768,8 @@ bool bt_stack_self_test(void)
 			u32 clen, whole;
 			u64 before_wrong = s.control.wrong_channel;
 
-			put_le16(cfg, BT_CID_CONTROL);
-			put_le16(cfg + 2, 0);
+			bt_put_le16(cfg, BT_CID_CONTROL);
+			bt_put_le16(cfg + 2, 0);
 			clen = l2cap_signal_build(pdu + L2CAP_HEADER,
 						  L2CAP_SIG_CONFIG_REQUEST,
 						  0x60, cfg, sizeof(cfg));

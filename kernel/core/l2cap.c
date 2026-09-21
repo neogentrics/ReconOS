@@ -35,6 +35,7 @@
  * other half of it. Both are below, and both are tested, because the failure
  * is a kernel that stops rather than a value that is wrong.
  */
+#include <recon/kernel/bt_bytes.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/l2cap.h>
@@ -46,16 +47,6 @@
  * little-endian envelope. Named rather than open-coded so that a big-endian
  * read in here would have to be written deliberately.
  */
-static u16 get_le16(const u8 *p)
-{
-	return (u16)(p[0] | ((u16)p[1] << 8));
-}
-
-static void put_le16(u8 *p, u16 v)
-{
-	p[0] = (u8)(v & 0xFFu);
-	p[1] = (u8)(v >> 8);
-}
 
 /* --- the basic frame ------------------------------------------------------ */
 
@@ -64,16 +55,16 @@ bool l2cap_header_parse(const u8 *p, u32 len, struct l2cap_header *out)
 	if (len < L2CAP_HEADER)
 		return false;
 
-	out->length = get_le16(p);
-	out->cid    = get_le16(p + 2);
+	out->length = bt_get_le16(p);
+	out->cid    = bt_get_le16(p + 2);
 
 	return true;
 }
 
 u32 l2cap_header_build(u8 *out, u16 cid, u16 payload_length)
 {
-	put_le16(out, payload_length);
-	put_le16(out + 2, cid);
+	bt_put_le16(out, payload_length);
+	bt_put_le16(out + 2, cid);
 
 	return L2CAP_HEADER;
 }
@@ -176,7 +167,7 @@ bool l2cap_acl_feed(struct l2cap_reassembly *r, u16 handle, u8 pb,
 		return false;
 
 	/* Plus the header, which the length does not count. */
-	r->want = (u32)L2CAP_HEADER + get_le16(r->buf);
+	r->want = (u32)L2CAP_HEADER + bt_get_le16(r->buf);
 
 	if (r->want > sizeof(r->buf)) {
 		r->oversized++;
@@ -212,7 +203,7 @@ bool l2cap_signal_parse(const u8 *p, u32 len, struct l2cap_signal *out)
 	if (len < L2CAP_SIG_HEADER)
 		return false;
 
-	dlen = get_le16(p + 2);
+	dlen = bt_get_le16(p + 2);
 
 	/* A command claiming more data than arrived is refused rather than
 	 * truncated. Truncating it would hand a parser a short buffer that
@@ -232,7 +223,7 @@ u32 l2cap_signal_build(u8 *out, u8 code, u8 id, const u8 *data, u16 dlen)
 {
 	out[0] = code;
 	out[1] = id;
-	put_le16(out + 2, dlen);
+	bt_put_le16(out + 2, dlen);
 
 	if (dlen && data)
 		kmemcpy(out + L2CAP_SIG_HEADER, data, dlen);
@@ -244,8 +235,8 @@ u32 l2cap_connect_request_build(u8 *out, u8 id, u16 psm, u16 scid)
 {
 	u8 body[4];
 
-	put_le16(body, psm);
-	put_le16(body + 2, scid);
+	bt_put_le16(body, psm);
+	bt_put_le16(body + 2, scid);
 
 	return l2cap_signal_build(out, L2CAP_SIG_CONNECT_REQUEST, id, body,
 				  sizeof(body));
@@ -257,10 +248,10 @@ bool l2cap_connect_response_parse(const u8 *data, u32 len, u16 *dcid,
 	if (len < 8)
 		return false;
 
-	*dcid   = get_le16(data);
-	*scid   = get_le16(data + 2);
-	*result = get_le16(data + 4);
-	*status = get_le16(data + 6);
+	*dcid   = bt_get_le16(data);
+	*scid   = bt_get_le16(data + 2);
+	*result = bt_get_le16(data + 4);
+	*status = bt_get_le16(data + 6);
 
 	return true;
 }
@@ -269,12 +260,12 @@ u32 l2cap_config_request_build(u8 *out, u8 id, u16 dcid, u16 mtu)
 {
 	u8 body[8];
 
-	put_le16(body, dcid);
-	put_le16(body + 2, 0);		/* continuation flags: no more to come */
+	bt_put_le16(body, dcid);
+	bt_put_le16(body + 2, 0);		/* continuation flags: no more to come */
 
 	body[4] = L2CAP_CONF_OPT_MTU;	/* not a hint: this one must be obeyed */
 	body[5] = 2;
-	put_le16(body + 6, mtu);
+	bt_put_le16(body + 6, mtu);
 
 	return l2cap_signal_build(out, L2CAP_SIG_CONFIG_REQUEST, id, body,
 				  sizeof(body));
@@ -286,9 +277,9 @@ bool l2cap_config_response_parse(const u8 *data, u32 len, u16 *scid,
 	if (len < 6)
 		return false;
 
-	*scid   = get_le16(data);
-	*flags  = get_le16(data + 2);
-	*result = get_le16(data + 4);
+	*scid   = bt_get_le16(data);
+	*flags  = bt_get_le16(data + 2);
+	*result = bt_get_le16(data + 4);
 
 	return true;
 }
@@ -310,7 +301,7 @@ bool l2cap_config_find_mtu(const u8 *opts, u32 len, u16 *mtu)
 			return false;
 
 		if (type == L2CAP_CONF_OPT_MTU && olen == 2) {
-			*mtu = get_le16(opts + at + 2);
+			*mtu = bt_get_le16(opts + at + 2);
 			return true;
 		}
 
@@ -470,7 +461,7 @@ u32 l2cap_channel_input(struct l2cap_channel *c, const u8 *sig, u32 len,
 		 * channel, open first, swallowed the interrupt channel's
 		 * Configure Request. Nothing in this file's own tests could
 		 * see it, because they only ever have one channel. */
-		if (get_le16(s.data) != c->scid) {
+		if (bt_get_le16(s.data) != c->scid) {
 			c->wrong_channel++;
 			return 0;
 		}
@@ -481,9 +472,9 @@ u32 l2cap_channel_input(struct l2cap_channel *c, const u8 *sig, u32 len,
 		if (l2cap_config_find_mtu(s.data + 4, s.length - 4u, &mtu))
 			c->peer_mtu = mtu;
 
-		put_le16(body, c->dcid);	/* their channel, from here */
-		put_le16(body + 2, 0);		/* no continuation */
-		put_le16(body + 4, L2CAP_CONF_SUCCESS);
+		bt_put_le16(body, c->dcid);	/* their channel, from here */
+		bt_put_le16(body + 2, 0);		/* no continuation */
+		bt_put_le16(body + 4, L2CAP_CONF_SUCCESS);
 
 		c->config_in_done = true;
 		maybe_open(c);
@@ -515,7 +506,7 @@ u32 l2cap_channel_input(struct l2cap_channel *c, const u8 *sig, u32 len,
 		 * It was found by listing every place a message is matched --
 		 * five had a rule, two did not -- rather than by a test,
 		 * because nothing here disconnects a second channel. */
-		if (get_le16(s.data) != c->scid) {
+		if (bt_get_le16(s.data) != c->scid) {
 			c->wrong_channel++;
 			return 0;
 		}
@@ -620,11 +611,11 @@ bool l2cap_self_test(void)
 	l2cap_reassembly_reset(&r);
 	r.completed = r.orphans = r.crossed = r.restarts = r.oversized = 0;
 
-	put_le16(pdu, 4);			/* four bytes of payload */
-	put_le16(pdu + 2, L2CAP_CID_SIGNALLING);
+	bt_put_le16(pdu, 4);			/* four bytes of payload */
+	bt_put_le16(pdu + 2, L2CAP_CID_SIGNALLING);
 	pdu[4] = L2CAP_SIG_CONNECT_REQUEST;
 	pdu[5] = 1;
-	put_le16(pdu + 6, 0);
+	bt_put_le16(pdu + 6, 0);
 
 	if (!l2cap_acl_feed(&r, 0x0001, ACL_PB_START_FLUSHABLE, pdu, 8)) {
 		kputs("  l2cap: a whole PDU in one fragment did not "
@@ -761,8 +752,8 @@ bool l2cap_self_test(void)
 		{
 			u8 partial[4];
 
-			put_le16(partial, 64);	/* longer than we feed */
-			put_le16(partial + 2, L2CAP_CID_SIGNALLING);
+			bt_put_le16(partial, 64);	/* longer than we feed */
+			bt_put_le16(partial + 2, L2CAP_CID_SIGNALLING);
 			l2cap_acl_feed(&r, 0x0001, ACL_PB_START_FLUSHABLE,
 				       partial, 4);
 		}
@@ -826,10 +817,10 @@ bool l2cap_self_test(void)
 		 * so it worked only by being last. A block added after it
 		 * would have inherited a PDU declaring 673 bytes and failed
 		 * for a reason nothing in it mentions. */
-		put_le16(big, L2CAP_MTU + 1);
-		put_le16(big + 2, L2CAP_CID_SIGNALLING);
-		put_le16(big + 4, 0);
-		put_le16(big + 6, 0);
+		bt_put_le16(big, L2CAP_MTU + 1);
+		bt_put_le16(big + 2, L2CAP_CID_SIGNALLING);
+		bt_put_le16(big + 4, 0);
+		bt_put_le16(big + 6, 0);
 
 		if (l2cap_acl_feed(&r, 0x0001, ACL_PB_START_FLUSHABLE, big,
 				   8) || r.oversized != 1) {
@@ -872,10 +863,10 @@ bool l2cap_self_test(void)
 	{
 		u8 body[8];
 
-		put_le16(body, 0x0041);		/* their channel */
-		put_le16(body + 2, 0x0040);	/* ours */
-		put_le16(body + 4, L2CAP_CONN_SUCCESS);
-		put_le16(body + 6, 0);
+		bt_put_le16(body, 0x0041);		/* their channel */
+		bt_put_le16(body + 2, 0x0040);	/* ours */
+		bt_put_le16(body + 4, L2CAP_CONN_SUCCESS);
+		bt_put_le16(body + 6, 0);
 
 		if (!l2cap_connect_response_parse(body, 8, &a, &b, &c, &d) ||
 		    a != 0x0041 || b != 0x0040 || c != L2CAP_CONN_SUCCESS) {
@@ -993,10 +984,10 @@ bool l2cap_self_test(void)
 		#define CONN_RSP(ident, dcid_, scid_, res)			\
 			do {						\
 				u8 body_[8];				\
-				put_le16(body_, (dcid_));		\
-				put_le16(body_ + 2, (scid_));		\
-				put_le16(body_ + 4, (res));		\
-				put_le16(body_ + 6, 0);			\
+				bt_put_le16(body_, (dcid_));		\
+				bt_put_le16(body_ + 2, (scid_));		\
+				bt_put_le16(body_ + 4, (res));		\
+				bt_put_le16(body_ + 6, 0);			\
 				n = l2cap_signal_build(rx,		\
 					L2CAP_SIG_CONNECT_RESPONSE,	\
 					(ident), body_, sizeof(body_));	\
@@ -1068,9 +1059,9 @@ bool l2cap_self_test(void)
 		{
 			u8 body[6];
 
-			put_le16(body, 0x0040);
-			put_le16(body + 2, 0);
-			put_le16(body + 4, L2CAP_CONF_SUCCESS);
+			bt_put_le16(body, 0x0040);
+			bt_put_le16(body + 2, 0);
+			bt_put_le16(body + 4, L2CAP_CONF_SUCCESS);
 			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_RESPONSE,
 					       tx[1], body, sizeof(body));
 		}
@@ -1096,11 +1087,11 @@ bool l2cap_self_test(void)
 		{
 			u8 body[8];
 
-			put_le16(body, 0x0040);
-			put_le16(body + 2, 0);
+			bt_put_le16(body, 0x0040);
+			bt_put_le16(body + 2, 0);
 			body[4] = L2CAP_CONF_OPT_MTU;
 			body[5] = 2;
-			put_le16(body + 6, 512);
+			bt_put_le16(body + 6, 512);
 			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
 					       0x20, body, sizeof(body));
 		}
@@ -1143,8 +1134,8 @@ bool l2cap_self_test(void)
 		{
 			u8 body[4];
 
-			put_le16(body, 0x0040);
-			put_le16(body + 2, 0);
+			bt_put_le16(body, 0x0040);
+			bt_put_le16(body + 2, 0);
 			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
 					       0x21, body, sizeof(body));
 		}
@@ -1187,8 +1178,8 @@ bool l2cap_self_test(void)
 			before = ch.wrong_channel;
 
 			/* Addressed to 0x0041, which is not this channel. */
-			put_le16(body, 0x0041);
-			put_le16(body + 2, 0);
+			bt_put_le16(body, 0x0041);
+			bt_put_le16(body + 2, 0);
 			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
 					       0x40, body, sizeof(body));
 
@@ -1203,7 +1194,7 @@ bool l2cap_self_test(void)
 			}
 
 			/* And its own is still answered. */
-			put_le16(body, 0x0040);
+			bt_put_le16(body, 0x0040);
 			n = l2cap_signal_build(rx, L2CAP_SIG_CONFIG_REQUEST,
 					       0x41, body, sizeof(body));
 
@@ -1244,8 +1235,8 @@ bool l2cap_self_test(void)
 		{
 			u8 body[4];
 
-			put_le16(body, 0x0040);
-			put_le16(body + 2, 0x0041);
+			bt_put_le16(body, 0x0040);
+			bt_put_le16(body + 2, 0x0041);
 			n = l2cap_signal_build(rx,
 					       L2CAP_SIG_DISCONNECT_REQUEST,
 					       0x30, body, sizeof(body));
@@ -1260,8 +1251,8 @@ bool l2cap_self_test(void)
 			u64 before = ch.wrong_channel;
 			u32 m;
 
-			put_le16(other, 0x0099);	/* not this channel */
-			put_le16(other + 2, 0x0041);
+			bt_put_le16(other, 0x0099);	/* not this channel */
+			bt_put_le16(other + 2, 0x0041);
 			m = l2cap_signal_build(rx,
 					       L2CAP_SIG_DISCONNECT_REQUEST,
 					       0x2F, other, sizeof(other));
@@ -1290,8 +1281,8 @@ bool l2cap_self_test(void)
 		{
 			u8 body[4];
 
-			put_le16(body, 0x0040);
-			put_le16(body + 2, 0x0041);
+			bt_put_le16(body, 0x0040);
+			bt_put_le16(body + 2, 0x0041);
 			n = l2cap_signal_build(rx,
 					       L2CAP_SIG_DISCONNECT_REQUEST,
 					       0x30, body, sizeof(body));
@@ -1330,12 +1321,12 @@ bool l2cap_self_test(void)
 
 	if (n != 12 || out[0] != L2CAP_SIG_CONFIG_REQUEST ||
 	    out[8] != L2CAP_CONF_OPT_MTU || out[9] != 2 ||
-	    get_le16(out + 10) != L2CAP_MTU) {
+	    bt_get_le16(out + 10) != L2CAP_MTU) {
 		kprintf("  l2cap: a Configure Request came out as %u bytes, "
 			"code %02x, option type %02x length %02x value %u -- "
 			"expected 12 bytes, code %02x, type %02x length 02 "
 			"value %u\n", n, out[0], out[8], out[9],
-			get_le16(out + 10),
+			bt_get_le16(out + 10),
 			(unsigned)L2CAP_SIG_CONFIG_REQUEST,
 			(unsigned)L2CAP_CONF_OPT_MTU, (unsigned)L2CAP_MTU);
 		ok = false;

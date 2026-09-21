@@ -1934,3 +1934,65 @@ adapter has transient failures.
 
 Three faults, one piece of work, and the round-trip that was making it slow is
 gone. Nothing here needs anything from me on it.
+
+---
+
+### 21 September 2026 — bluetooth → kernel
+
+**Merged `974cc51`, kernel 0.5.4.** Then a ninth audit, this one turned on my
+own files: **where have I written the same thing twice?**
+
+Having argued for removing duplicates twice — `bt_mouse_post` because
+`hid_boot_mouse` existed, and your lifting of the boot decoders out of
+`usb_hid.c` — it seemed only fair to check. Six copies:
+
+- `put_le16` written out **four** times
+- `get_le16` **twice**
+- the address comparison **twice, under two different names** —
+  `same_address` in `bt_link.c`, `same_addr` in `bt_pair.c`
+
+The drift had already started. It had just reached the names before it
+reached the behaviour.
+
+All six are now `bt_bytes.h`. And the header says which of them actually
+mattered, because they are not equal: the `le16` pair are four lines with no
+state and were never going to diverge usefully. **`bt_addr_equal` is the one
+that mattered.** Its two copies guarded, between them, which device a
+Connection Complete is about, which device may be answered during pairing,
+and whether a stored link key belongs to the device asking for it.
+
+#### And unifying it found the worst test on this branch
+
+With one copy, a single break should reach every caller. So: shorten
+`bt_addr_equal` to compare three bytes of six.
+
+**Everything passed.**
+
+Every address fixture on this branch was a pair differing in **byte zero** —
+`55:44:33:22:11:00` against `99:44:33:22:11:00`. A comparison that read only
+the first byte satisfied all of them. That includes the pairing gate I
+break-tested three days ago and reported as covered: *window closed*, *wrong
+device*, both green against an address check that stopped after one byte.
+
+This is the thirteenth test here that passed when it should not have, and the
+first in a path where the consequence is a machine pairing with a device
+sharing a prefix and nothing saying so.
+
+The fixtures now differ in the **last** byte. Three-of-six is caught, and
+caught in **both** layers at once — `finding something to talk to : FAIL` and
+`agreeing a key with it : FAIL` from one edit, which is the unification
+demonstrating its own point.
+
+#### What this run of audits keeps saying
+
+Nine audits. The ones that found nothing took a minute each. The ones that
+found something found: a live channel torn down by an unrelated message, an
+unbounded write, a stack smash, a half-read PDU, traffic from the wrong
+device moving the pointer, a wire-reachable integer overflow, and now an
+address check that could have stopped after one byte.
+
+**Not one of those would have been reached by a test on this branch**, and
+several were in code I had already break-tested and reported as covered.
+
+76 self-tests pass, none reporting FAIL, both architectures,
+`check-portable` clean, at kernel 0.5.4.

@@ -8,17 +8,6 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 
-static void put_le16(u8 *p, u16 v)
-{
-	p[0] = (u8)(v & 0xFFu);
-	p[1] = (u8)(v >> 8);
-}
-
-static u16 get_le16(const u8 *p)
-{
-	return (u16)(p[0] | ((u16)p[1] << 8));
-}
-
 /* --- commands -------------------------------------------------------------
  *
  * Every multi-byte field goes out least significant byte first, including the
@@ -50,10 +39,10 @@ u32 hci_create_connection_build(u8 *out, const u8 *addr, u16 pkt_type,
 	 * reversing it "back" would be the mistake. */
 	kmemcpy(body, addr, BT_ADDR_LEN);
 
-	put_le16(body + 6, pkt_type);
+	bt_put_le16(body + 6, pkt_type);
 	body[8] = pscan_rep_mode;
 	body[9] = 0;			/* reserved; was pscan_mode */
-	put_le16(body + 10, clock_offset);
+	bt_put_le16(body + 10, clock_offset);
 	body[12] = allow_role_switch ? 1u : 0u;
 
 	return hci_command_build(out, HCI_OP_CREATE_CONN, body, sizeof(body));
@@ -63,7 +52,7 @@ u32 hci_disconnect_build(u8 *out, u16 handle, u8 reason)
 {
 	u8 body[3];
 
-	put_le16(body, (u16)(handle & 0x0FFFu));
+	bt_put_le16(body, (u16)(handle & 0x0FFFu));
 	body[2] = reason;
 
 	return hci_command_build(out, HCI_OP_DISCONNECT, body, sizeof(body));
@@ -97,7 +86,7 @@ bool hci_inquiry_result_parse(const u8 *ev, u32 len, unsigned n,
 	out->pscan_rep_mode = p[6];
 	/* p[7] is pscan_period_mode, p[8] pscan_mode -- neither is used. */
 	out->device_class = (u32)p[9] | ((u32)p[10] << 8) | ((u32)p[11] << 16);
-	out->clock_offset = get_le16(p + 12);
+	out->clock_offset = bt_get_le16(p + 12);
 
 	return true;
 }
@@ -114,17 +103,6 @@ void bt_link_target(struct bt_link *l, const u8 *addr)
 {
 	kmemcpy(l->peer, addr, BT_ADDR_LEN);
 	l->have_peer = true;
-}
-
-static bool same_address(const u8 *a, const u8 *b)
-{
-	unsigned i;
-
-	for (i = 0; i < BT_ADDR_LEN; i++)
-		if (a[i] != b[i])
-			return false;
-
-	return true;
 }
 
 u32 bt_link_event(struct bt_link *l, const u8 *ev, u32 len, u8 *out,
@@ -183,7 +161,7 @@ u32 bt_link_event(struct bt_link *l, const u8 *ev, u32 len, u8 *out,
 				l->have_peer = true;
 			}
 
-			if (same_address(r.addr, l->peer)) {
+			if (bt_addr_equal(r.addr, l->peer)) {
 				l->peer_pscan_rep_mode = r.pscan_rep_mode;
 				l->peer_clock_offset = r.clock_offset;
 			}
@@ -233,7 +211,7 @@ u32 bt_link_event(struct bt_link *l, const u8 *ev, u32 len, u8 *out,
 		/* The address this is about. A Connection Complete for
 		 * another device is not this link's answer -- the same rule
 		 * as the opcode match and the L2CAP identifier. */
-		if (l->have_peer && !same_address(ev + 5, l->peer)) {
+		if (l->have_peer && !bt_addr_equal(ev + 5, l->peer)) {
 			l->wrong_address++;
 			return 0;
 		}
@@ -246,7 +224,7 @@ u32 bt_link_event(struct bt_link *l, const u8 *ev, u32 len, u8 *out,
 
 		/* Twelve bits. The event carries sixteen and the top four
 		 * are not part of the handle. */
-		l->handle = (u16)(get_le16(ev + 3) & 0x0FFFu);
+		l->handle = (u16)(bt_get_le16(ev + 3) & 0x0FFFu);
 		l->state = BT_LINK_UP;
 
 		return 0;
@@ -260,7 +238,7 @@ u32 bt_link_event(struct bt_link *l, const u8 *ev, u32 len, u8 *out,
 			return 0;
 
 		if (l->state == BT_LINK_UP &&
-		    (get_le16(ev + 3) & 0x0FFFu) == l->handle) {
+		    (bt_get_le16(ev + 3) & 0x0FFFu) == l->handle) {
 			l->state = BT_LINK_IDLE;
 			l->handle = 0;
 		}
@@ -420,7 +398,13 @@ bool bt_link_self_test(void)
 		l.state = BT_LINK_CONNECTING;
 
 		ev[2] = 0x00;
-		ev[5] = 0x99;			/* a different address */
+		/* Differ in the **last** byte of the address, not the first.
+		 * `ev[5]` is byte zero; `ev[10]` is byte five. A comparison
+		 * that stopped early would pass a first-byte difference and
+		 * every address test here used one -- shortening
+		 * `bt_addr_equal` to three bytes of six left them all
+		 * green. */
+		ev[10] = 0x99;
 
 		bt_link_event(&l, ev, sizeof(ev), out, sizeof(out));
 
