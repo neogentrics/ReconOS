@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-19, and each entry says why. They are listed because a register that only
+20, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -214,6 +214,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
 - **NW-019** — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
+- **NW-020** — Five branches, three of them printing the same version for different kernels
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -536,6 +537,64 @@ turned out to be true.
   Register offsets, the reset sequence, and the meaning of every bit are proved
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
+
+### NW-020 — Five branches, three of them printing the same version for different kernels
+
+[#550](https://github.com/neogentrics/ReconOS/issues/550)
+
+- **Found in** the branches themselves, on 21 September 2026, by the network
+  session, after the kernel session renumbered to avoid a **two**-way version
+  collision and gave the reason that generalised: a version can be
+  disambiguated in an entry and **cannot be disambiguated on a machine**. The
+  binary prints `ReconOS kernel 0.5.0` on its first line.
+- **Was**, and still is at the time of writing, every live branch head compared:
+
+  | version | branches claiming it | distinct `kernel/` trees |
+  |---|---|---|
+  | **0.5.0** | `graphics`, `server`, `userland` | **three** |
+  | **0.5.4** | `kernel`, `bluetooth` | **two** |
+  | 0.5.10 | `network` | one |
+  | 0.2.39 | `main` and the default ref | one — the same tree twice, not a collision |
+
+  Three different kernels answer to 0.5.0 and two answer to 0.5.4. Somebody
+  holding a build and reading its first line cannot tell which they have.
+- **Nobody did anything wrong, which is why it needs a check rather than a
+  telling-off.** Every session numbers independently and merges later, which is
+  the right arrangement and is exactly what makes this reachable: two branches
+  pick the same next number without either being able to see the other. The
+  kernel session caught their own instance only because this branch happened to
+  mention a number in a message.
+- **Found by** taking their argument seriously enough to ask whether it held
+  anywhere else, rather than treating their renumber as the end of it.
+- **Two wrong measurements came first and both looked plausible.** Counting
+  every commit that ever *set* a version reported 23 versions set more than
+  once — mostly merges re-adding a number, which is not a collision. Filtering
+  to pairs where neither commit contains the other still reported six, because
+  two commits on branches that **later merged** are siblings for ever and the
+  merge already settled them. The question was wrong both times: the thing worth
+  checking is not what history did, it is **what the branch heads claim now**,
+  which is what somebody holding a build can act on.
+- **And the first run of the tooling lied about its own evidence.** The script
+  marked commits with `@@%H` and parsed lines beginning `@@` — which is also how
+  a diff hunk header begins, so the "commits" it reported were hunk offsets like
+  `-190,7`. It was caught only because the identifiers were printed rather than
+  the count; a bare *"6 collisions"* would have been believed.
+- **Not fixed here, because it is not this branch's to fix.** Four other
+  sessions hold those numbers and the merge is where a renumber belongs — the
+  precedent is the kernel session's own: lay the sequences end to end rather
+  than interleave them, and accept that a higher number which is not a superset
+  is a smaller wart than one number naming two kernels.
+- **What is here is the check**, `scripts/check-version-unique.sh`. It compares
+  branch heads rather than history, and the `kernel/` subtree rather than the
+  whole repository — two branches holding one kernel and different documents
+  are not shipping two kernels, and saying so would make it cry wolf on every
+  README. It exits 2 rather than 0 when it cannot tell, because a clone that has
+  never fetched has no branches to compare and *"every version is unique"* is
+  the one answer it must not give in that case.
+- **Proved both ways on live data.** It names the five collisions and exits 1;
+  and 0.2.39, carried by two refs whose `kernel/` trees are identical, is
+  correctly not flagged — the same number on the same kernel is not a collision
+  and the check knows the difference.
 
 ### NW-019 — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
 
