@@ -86,11 +86,21 @@ void power_idle_wait(void)
 		 * wheel outrun the clock. KF-204. */
 		timer_tick();
 
+		timer_sleep_probe_report();
 		return;
 	}
 
 	idle_ordinary++;
 	arch_wait_for_interrupt();
+
+	/* Here rather than in an idle loop, because there are two of them --
+	 * main.c's and smp.c's -- and which one a processor is in is not
+	 * something the reader of a bug report should have to know. The report
+	 * prints once, seconds after the fault it describes, so it cannot be
+	 * the kprintf that makes KF-258 go away: that one ran on every pass.
+	 *
+	 * It is a single comparison against zero when nothing is armed. */
+	timer_sleep_probe_report();
 }
 
 

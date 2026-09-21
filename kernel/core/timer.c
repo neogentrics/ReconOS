@@ -28,6 +28,15 @@ static u64 wheel_now;
 
 static u64 started, fired, cancelled, refused;
 
+/* KF-258's instrument. Declared here rather than beside the code that uses it
+ * because timer_sleep_ns -- which is further down -- has to write to it, and a
+ * pointer to an incomplete type is all that needs. See the block above
+ * timer_print_summary for what it is for. */
+struct sleeper;
+struct probe_turn;
+static void probe_filed(struct sleeper *s, u64 expires);
+static void probe_returned(void);
+
 /* --- the lists ------------------------------------------------------------
  *
  * Singly linked, with a pointer to whatever points at this entry -- which is
@@ -408,6 +417,10 @@ bool timer_sleep_ns(u64 ns)
 	if (!timer_start(&t, ns))
 		return false;
 
+	/* KF-258. Recorded before the sleep, because after it is where the
+	 * fault is: a thread that does not come back never gets to say so. */
+	probe_filed(&s, t.expires);
+
 	flags = spin_lock_irq(&s.lock);
 
 	/* A loop, because a woken thread is one that has been told to look
@@ -417,6 +430,9 @@ bool timer_sleep_ns(u64 ns)
 		slept = wait_sleep(&s.q, &s.lock, flags);
 
 	spin_unlock_irq(&s.lock, flags);
+
+	if (slept)
+		probe_returned();
 
 	if (!slept) {
 		/* Could not sleep: the idle thread, or no thread at all. The
@@ -432,6 +448,180 @@ bool timer_sleep_ns(u64 ns)
 	}
 
 	return true;
+}
+
+/* --- KF-258: watching one thread's sleep from outside it -------------------
+ *
+ * See timer.h for why this exists. The mechanism is worth a paragraph because
+ * it looks reckless and is not: the report reads `struct sleeper`, which lives
+ * on the *sleeping thread's stack*. That pointer stays valid precisely because
+ * the thread is blocked -- a frame belonging to a thread that has stopped is
+ * not going anywhere, and if the thread ever does wake, the next turn of its
+ * loop overwrites the pointer with its own new frame before sleeping again.
+ * The one case where pointing at another stack is sound is the case where the
+ * owner cannot run.
+ *
+ * `watcher` is checked rather than just a flag, because other threads sleep
+ * during the probe window and the report must describe the probe's sleep
+ * rather than whichever one happened last.
+ *
+ * **Three intervals are recorded, not one**, and the first two are why the
+ * first version of this instrument answered the wrong question:
+ *
+ *   created -> first ran. A thread that is READY and never picked has not
+ *   slept badly; it has not started. KF-258's own table showed a program in
+ *   exactly that state and the entry read it as a sleep fault.
+ *
+ *   asked -> due. What the sleep was for.
+ *
+ *   due -> returned. What it cost beyond that. A sleep still in flight when
+ *   the report runs is reported as in flight rather than as a failure, which
+ *   the first version got wrong and would have got wrong silently.
+ */
+struct probe_turn {
+	u64 filed_at;		/* tick the sleep was filed on */
+	u64 due_at;		/* tick it was due */
+	u64 returned_at;	/* tick it came back on, 0 while in flight */
+};
+
+#define PROBE_TURNS		8
+#define PROBE_SLEEP_NS		50000000ull
+#define PROBE_REPORT_AFTER_NS	6000000000ull
+
+static struct thread *watcher;
+static struct sleeper *watched;
+static struct probe_turn turns[PROBE_TURNS];
+static unsigned watched_started;
+static unsigned watched_done;
+
+static u64 probe_armed_at;
+static u64 probe_created_tick;
+static u64 probe_first_ran_tick;
+static bool probe_reported;
+static bool probe_finished;
+
+static void probe_filed(struct sleeper *s, u64 expires)
+{
+	if (!watcher || sched_current() != watcher ||
+	    watched_started >= PROBE_TURNS)
+		return;
+
+	watched = s;
+	turns[watched_started].filed_at = time_ticks();
+	turns[watched_started].due_at = expires;
+	turns[watched_started].returned_at = 0;
+	watched_started++;
+}
+
+static void probe_returned(void)
+{
+	if (!watcher || sched_current() != watcher ||
+	    watched_done >= watched_started)
+		return;
+
+	/* Never zero, which is what "still out" is written as. A sleep that
+	 * came back on tick zero is not a thing that can happen -- the probe
+	 * starts long after boot -- but a field whose sentinel is also a legal
+	 * value is a field that lies eventually. */
+	turns[watched_done].returned_at = time_ticks();
+	if (!turns[watched_done].returned_at)
+		turns[watched_done].returned_at = 1;
+	watched_done++;
+}
+
+static void probe_entry(void *arg)
+{
+	unsigned i;
+
+	(void)arg;
+	watcher = sched_current();
+	probe_first_ran_tick = time_ticks();
+
+	for (i = 0; i < PROBE_TURNS; i++)
+		if (!timer_sleep_ns(PROBE_SLEEP_NS))
+			break;
+
+	/* The probe reports its own success, because the other reporter runs
+	 * from the idle path -- and a machine whose user program never blocks
+	 * never reaches it. A report that only prints on an idle machine is a
+	 * report that is missing exactly when the machine is interesting. */
+	probe_finished = true;
+	timer_sleep_probe_report();
+}
+
+void timer_sleep_probe_start(void)
+{
+	probe_armed_at = time_monotonic_ns();
+	probe_created_tick = time_ticks();
+	probe_reported = false;
+	thread_create("sleepprobe", probe_entry, 0);
+}
+
+void timer_sleep_probe_report(void)
+{
+	unsigned i;
+	u64 next = 0;
+	bool filed;
+
+	if (!probe_armed_at || probe_reported)
+		return;
+
+	if (!probe_finished &&
+	    time_monotonic_ns() - probe_armed_at < PROBE_REPORT_AFTER_NS)
+		return;
+
+	probe_reported = true;
+
+	filed = timer_next_deadline(&next);
+
+	kprintf("\nSleep probe (KF-258)\n");
+	kprintf("  started      : tick %lu, first ran on tick %lu%s\n",
+		(unsigned long)probe_created_tick,
+		(unsigned long)probe_first_ran_tick,
+		probe_first_ran_tick ? "" : " -- IT NEVER RAN AT ALL");
+	kprintf("  sleeps       : %u asked for, %u returned, of %u\n",
+		watched_started, watched_done, (unsigned)PROBE_TURNS);
+
+	for (i = 0; i < watched_started && i < PROBE_TURNS; i++) {
+		const struct probe_turn *t = &turns[i];
+
+		if (t->returned_at)
+			kprintf("    turn %u     : filed %lu, due %lu, back "
+				"%lu  (%lu late)\n", i + 1,
+				(unsigned long)t->filed_at,
+				(unsigned long)t->due_at,
+				(unsigned long)t->returned_at,
+				(unsigned long)(t->returned_at - t->due_at));
+		else
+			kprintf("    turn %u     : filed %lu, due %lu, STILL "
+				"OUT after %lu ticks\n", i + 1,
+				(unsigned long)t->filed_at,
+				(unsigned long)t->due_at,
+				(unsigned long)(time_ticks() - t->due_at));
+	}
+
+	if (watched_started == watched_done) {
+		kprintf("  verdict      : every sleep returned\n");
+		return;
+	}
+
+	/* The bit the whole instrument exists for. */
+	kprintf("  callback ran : %s\n",
+		(watched && watched->done)
+		? "YES -- the timer fired and the thread was not resumed"
+		: "no -- the timer never fired");
+	kprintf("  clock/wheel  : now tick %lu, wheel at %lu\n",
+		(unsigned long)time_ticks(), (unsigned long)wheel_now);
+	kprintf("  timers       : %lu started, %lu fired, %lu cancelled\n",
+		(unsigned long)started, (unsigned long)fired,
+		(unsigned long)cancelled);
+
+	if (filed)
+		kprintf("  next filed   : tick %lu\n", (unsigned long)next);
+	else
+		kprintf("  next filed   : nothing is filed at all\n");
+
+	sched_print_summary();
 }
 
 void timer_print_summary(void)

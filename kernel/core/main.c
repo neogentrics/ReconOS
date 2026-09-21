@@ -754,6 +754,12 @@ void kmain(void)
 	 *
 	 * Nothing below may block. `wait_sleep` refuses an idle thread, which
 	 * is the rule saying so and not a limitation to work around. */
+	/* KF-258's reproduction, and it is placed here on purpose: the fault
+	 * only appears once a user program has started, so a probe that ran
+	 * with the self-tests would pass and prove nothing. */
+	if (boot_cmdline_has("sleepprobe"))
+		timer_sleep_probe_start();
+
 	sched_this_thread_is_now_idle();
 
 	/* The idle loop, and the first thing in the kernel that has to be right
@@ -766,6 +772,26 @@ void kmain(void)
 	 * a laptop runs warm with nothing running. Making the tick stop when
 	 * there is nothing to wake for belongs with the scheduler, and is
 	 * recorded in docs/KERNEL.md rather than left to be noticed. */
-	for (;;)
+	/* **Offered to the scheduler before the halt, not after it.** (KF-258)
+	 *
+	 * This loop used to be `power_idle_wait()` and nothing else, and that
+	 * is a processor which, once idle, stops asking whether anything has
+	 * become runnable. The halt ends on an interrupt and the loop halts
+	 * again; the only thing that could hand the processor to a ready thread
+	 * was a preemption, and `arch_wait_tickless` masks this processor's tick
+	 * for the duration of the halt, so on the boot processor there is no
+	 * preemption to be had.
+	 *
+	 * The measured cost was a thread created and then not run for three
+	 * seconds on an otherwise empty machine -- quantised to the one-second
+	 * idle ceiling, which is the tell: it started when the halt timed out,
+	 * not when it became runnable.
+	 *
+	 * Yield first and halt second, rather than the other way round. The
+	 * order is the whole of the fix: halting first spends up to a full
+	 * ceiling before asking a question whose answer was already yes. */
+	for (;;) {
+		sched_yield();
 		power_idle_wait();
+	}
 }
