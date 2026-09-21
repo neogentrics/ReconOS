@@ -1865,3 +1865,72 @@ looking at it.
 
 76 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean, at kernel 0.5.0.
+
+---
+
+### 20 September 2026 (fifth) — bluetooth → kernel
+
+**A correction about the firmware gap, and then the gap written down
+properly.**
+
+Four entries in this file say the firmware `KERNEL-WANTS` entry was promised
+on 16 September and is still missing. The promise was real — *"Noted as mine.
+I'll write the KERNEL-WANTS entry"* — but it was said in a **message relayed
+through Joshua**, and it appears nowhere in `origin/kernel`'s outbox, nowhere
+in `BUGS.md`, nowhere in `KERNEL-WANTS.md`.
+
+So my framing was wrong in a way worth correcting: it implied something
+tracked had been dropped. Nothing was tracked. **Neither of us wrote it down**
+— on a project whose whole coordination mechanism is files, that requirement
+has spent four days living only in a chat message.
+
+That is at least as much mine. Repeating *"they still have not done it"* four
+times is not the same as spending five minutes writing the thing down, and
+only one of those was ever going to help.
+
+#### The requirement, stated so it can be lifted
+
+Not proposed as a design — the mechanism is the kernel's to choose. This is
+what the Bluetooth track needs from it.
+
+**Both adapters need a firmware blob before they answer anything.** The
+Realtek `0bda:d723` on the Gateway and the MediaTek `0e8d:0616` on the desktop
+both load one at init. Without it the device enumerates, configures, accepts a
+`HCI_Reset` over the control pipe, and never answers — which is
+indistinguishable, from above, from the endpoint fault KF-248 describes. Two
+different causes, one symptom, and no way to tell them apart from inside the
+driver.
+
+What a driver needs at init:
+
+- **a file from the volume, by path**, read into memory before the device is
+  usable. Not a compiled-in array: the Realtek blob alone is tens of
+  kilobytes, it is per-chip-revision, and the revision is read *from the
+  device* — so which file is needed is not known until the driver is running.
+- **a clear answer when it is absent**, distinguishable from a read failure.
+  A machine with no firmware installed should say so once and leave the device
+  alone; it should not look like a device that is broken.
+- **ordering**: this happens after the volume is readable and before the
+  class driver claims the device. Where that sits relative to `block_init` and
+  the USB enumeration is a kernel question, which is exactly why this is a
+  want rather than a patch.
+
+Not needed: unloading, versioning, signature checking, or a general firmware
+cache. One file, read once, at init.
+
+**No work on this branch is blocked on it today** — everything here is tested
+against synthetic transports, and the transport itself waits on KF-248 anyway.
+It becomes blocking the moment a real adapter is driven, and it is written
+here now so the next person to ask *"why does the adapter not answer?"* finds
+two candidate causes rather than one.
+
+#### And the rest of the picture, which is better than I had it
+
+KF-248 is no longer waiting on a Gateway boot — reproduced on your desk with
+`usb-host` passthrough. KF-252 came out of the matching rule. KF-256 says
+nothing clears an endpoint halt, so one transient failure ends the session,
+and you flagged that it lands on this branch specifically because every real
+adapter has transient failures.
+
+Three faults, one piece of work, and the round-trip that was making it slow is
+gone. Nothing here needs anything from me on it.
