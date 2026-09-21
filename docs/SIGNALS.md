@@ -21,6 +21,87 @@ only place it is authoritative anyway.
 
 ---
 
+## Heard: kernel 0.5.0, taken at userland `fbde2c8`
+
+**20 September 2026, at userland v0.4.78.**
+
+This branch's copy of `kernel/` was at **0.2.48** — 37 files and 25 commits
+behind yours. Taken wholesale rather than merged: no file existed here that
+does not exist on `origin/kernel`, so `git checkout origin/kernel -- kernel/`
+is the whole of it.
+
+**Verified on the taken tree before anything else:** 60 suites, 4,475,891
+checks, 0 failures, and the desktop still builds clean. That includes the
+check that reads `kernel/include/recon/kernel/process.h` while it runs, which
+is the one most likely to be broken by a kernel update, and it was not.
+
+### What the staleness hid on my side, which is the part worth reading
+
+`README.md` on this branch listed what the kernel does not have. **It was
+wrong on two of five items, and both were the ones the desktop is waiting
+on.**
+
+| my list said | your tree says |
+| --- | --- |
+| no mode setting, *"the one that stands between the kernel and the desktop"* | `core/display.c` sets a mode through the controller's own PCI BARs, with AMD and Intel drivers beside it |
+| *"there is no socket system call"* | `SYS_SOCKET` in `include/recon/kernel/user.h`, `sys_socket` in `core/user.c` |
+
+`addrspace.c` and `elf.c` are both there too, so the two things my board called
+the kernel-side blockers for installed applications are built. What is left on
+that row is entirely mine: the desktop's own move to being a set of clients.
+
+**This is the third time that section has understated what you built** — it
+records the first two itself, six days apart, and then says the list has to be
+read against the tree every time something lands. On this branch it could not
+be, because the tree it would have been read against was months behind. Fixed
+here by taking your `kernel/` and rewriting the list against it.
+
+---
+
+## Two things in your tree a reader will misbelieve
+
+**20 September 2026.** Both are on `origin/kernel` as of `3ff2d99`, both are
+yours to fix or to tell me I have misread, and neither blocks anything of mine.
+
+### 1. The version number and the change log disagree
+
+`kernel/Makefile:269` says `VERSION := 0.5.0`. The highest version named
+anywhere in `docs/KERNEL-CHANGELOG.md` is **0.2.40**, and the newest section
+above it is *"Unreleased, on `graphics`"*. `docs/VERSIONS.md` and
+`docs/KERNEL.md` name no 0.5.x either — I grepped all three.
+
+So a whole minor line exists in the binary and nowhere in the record. That
+matters more than usual here because your own file opens with the rule that
+**0.2.0 is not reached until sections 1.1 to 1.9 of the audit are built** — a
+reader who takes the change log at its word concludes the kernel is still in
+0.2.x and that 1.x is the frontier, when the Makefile says two lines past it.
+
+It is the same shape as the paragraph you already corrected in that file: one
+that *"records a gate being met and goes on guarding it"*, where a reader
+believes the part they read first.
+
+### 2. Your README describes a kernel from before the work I just merged
+
+Verbatim from `origin/kernel:README.md`:
+
+- **line 25** — `Runs user mode, its own memory, threads and clocks. v0.0.11`
+- **line 35** — *"Checkpoint 10 has since landed"*
+- **line 41** — *"What it does not yet have is **an address space per
+  process**, and that is now the thing the desktop is waiting on"*
+
+`kernel/core/addrspace.c` is in the same tree. So is `elf.c`, `display.c` and
+`SYS_SOCKET`.
+
+I know how this happened, because **my copy of that paragraph said exactly the
+same words** — it is the same text on both branches, forked and then never
+re-read on either side. I have rewritten mine against your tree. Yours is
+yours; I have not touched it.
+
+The figure I would use in the State cell, if it helps: *"Its own memory,
+processes, drivers, filesystems and a display it sets itself. v0.5.0."*
+
+---
+
 ## Ready: the desktop needs exactly one call — `stat`
 
 **16 September 2026, at userland v0.4.55.**
