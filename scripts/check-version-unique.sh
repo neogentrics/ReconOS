@@ -53,9 +53,30 @@ scope=refs/remotes/origin
 # shellcheck disable=SC2086
 refs=$(git for-each-ref --format='%(refname:short)' $scope 2>/dev/null | grep -v 'HEAD$')
 
+# Two ways to have no branches, and they want different sentences.
+#
+# **The one that actually arrived is not the one this guarded against.** It was
+# written expecting a shallow or never-fetched clone. What happens on this rig
+# is stranger: the matrix runs under WSL, and this tree is a git *worktree*
+# whose `.git` file names a Windows path that git-under-WSL cannot follow. Every
+# git command fails while the build and the boots work perfectly.
+#
+# "Has this clone ever fetched?" is then a true-sounding sentence pointing at
+# the wrong thing, and somebody would run `git fetch` and watch it not help. So
+# the repository is tested first and the two are reported apart.
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+	echo "  version uniqueness: NOT CHECKED -- not a git repository here"
+	echo "  (a worktree whose .git points somewhere this shell cannot follow"
+	echo "  will do this; the build is unaffected and so is nothing else)"
+	echo "  A check that did not run is not a check that passed."
+	exit 2
+fi
+
 if [ -z "$refs" ]; then
-	echo "  no branches to compare -- has this clone ever fetched?"
-	echo "  saying nothing rather than saying every version is unique."
+	echo "  version uniqueness: NOT CHECKED -- no branches to compare"
+	echo "  git works here but nothing has been fetched, so there is one"
+	echo "  version and no second opinion. Saying nothing rather than"
+	echo "  saying every version is unique."
 	exit 2
 fi
 
