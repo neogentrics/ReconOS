@@ -620,16 +620,35 @@ turned out to be true.
   the lineage and have moved past it, as `graphics` and `server` have. Reasoning
   about what a version means by asking who contains what gives a wrong answer
   both ways round.
-- **Nothing is wrong today, and that is worth saying before anybody renumbers
-  four branches.** Counted rather than assumed: **no entry in either register
-  names 0.5.0** — the collision with three kernels behind it is referenced by
-  nothing. One entry names 0.5.4, KF-261, and `bluetooth` contains
-  `origin/kernel`, so that entry is true on both trees that answer to the
-  number.
+- **The collision breaks nothing today, and the first count offered for that
+  was scoped wrong.** It said *"no entry in either register names 0.5.0"* —
+  true, and two registers is not the question when six branches carry one. The
+  kernel session counted all six and **four entries do name it**, two on
+  `graphics` and two on `server`.
 
-  **Zero entries are currently false.** The fault is real and entirely
-  prospective: the next entry written against 0.5.0 or 0.5.4 is the one that
-  breaks, and there is nothing to stop it being written.
+  Verified here rather than accepted: `origin/graphics` and `origin/server` each
+  carry `KF-259` and `KF-260` reading `**Status:** fixed, kernel 0.5.0.` The
+  other four branches name it nowhere.
+- **The conclusion survives and its reason changes entirely, which is the
+  interesting part.** Those four entries are false — but not because two
+  kernels answer to 0.5.0. They are false for **NW-016's reason**: a fix
+  committed after the commit that set the number. They are stale copies of the
+  very two entries NW-016 was opened about, sitting on branches that merged
+  before the correction landed. This register says 0.5.1 and 0.5.2 for those
+  two now.
+
+  So they resolve when `graphics` and `server` merge `origin/kernel`, with no
+  renumbering by anybody, and the collision itself still costs nothing.
+- **What that shows, which neither NW-016 nor this entry saw coming: a register
+  fault has a propagation delay and a blast radius measured in branches.**
+  NW-016 was reported as two entries. It was two entries **times every branch
+  that had merged before the fix** — six, at the time of writing, four of them
+  still carrying the wrong claim. "Fixed on `kernel`" and "fixed everywhere" are
+  different states, and the register offers no way to see the difference from
+  inside any one branch.
+
+  That is not an argument for doing anything differently here. It is an argument
+  for not reading a corrected entry as a corrected project.
 
 ### NW-019 — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
 
