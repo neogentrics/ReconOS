@@ -442,6 +442,49 @@ and Linux, which was never consulted about the decode, reports the same
 interface as **1000 Mb, full duplex**. Three sources agree: our constants, the
 raw register, and the operating system driving the card.
 
+### The one offset that could not be checked, and what it will look like if it is wrong
+
+Fourteen of the fifteen agreed. **`R_TPPOLL` at `0x38` is the exception** — the
+dump does not label it, so there was nothing to agree with.
+
+**It is the worst one to be left holding**, and worth knowing before the boot
+rather than during it. `0x38` is the register this driver writes to say *look at
+the transmit ring now*:
+
+```c
+__atomic_thread_fence(__ATOMIC_RELEASE);
+w8(r, R_TPPOLL, TPPOLL_NPQ);
+```
+
+If that offset is wrong the write lands somewhere harmless, the card is never
+told to look, and **every frame this machine tries to send sits in the ring with
+its OWN bit set.** Nothing is transmitted and nothing says so. DHCP would report
+`no address; nothing offered one` — which is also exactly what a machine on a
+dead network reports.
+
+**Two things narrow it, and neither is proof.** `0x37` and `0x3C` both agreed,
+so `0x38` sits between two confirmed offsets and a shifted map is ruled out. And
+the value is a *queue selector* rather than an address, so a wrong offset fails
+completely rather than subtly.
+
+**The boot report distinguishes the two cases by itself**, which is the reason
+this section exists:
+
+| | `N out` | `ring full` | `N in` |
+|---|---|---|---|
+| **`0x38` is wrong** | climbs to **32** and stops | appears, and keeps climbing | 0 |
+| **the network is dead** | keeps climbing past 32 | stays absent | 0 |
+
+The ring is 32 deep. `collect_tx` stops at the first descriptor the card still
+owns, so if the card never walks the ring, `tx_tail` never advances: after 32
+frames `tx_head - tx_tail >= TX_RING` and every further send increments
+`tx_ring_full`, which the summary prints only when it is non-zero. On a merely
+unreachable network the card *does* send — the descriptors come back, the ring
+drains, and that counter stays at zero.
+
+**So: `32 out` with `ring full` growing means the register, not the wire.** Read
+that line before concluding anything about the network.
+
 ### What this does not close, and it is most of the risk
 
 **The reset sequence, the interrupts, and a frame on the wire are all
