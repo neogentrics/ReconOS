@@ -10845,6 +10845,43 @@ program instead, which is the same fight from the other side. That one belongs i
 
 [#462](https://github.com/neogentrics/ReconOS/issues/462)
 
+> ### Corrected 20 September 2026 — this named a version that never existed
+>
+> It read **kernel 0.2.32**. That number was never set: `git log --all -S"VERSION
+> := 0.2.32" -- kernel/Makefile` returns nothing, while its neighbour 0.2.31
+> returns `a519543`. **It is 0.2.34.**
+>
+> Found by the **network session**, who built this register's own rule into a
+> check — *no entry may name a version whose tree does not contain its fix* —
+> and then refused to guess the replacement, on the grounds that *plausible is
+> the confidence that produced the fault*. Derived instead, and both sessions
+> ran the derivation independently:
+>
+> ```
+> 3e058d9  introduced KF-227, KF-228 and KF-229 -- all three, one commit
+> 3e058d9  raised VERSION from 0.2.29 to 0.2.34 in that same commit
+> KF-229   already reads 0.2.34, and is the third of the three
+> ```
+>
+> **Three consecutive fixes were given three consecutive numbers in prose while
+> the line was raised once.** KF-228's own text says *"the shared mapping, like
+> its two neighbours"*, which is the sentence that gives it away. So one number
+> covers three fixes here, and saying so is better than inventing two releases
+> to make the arithmetic look tidy.
+>
+> #### The false trail, recorded because it is convincing
+>
+> `git log -S"inode_to_read"` finds `bb6052a`, and the kernel Makefile at that
+> commit reads **0.2.27** — which would put this fix five numbers *before* the
+> 0.2.29 the entry says it was found in.
+>
+> 0.2.27 is a real release; `7ed75ca` set it and `bb6052a` merely inherited the
+> line. **The reading is right about the bytes and wrong about the question.**
+> A version read at an arbitrary commit is not a release — only a commit that
+> *changes* the line is one, and the two tracks' sequences were laid end to end
+> rather than interleaved, so an inherited number from the other track's line
+> says nothing about this one's order.
+
 - **Found in** kernel 0.2.29, on the first boot that had both a mounted volume
   and a program asking what was on it. The first-boot screen said *no volume
   this kernel can read* on a machine that had created ten directories on that
@@ -10867,7 +10904,7 @@ program instead, which is the same fight from the other side. That one belongs i
 - **And it did not arrive as a listing fault.** It arrived as EIO — see
   KF-228 — so the screen reported no volume rather than a refused listing, and
   the two sentences on it contradicted each other.
-- **Fixed in** kernel 0.2.32. One helper, `inode_to_read`, used by both: a
+- **Fixed in** kernel 0.2.34. One helper, `inode_to_read`, used by both: a
   path that is nothing but slashes resolves to `fs->root_inode` and everything
   else walks as before. One helper rather than the same special case twice, so
   that the root cannot become listable and unownable, or the reverse — and
@@ -10878,6 +10915,43 @@ program instead, which is the same fight from the other side. That one belongs i
 ### KF-228 — Every refusal from a listing reached a program as "the disk failed"
 
 [#463](https://github.com/neogentrics/ReconOS/issues/463)
+
+> ### Corrected 20 September 2026 — this named a version that never existed
+>
+> It read **kernel 0.2.33**. That number was never set: `git log --all -S"VERSION
+> := 0.2.33" -- kernel/Makefile` returns nothing, while its neighbour 0.2.31
+> returns `a519543`. **It is 0.2.34.**
+>
+> Found by the **network session**, who built this register's own rule into a
+> check — *no entry may name a version whose tree does not contain its fix* —
+> and then refused to guess the replacement, on the grounds that *plausible is
+> the confidence that produced the fault*. Derived instead, and both sessions
+> ran the derivation independently:
+>
+> ```
+> 3e058d9  introduced KF-227, KF-228 and KF-229 -- all three, one commit
+> 3e058d9  raised VERSION from 0.2.29 to 0.2.34 in that same commit
+> KF-229   already reads 0.2.34, and is the third of the three
+> ```
+>
+> **Three consecutive fixes were given three consecutive numbers in prose while
+> the line was raised once.** KF-228's own text says *"the shared mapping, like
+> its two neighbours"*, which is the sentence that gives it away. So one number
+> covers three fixes here, and saying so is better than inventing two releases
+> to make the arithmetic look tidy.
+>
+> #### The false trail, recorded because it is convincing
+>
+> `git log -S"inode_to_read"` finds `bb6052a`, and the kernel Makefile at that
+> commit reads **0.2.27** — which would put this fix five numbers *before* the
+> 0.2.29 the entry says it was found in.
+>
+> 0.2.27 is a real release; `7ed75ca` set it and `bb6052a` merely inherited the
+> line. **The reading is right about the bytes and wrong about the question.**
+> A version read at an arbitrary commit is not a release — only a commit that
+> *changes* the line is one, and the two tracks' sequences were laid end to end
+> rather than interleaved, so an inherited number from the other track's line
+> says nothing about this one's order.
 
 - **Found in** kernel 0.2.29, while finding KF-227. The screen said EIO; the
   disk was fine.
@@ -10891,7 +10965,7 @@ program instead, which is the same fight from the other side. That one belongs i
   hold, a path too deep, a volume not mounted, and a path the walk refuses —
   four different things a caller would act on differently, delivered as one
   failure that says the hardware broke.
-- **Fixed in** kernel 0.2.33. The shared mapping, like its two neighbours.
+- **Fixed in** kernel 0.2.34. The shared mapping, like its two neighbours.
 
 ### KF-229 — Five self-tests pass exactly once per volume, inside the check written to catch that
 
