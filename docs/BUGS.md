@@ -595,6 +595,41 @@ turned out to be true.
   and 0.2.39, carried by two refs whose `kernel/` trees are identical, is
   correctly not flagged — the same number on the same kernel is not a collision
   and the check knows the difference.
+- **The five are not equally bad, and the count cannot say so.** The kernel
+  session confirmed the same five independently and then asked the better
+  question — what does the sharing *mean* — which needs containment rather than
+  counting. Verified here rather than taken from their message:
+
+  `bluetooth` **contains** `origin/kernel` outright, so its 0.5.4 is that
+  kernel plus their own work, unbumped. `graphics` and `server` both contain
+  `9e2d334`, the commit that set 0.5.0, and diverged after it without bumping.
+  **`userland` does not contain `9e2d334` at all** — a different lineage
+  reading the same string.
+- **And then the lineage answer turned out not to settle it either.** The
+  obvious conclusion from that last line is that an entry naming 0.5.0 cannot
+  be relied on for `userland`. It does not follow, and checking is what shows
+  why: `userland` reached the **same content by another route**. Its
+  `r8169.c`, `e1000.c` and `netdev.c` are byte-identical to the kernel
+  branch's — same blob hashes — having arrived through `fbde2c8`, a commit
+  that took the version line and the work without the lineage. Its `logport.c`
+  is the *older* one, still carrying the `sched_yield` workaround from before
+  KF-258.
+
+  So **containment is not a proxy for content in either direction.** A tree can
+  hold the content without the lineage, as `userland` does; and a tree can hold
+  the lineage and have moved past it, as `graphics` and `server` have. Reasoning
+  about what a version means by asking who contains what gives a wrong answer
+  both ways round.
+- **Nothing is wrong today, and that is worth saying before anybody renumbers
+  four branches.** Counted rather than assumed: **no entry in either register
+  names 0.5.0** — the collision with three kernels behind it is referenced by
+  nothing. One entry names 0.5.4, KF-261, and `bluetooth` contains
+  `origin/kernel`, so that entry is true on both trees that answer to the
+  number.
+
+  **Zero entries are currently false.** The fault is real and entirely
+  prospective: the next entry written against 0.5.0 or 0.5.4 is the one that
+  breaks, and there is nothing to stop it being written.
 
 ### NW-019 — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
 
