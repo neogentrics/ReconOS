@@ -108,6 +108,18 @@ u8 pci_find_capability(const struct pci_device *d, u8 id, u8 from);
  *
  * Returns null for an I/O-space register, a register the firmware never
  * assigned, or a window that runs past the end of the one asked for. */
+/* The page-aligned window that covers a whole BAR: where it starts and how
+ * long it is. Exposed because it is the only part of mapping a BAR that can be
+ * wrong arithmetically, and therefore the only part a machine without the
+ * device can check. */
+void pci_bar_window(paddr_t base, u64 size, paddr_t *first, u64 *span);
+
+/* A BAR mapped **without** the writable bit, for a driver that reads and does
+ * not write. See the comment on the definition for why that is worth a separate
+ * entry point rather than a flag every caller has to pass. */
+volatile u8 *pci_map_bar_ro(const struct pci_device *d, u8 bar, u32 offset,
+			    u32 len);
+
 volatile u8 *pci_map_bar(const struct pci_device *d, u8 bar, u32 offset,
 			 u32 len);
 

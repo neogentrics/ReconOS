@@ -112,6 +112,12 @@ void intel_display_print_summary(void);
 u32 intel_pipe_srcsz(u32 width, u32 height);
 u32 intel_plane_size(u32 width, u32 height);
 u32 intel_trans_timing(u32 total, u32 active);
+
+/* And back again. The encoder has been here since the file was written; these
+ * arrived when the hardware handed over eight real values to assert against,
+ * and reading was being done inline where nothing could check it. */
+u32 intel_trans_total(u32 reg);
+u32 intel_trans_active(u32 reg);
 u32 intel_plane_ctl_bgra(void);
 
 /* The plane stride, in the sixty-four byte chunks the register counts, or

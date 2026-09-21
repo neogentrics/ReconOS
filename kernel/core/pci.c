@@ -79,8 +79,28 @@ u8 pci_find_capability(const struct pci_device *d, u8 id, u8 from)
 	return 0;
 }
 
-volatile u8 *pci_map_bar(const struct pci_device *d, u8 bar, u32 offset,
-			 u32 len)
+/* The page-aligned window that covers a whole BAR.
+ *
+ * **Split out because it was about to exist twice.** The Intel display driver
+ * needed the same window with different permissions and the first version of
+ * that change copied these three lines into `intel_display.c` -- which is how a
+ * tree ends up with two implementations of one piece of arithmetic and only one
+ * of them getting fixed. The parallel-array shape GX-002 records, in miniature.
+ *
+ * A BAR is not required to be page aligned. Rounding the base down and the
+ * length up **by the amount the base moved** is what covers the last byte;
+ * rounding only the length leaves the final page short, and on a sixteen
+ * megabyte register file that fault appears at the far end of the window and
+ * nowhere near the cause.
+ */
+void pci_bar_window(paddr_t base, u64 size, paddr_t *first, u64 *span)
+{
+	*first = PAGE_ALIGN_DOWN(base);
+	*span  = PAGE_ALIGN_UP((base - *first) + size);
+}
+
+static volatile u8 *map_bar(const struct pci_device *d, u8 bar, u32 offset,
+			    u32 len, u32 flags)
 {
 	paddr_t base, page;
 	u64 span;
@@ -93,18 +113,53 @@ volatile u8 *pci_map_bar(const struct pci_device *d, u8 bar, u32 offset,
 		return 0;
 
 	base = (paddr_t)d->bar[bar];
-	page = PAGE_ALIGN_DOWN(base);
-	span = PAGE_ALIGN_UP((base - page) + d->bar_size[bar]);
-	va   = (vaddr_t)(uintptr_t)phys_to_virt(page);
+	pci_bar_window(base, d->bar_size[bar], &page, &span);
+	va = (vaddr_t)(uintptr_t)phys_to_virt(page);
 
 	/* Mapped once. A second driver asking for a window in the same BAR --
 	 * which is exactly what happens when a device's registers and its
-	 * interrupt table share one -- finds it already there. */
-	if (!vm_lookup(va) &&
-	    !vm_map(va, page, span, VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
+	 * interrupt table share one -- finds it already there.
+	 *
+	 * **Which is the one sharp edge of the read-only variant**, and it is
+	 * named rather than guarded: if some driver has already mapped this BAR
+	 * writable, `vm_lookup` succeeds and the read-only caller gets a
+	 * writable window. The permission is a property of the mapping, not of
+	 * the caller. No device in this kernel is claimed by two drivers, so it
+	 * cannot happen today; a driver that starts sharing a BAR with another
+	 * has to think about it, and this comment is where it will be looking.
+	 */
+	if (!vm_lookup(va) && !vm_map(va, page, span, flags))
 		return 0;
 
 	return (volatile u8 *)phys_to_virt(base) + offset;
+}
+
+volatile u8 *pci_map_bar(const struct pci_device *d, u8 bar, u32 offset,
+			 u32 len)
+{
+	return map_bar(d, bar, offset, len,
+		       VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL);
+}
+
+/* The same window, without the writable bit.
+ *
+ * **For a driver that reads and does not write**, which until now was not a
+ * kind of driver this kernel had: apic.c, storage.c, the Bochs adapter and
+ * every other caller above write to the device they map.
+ *
+ * The Intel display backend reads a Gen9's registers and writes none of them,
+ * on the one machine in this project that has such a chip -- a laptop with **no
+ * serial port**, where a stray write into the display engine removes the panel
+ * and the only channel that could explain why, together. An intention not to
+ * write lasts until somebody's typo. A page table entry without the writable
+ * bit is enforced by the machine, and both architectures honour its absence:
+ * x86_64 sets the bit only under `if (flags & VM_WRITE)`, aarch64 picks
+ * `ATTR_AP_RO`.
+ */
+volatile u8 *pci_map_bar_ro(const struct pci_device *d, u8 bar, u32 offset,
+			    u32 len)
+{
+	return map_bar(d, bar, offset, len, VM_READ | VM_DEVICE | VM_GLOBAL);
 }
 
 /* Sizing a base address register.

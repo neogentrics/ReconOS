@@ -106,13 +106,53 @@
  * driver read is zero, and TRANSCONF_A's enable bit is clear, on a machine
  * whose screen is on (GX-013).
  *
- * One thing here is measured and not understood, and is left that way on
- * purpose: TRANS_DDI_FUNC_CTL at 0x6F400 reads 0x00210000, whose bit 31 --
- * the function-enable -- is **clear**, which this file cannot reconcile with a
- * transcoder whose TRANSCONF says enabled and whose timings are live. It is
- * recorded rather than explained. Writing a guess here is how somebody later
- * reads a guess as a fact.
+ * --- One register, two readings, and they disagree -------------------------
+ *
+ * `PIPE_DDI_FUNC_CTL_EDP` at 0x6F400 was read twice on 18 September, on the
+ * same machine, hours apart:
+ *
+ *   graphics session   0x00210000   bit 31 clear -- the function is DISABLED
+ *   kernel session     0x82210000   bit 31 set   -- enabled, DP SST, 6 bpc
+ *
+ * The two runs differ in one known way: the kernel session wrote
+ * `echo 0 > /sys/class/graphics/fb0/blank` first, to wake the panel. The
+ * graphics session did not, and read a machine whose desktop had been idle for
+ * some minutes.
+ *
+ * **That is a correlation and this file does not claim it is the cause.** What
+ * matters is not why, it is what a driver may conclude from the register:
+ *
+ *   TRANSCONF_EDP  read 0xc0000000 -- enabled and active -- in BOTH runs.
+ *   The timings at 0x6F000 were the panel's real mode in BOTH runs.
+ *   PIPE_DDI_FUNC_CTL_EDP was enabled in one and disabled in the other.
+ *
+ * So **the field that agreed with the lit panel both times is TRANSCONF, and
+ * the one that did not is the DDI function control.** That is the whole basis
+ * on which the scan below picks TRANSCONF as the deciding register, and it is
+ * evidence rather than preference -- a selector written against
+ * TRANS_DDI_FUNC_ENABLE would have found no transcoder at all on the first of
+ * those two readings, which is the same false negative GX-013 is about,
+ * reintroduced by the fix for it.
+ *
+ * The DDI control is still read, and printed when it disagrees, because a
+ * disagreement is a fact about the machine that somebody debugging a dark
+ * panel will want. It is not allowed to decide anything.
  */
+/* The DDI function controls, one per transcoder. Read, reported, and not
+ * trusted to decide -- see the two readings above. */
+#define PIPE_DDI_FUNC_CTL_A	0x60400u
+#define PIPE_DDI_FUNC_CTL_EDP	0x6F400u
+#define   TRANS_DDI_FUNC_ENABLE	(1u << 31)
+
+/* **The EDP transcoder is transcoder A plus 0xF000, in both blocks.**
+ *
+ * Measured, not assumed: 0x60000 -> 0x6F000 for the timings and 0x70008 ->
+ * 0x7F008 for the configuration, and 0x60400 -> 0x6F400 for the DDI control.
+ * One displacement, three registers, confirmed against a running machine. The
+ * self-test asserts it so that a hand-typed offset cannot quietly break the
+ * relationship. */
+#define TRANS_EDP_OFFSET	0xF000u
+
 #define TRANS_HTOTAL_EDP	0x6F000u
 #define TRANS_HBLANK_EDP	0x6F004u
 #define TRANS_HSYNC_EDP		0x6F008u
@@ -302,6 +342,87 @@ static u32 intel_read32(volatile u8 *mmio, u32 offset)
  * `out` is filled with width, height and pitch as the *hardware* reports them,
  * which is deliberately not the same source as `boot_info()->fb`.
  */
+/* The transcoders this driver knows, in the order it looks at them.
+ *
+ * Pipe-indexed A, B and C, then EDP -- which is last deliberately. On a laptop
+ * the panel is on EDP and A reads zero, so a scan that stopped at the first
+ * *entry* rather than the first *enabled* one would find nothing and be right
+ * about nothing. Ordering here is presentation only; the loop below reads every
+ * one of them before deciding.
+ */
+struct intel_transcoder {
+	const char *name;
+	u32 timing;		/* HTOTAL; the rest follow at fixed offsets */
+	u32 conf;		/* TRANSCONF -- the register that decides */
+	u32 ddi;		/* the DDI function control -- reported only */
+};
+
+static const struct intel_transcoder TRANSCODERS[] = {
+	{ "A",   0x60000u,             0x70008u,             0x60400u },
+	{ "B",   0x60000u + 0x1000u,   0x70008u + 0x1000u,   0x60400u + 0x1000u },
+	{ "C",   0x60000u + 0x2000u,   0x70008u + 0x2000u,   0x60400u + 0x2000u },
+	{ "EDP", 0x60000u + TRANS_EDP_OFFSET,
+	         0x70008u + TRANS_EDP_OFFSET,
+	         0x60400u + TRANS_EDP_OFFSET },
+};
+
+#define TRANSCODER_COUNT (sizeof(TRANSCODERS) / sizeof(TRANSCODERS[0]))
+
+/* Undo the minus-one the hardware stores. The encoder has existed since this
+ * file did; the decoders are new, because reading was done inline and the eight
+ * values the Gateway handed back are known answers that deserve a function to
+ * assert against. */
+u32 intel_trans_total(u32 reg)
+{
+	return ((reg >> 16) & 0xFFFFu) + 1;
+}
+
+u32 intel_trans_active(u32 reg)
+{
+	return (reg & 0xFFFFu) + 1;
+}
+
+/* Which transcoder is driving something, or none.
+ *
+ * Returns the index, or TRANSCODER_COUNT for "no transcoder says it is
+ * enabled" -- which is a real answer on a machine with no display and must not
+ * be confused with index zero.
+ */
+static unsigned intel_transcoder_running(volatile u8 *mmio)
+{
+	unsigned i;
+
+	for (i = 0; i < TRANSCODER_COUNT; i++) {
+		u32 conf = intel_read32(mmio, TRANSCODERS[i].conf);
+		u32 ddi;
+
+		if (conf == 0xFFFFFFFFu) {
+			kprintf("intel-display: transcoder %s reads as all "
+				"ones, so this is not the register window this "
+				"driver thinks it is\n", TRANSCODERS[i].name);
+			return TRANSCODER_COUNT;
+		}
+
+		if (!(conf & TRANSCONF_ENABLE))
+			continue;
+
+		/* Enabled. Report the DDI control's opinion, which has been
+		 * seen to differ from this one on real hardware, and carry on
+		 * regardless -- see the two readings at the top of this file. */
+		ddi = intel_read32(mmio, TRANSCODERS[i].ddi);
+
+		if (!(ddi & TRANS_DDI_FUNC_ENABLE))
+			kprintf("intel-display: transcoder %s says enabled "
+				"(%08x) while its DDI function says disabled "
+				"(%08x); going with the transcoder\n",
+				TRANSCODERS[i].name, conf, ddi);
+
+		return i;
+	}
+
+	return TRANSCODER_COUNT;
+}
+
 static bool intel_pipe_mode(volatile u8 *mmio, unsigned n, u32 *w, u32 *h,
 			    u32 *pitch)
 {
@@ -385,12 +506,52 @@ static bool intel_pipe_mode(volatile u8 *mmio, unsigned n, u32 *w, u32 *h,
  * because the disagreement is the interesting outcome and a summary that only
  * spoke when things matched would be silent exactly when somebody needed it.
  */
+/* The timings the running transcoder is driving, printed rather than returned.
+ *
+ * **Separate from the pipe's geometry on purpose.** A pipe's source size says
+ * how many pixels are being scanned out; a transcoder's timings say what is
+ * being sent down the wire, including the blanking either side of them. They
+ * agree on the active area and nothing else, and on the one machine this
+ * project can check, the pipe is A while the transcoder is EDP -- so a single
+ * function reporting "the mode" would have to pick one and would be hiding the
+ * more interesting of the two.
+ */
+static void intel_report_transcoder(volatile u8 *mmio)
+{
+	unsigned t = intel_transcoder_running(mmio);
+	u32 htotal, vtotal;
+
+	if (t >= TRANSCODER_COUNT) {
+		/* **Not "there is no display".** A transcoder scan finding
+		 * nothing is one fact; whether a plane is scanning out is
+		 * another, and the pipe loop below answers it separately. On
+		 * the machine that produced GX-013 those two answers were
+		 * different, and collapsing them is what that entry is about. */
+		kputs("intel-display: no transcoder reports itself enabled\n");
+		return;
+	}
+
+	htotal = intel_read32(mmio, TRANSCODERS[t].timing + 0x0u);
+	vtotal = intel_read32(mmio, TRANSCODERS[t].timing + 0xCu);
+
+	kprintf("intel-display: transcoder %s is running %u active in %u "
+		"total across, %u active in %u total down\n",
+		TRANSCODERS[t].name,
+		intel_trans_active(htotal), intel_trans_total(htotal),
+		intel_trans_active(vtotal), intel_trans_total(vtotal));
+}
+
 bool intel_modeset_read(volatile u8 *mmio, const struct framebuffer *firmware)
 {
 	unsigned n;
 
 	if (!mmio)
 		return false;
+
+	/* Which transcoder, before which pipe: on a laptop the answer is EDP
+	 * and the pipe is A, and reading only the pipe is how this driver came
+	 * to believe a lit screen was no screen. */
+	intel_report_transcoder(mmio);
 
 	for (n = 0; n < INTEL_PIPES; n++) {
 		u32 w = 0, h = 0, pitch = 0;
@@ -429,8 +590,11 @@ bool intel_modeset_read(volatile u8 *mmio, const struct framebuffer *firmware)
 		return true;
 	}
 
-	kputs("intel-display: no pipe is running, so firmware lit nothing and "
-	      "there is no mode to read\n");
+	/* **"No pipe is scanning out", which is not the same as "no display".**
+	 * The transcoder line above has already said its piece, and the two can
+	 * differ -- that is the whole of GX-013. */
+	kputs("intel-display: no pipe has an enabled plane, so nothing is being "
+	      "scanned out and there is no mode to read\n");
 	return false;
 }
 
@@ -673,6 +837,125 @@ bool intel_modeset_self_test(void)
 					"should give %u\n",
 					CASES[i].ctl, CASES[i].what,
 					got, CASES[i].want);
+				ok = false;
+			}
+		}
+	}
+
+	/* 4c. **The panel's own mode, decoded from the registers the display
+	 *     engine was running from, and checked against the mode the
+	 *     connector reports.**
+	 *
+	 *     Two sources that have never been compared anywhere else: the EDID
+	 *     the panel hands over across AUX, read by Linux, and the registers
+	 *     the Gen9 display engine was actually scanning out of, read with
+	 *     intel_reg on 18 September 2026. Both are in
+	 *     `docs/hardware/`. The connector says:
+	 *
+	 *       "1366x768": 60 70190 1366 1404 1426 1466 768 772 776 798
+	 *                             ----  ----  ----  ---- --- --- --- ---
+	 *                             act   sync-start  total, then vertical
+	 *
+	 *     **Eight fields, eight matches.** That is the strongest known
+	 *     answer available to this file, and it is worth being precise
+	 *     about why: nothing in this kernel produced either number. A
+	 *     self-test written from this file's own arithmetic can only show
+	 *     the arithmetic is self-consistent.
+	 *
+	 *     Both directions are asserted. Decoding is what the driver does on
+	 *     the machine; re-encoding proves the pair are inverses, which is
+	 *     what makes the decoders usable for a modeset later. */
+	{
+		static const struct {
+			u32 reg, first, second;
+			const char *what;
+		} CASES[] = {
+			/* register      active/start  total/end */
+			{ 0x05b90555u,   1366,         1466, "HTOTAL_EDP" },
+			{ 0x05b90555u,   1366,         1466, "HBLANK_EDP" },
+			{ 0x0591057bu,   1404,         1426, "HSYNC_EDP"  },
+			{ 0x031d02ffu,    768,          798, "VTOTAL_EDP" },
+			{ 0x031d02ffu,    768,          798, "VBLANK_EDP" },
+			{ 0x03070303u,    772,          776, "VSYNC_EDP"  },
+		};
+		unsigned i;
+
+		for (i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+			u32 lo = intel_trans_active(CASES[i].reg);
+			u32 hi = intel_trans_total(CASES[i].reg);
+			u32 back;
+
+			if (lo != CASES[i].first || hi != CASES[i].second) {
+				kprintf("intel-modeset: %s holds %08x, which "
+					"decodes to %u and %u and should be %u "
+					"and %u\n", CASES[i].what,
+					CASES[i].reg, lo, hi,
+					CASES[i].first, CASES[i].second);
+				ok = false;
+			}
+
+			back = intel_trans_timing(CASES[i].second, CASES[i].first);
+
+			if (back != CASES[i].reg) {
+				kprintf("intel-modeset: %u and %u re-encode to "
+					"%08x and should give back %08x\n",
+					CASES[i].first, CASES[i].second,
+					back, CASES[i].reg);
+				ok = false;
+			}
+		}
+	}
+
+	/* 4d. **That the transcoder table is the shape the hardware is.**
+	 *
+	 *     Three properties, none of them a restatement of the constants:
+	 *     every timing register is in the 0x6xxxx block and every
+	 *     configuration register in 0x7xxxx; the EDP entry is transcoder A
+	 *     displaced by exactly 0xF000 in all three of its registers; and no
+	 *     two transcoders share an address. The last one is what catches a
+	 *     typed offset landing on a neighbour, which is how the first
+	 *     version of this map put TRANSCONF on top of HSYNC. */
+	{
+		unsigned i, j;
+
+		for (i = 0; i < TRANSCODER_COUNT; i++) {
+			if ((TRANSCODERS[i].timing & 0xF0000u) != 0x60000u ||
+			    (TRANSCODERS[i].ddi & 0xF0000u) != 0x60000u ||
+			    (TRANSCODERS[i].conf & 0xF0000u) != 0x70000u) {
+				kprintf("intel-modeset: transcoder %s has "
+					"registers in the wrong blocks: timing "
+					"%05x ddi %05x conf %05x\n",
+					TRANSCODERS[i].name,
+					TRANSCODERS[i].timing,
+					TRANSCODERS[i].ddi,
+					TRANSCODERS[i].conf);
+				ok = false;
+			}
+
+			for (j = i + 1; j < TRANSCODER_COUNT; j++)
+				if (TRANSCODERS[i].timing == TRANSCODERS[j].timing ||
+				    TRANSCODERS[i].conf == TRANSCODERS[j].conf ||
+				    TRANSCODERS[i].ddi == TRANSCODERS[j].ddi) {
+					kprintf("intel-modeset: transcoders %s "
+						"and %s share a register\n",
+						TRANSCODERS[i].name,
+						TRANSCODERS[j].name);
+					ok = false;
+				}
+		}
+
+		/* EDP is A plus 0xF000, in all three. */
+		{
+			const struct intel_transcoder *a = &TRANSCODERS[0];
+			const struct intel_transcoder *e =
+				&TRANSCODERS[TRANSCODER_COUNT - 1];
+
+			if (e->timing != a->timing + TRANS_EDP_OFFSET ||
+			    e->conf   != a->conf   + TRANS_EDP_OFFSET ||
+			    e->ddi    != a->ddi    + TRANS_EDP_OFFSET) {
+				kprintf("intel-modeset: EDP is not transcoder A "
+					"displaced by %05x, which is what the "
+					"hardware shows\n", TRANS_EDP_OFFSET);
 				ok = false;
 			}
 		}

@@ -51,6 +51,159 @@ the change would be; I have deliberately not made it.
 
 ---
 
+## The transcoder is chosen by reading the hardware, and your dump decided which register decides — 20 September 2026
+
+Merged `origin/kernel` at 0.5.0 (28 commits, the network track included).
+Conflicts: `BUGS.md` kept both blocks — 361 entries, 15 GX, 132 KF, 205 BG,
+9 NW — `SIGNALS.md` kept mine per protocol, README badge recomputed. Both
+architectures clean, `core/` portable, syscall tables agree.
+
+**Your dump answered the question my dump could not**, and not the way either
+of us would have guessed.
+
+I had `PIPE_DDI_FUNC_CTL_EDP` at `0x6F400` reading `0x00210000` — bit 31
+**clear**, disabled — and recorded it as measured-and-unexplained rather than
+reasoning about it. Yours reads `0x82210000`: enabled, DP SST, 6 bpc. Same
+register, same machine, hours apart. The one difference we know of is that you
+ran `echo 0 > /sys/class/graphics/fb0/blank` first and I did not. **I am not
+claiming that is the cause** — it is a correlation with a sample of two.
+
+What the pair settles is the thing I actually needed:
+
+```
+TRANSCONF_EDP        0xc0000000  enabled and active   -- BOTH runs
+timings at 0x6F000   the panel's real mode            -- BOTH runs
+PIPE_DDI_FUNC_CTL    enabled in yours, disabled in mine
+```
+
+**`TRANSCONF` agreed with the lit panel both times. The DDI function control
+did not.** So the scan I have just written selects on `TRANSCONF_ENABLE`, reads
+the DDI control, and *reports* a disagreement rather than acting on it.
+
+### The part worth your attention
+
+You wrote that the fix is to "select the transcoder from `PIPE_DDI_FUNC_CTL_*`
+rather than assuming A". That is the obvious reading — it is the register whose
+name says *is this transcoder driving a port* — and **on my reading it finds no
+transcoder at all on a machine whose screen is on.** Which is GX-013 exactly:
+a false negative shaped like a correct refusal, reintroduced by the fix for
+GX-013, and invisible for the same reason.
+
+The only thing that caught it was that the anomaly had been written down as an
+anomaly instead of tidied away. I would not have looked at `0x6F400` twice
+otherwise.
+
+### What landed
+
+- **A transcoder table** — A, B, C, EDP — with EDP asserted to be transcoder A
+  displaced by exactly `0xF000` in all three of its registers, which is your
+  observation turned into a check.
+- **`intel_trans_total` / `intel_trans_active`**, decoders to match the
+  encoder. Reading was being done inline where nothing could assert it.
+- **Your eight values as known answers.** `HTOTAL/HBLANK/HSYNC/VTOTAL/VBLANK/
+  VSYNC_EDP` decoded and checked against the connector's fixed mode, both
+  directions — decode, then re-encode and compare with the register. You were
+  right that it is the strongest test material in this file: nothing in this
+  kernel produced either number.
+- **`intel_modeset_read` reports the transcoder before the pipes**, and "no
+  pipe has an enabled plane" no longer says "there is no display", because
+  those were the same sentence and GX-013 is the difference between them.
+
+Broken on purpose, three times: the decoder losing its minus-one (all six
+vectors red, each named); the EDP displacement mistyped (caught); and two
+transcoders given one register (caught). The second sabotage is worth a note —
+I described it as colliding with transcoder C and it did not, `0x63400` against
+`0x62400`, so it never exercised the collision check at all and I ran a third
+sabotage to test that separately. A sabotage that does not hit the check it was
+aimed at proves nothing, and reads exactly like one that does.
+
+### And the register window is mapped now
+
+That was going to be the next increment; it is in this commit instead.
+`intel_display_attach` maps BAR0 and calls `intel_modeset_read` on it, so the
+next boot of the Gateway reads its own display registers and says what it found.
+
+**Mapped read-only, through a new entry point in a file that is not mine.**
+
+```c
+a->regs = pci_map_bar_ro(d, GEN9_MMIO_BAR, 0, ...);
+```
+
+No `VM_WRITE`. Every other device mapping in this kernel — `apic.c`, `pci.c`,
+`storage.c`, the Bochs adapter — takes `VM_READ | VM_WRITE | VM_DEVICE |
+VM_GLOBAL`, because every other one writes.
+
+**And the first version of this change was worse, which is worth telling you
+because you would have found it in review.** It hand-rolled the mapping in
+`intel_display.c`: `PAGE_ALIGN_DOWN`, `PAGE_ALIGN_UP((base - first) + size)`,
+`vm_lookup`, `vm_map` — three lines that already existed, tested and with
+bounds checks I did not have, in `pci_map_bar`. I had not called it **because
+it maps writable and I wanted read-only**, so a permission difference quietly
+produced a duplicated calculation. That is the parallel-array shape GX-002
+records, in miniature, and it would have been the second implementation to
+receive a fix.
+
+So `pci.c` now has `pci_bar_window()` — the arithmetic, once — used by
+`pci_map_bar` and by a new `pci_map_bar_ro` beside it. No existing caller
+changes. **The tree has less duplication than before I started**, and that
+arithmetic has a test for the first time. This driver only reads, and on a
+machine with **no serial port** a stray write into the display engine removes
+the panel and the only channel that could have explained why, in one go. An
+intention not to write survives exactly until somebody's typo; a page table
+entry without the writable bit is enforced, and both architectures honour its
+absence — x86_64 sets the bit only under `if (flags & VM_WRITE)`, aarch64 picks
+`ATTR_AP_RO`. The day a modeset is written, that flag changes in one place and
+somebody has to mean it.
+
+**Why a raw read is known to be safe on that silicon**, rather than believed to
+be: `intel_reg` is a userspace program that mmaps this same BAR with no driver's
+help, and it read every register this kernel cares about on that machine, twice,
+on 18 September. It is a thing that has been done there, not a thing a
+specification permits.
+
+**A failed mapping is not a failed attach.** `regs` stays null, the mode is not
+read, and the display registers as before — refusing would lose the machine its
+screen over an inability to ask it a question, which is GX-007's mistake wearing
+a different register.
+
+**What can be tested, and what cannot.** The mapping runs on exactly one
+computer this project owns; QEMU emulates no Intel display engine, so no matrix
+path reaches it. So `pci_bar_window` is asserted as a **property** rather than
+a table of answers: the window must start at or below the BAR, end at or above
+its last byte, and be whole pages at both ends. Sabotaged in `pci.c` with the
+exact plausible error — rounding the length up while forgetting the base moved
+down — and it goes red on the unaligned case and takes the suite with it:
+
+```
+intel-display: window for a BAR that is not page aligned ends at a0001000
+               and the register file ends at a0001800
+  graphics it knows  : FAIL
+```
+
+### Files I touched that are not mine
+
+`kernel/core/pci.c` and its header, for `pci_bar_window` and `pci_map_bar_ro`
+above. `pci_map_bar`'s behaviour is unchanged — it now calls the shared window
+function and passes the flags it always passed, and no caller of it is touched.
+
+One sharp edge, named in the comment rather than guarded: BAR mappings are
+made once, so if a driver has already mapped a BAR **writable**, a later
+read-only caller finds the existing mapping and gets a writable window. The
+permission belongs to the mapping, not the caller. No device in this kernel is
+claimed by two drivers, so it cannot happen today; I would rather it be written
+down where the first person to share a BAR will read it than enforced by a
+check nobody can currently trigger.
+
+### Still open
+
+**No ReconOS code has yet read a Gen9 register on that machine.** The code to do
+it exists now and has never executed — the laptop has not been booted into this
+kernel. That is not something I can close from here; it needs a boot of the
+Gateway, and its value is that the first line it prints will be either agreement
+with the boot handoff or a disagreement with both numbers shown.
+
+---
+
 ## The Gen9 hardware has been read, and it found three faults in my own driver — 18 September 2026
 
 **`intel-gpu-tools` is installed on the Gateway and the register dump exists.**

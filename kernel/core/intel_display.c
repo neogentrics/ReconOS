@@ -27,6 +27,7 @@
 #include <recon/kernel/intel_display.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pci.h>
+#include <recon/kernel/pmm.h>
 #include <recon/kernel/suspend.h>
 
 #define PCI_VENDOR_INTEL	0x8086
@@ -91,6 +92,15 @@ static struct intel_display {
 	const struct intel_model *model;
 	paddr_t mmio;
 	u64 mmio_size;
+
+	/* The register window, once mapped, or null where it could not be.
+	 *
+	 * **Null is a working adapter**, not a broken one: the panel firmware
+	 * lit is still registered and the console still draws on it. All that
+	 * is lost is the ability to ask the hardware what mode it is in, which
+	 * is exactly what this driver did for its first five days. */
+	volatile u8 *regs;
+
 	struct display *disp;
 } adapters[INTEL_DISPLAY_MAX];
 
@@ -226,14 +236,59 @@ bool intel_display_attach(const struct pci_device *d)
 	a->mmio      = (paddr_t)d->bar[GEN9_MMIO_BAR];
 	a->mmio_size = d->bar_size[GEN9_MMIO_BAR];
 
-	/* **The register window is deliberately not mapped.**
+	/* **The register window, mapped -- and that day has come.**
 	 *
-	 * Nothing here reads a register yet, and mapping sixteen megabytes of
-	 * device memory that nothing touches is a page table full of a claim
-	 * this driver cannot make good on. It is recorded, so the mapping is a
-	 * line of code away the day there is something to read -- which is the
-	 * day somebody has read those registers on a running machine and can
-	 * say what they should contain. */
+	 * This comment used to say the mapping was "a line of code away the day
+	 * there is something to read, which is the day somebody has read those
+	 * registers on a running machine and can say what they should contain".
+	 * That condition is met. The Gateway's display registers were read on
+	 * 18 September 2026, twice, by two sessions, and both dumps are in
+	 * `docs/hardware/`. Every offset in `intel_modeset.c` has been compared
+	 * against a running Gen9, and the panel's timings against the mode its
+	 * connector reports.
+	 *
+	 * --- Why a raw read is known to be safe here ---------------------------
+	 *
+	 * Not from a specification: `intel_reg` is a userspace program that
+	 * mmaps this BAR and reads it with no driver's help, and it read every
+	 * register this kernel cares about on that machine. A mapped read of
+	 * this window is therefore something that has been *done* on this exact
+	 * silicon, rather than something believed to work.
+	 *
+	 * --- Read-only, and that is the point ---------------------------------
+	 *
+	 * `VM_WRITE` is **absent**, which makes this the first device mapping in
+	 * this kernel that a driver cannot write through. Every other one --
+	 * apic.c, pci.c, storage.c, the Bochs adapter -- maps `VM_READ |
+	 * VM_WRITE | VM_DEVICE | VM_GLOBAL`, because every other one writes.
+	 *
+	 * This driver reads. On a machine with **no serial port**, a stray write
+	 * into the display engine is the single most expensive mistake available
+	 * -- it takes the panel out and takes the only channel that could
+	 * explain why out with it. An intention not to write is worth nothing
+	 * against a typo; a page table entry without the writable bit is worth
+	 * something, and both architectures honour its absence (x86_64 sets the
+	 * bit only under `if (flags & VM_WRITE)`, aarch64 picks `ATTR_AP_RO`).
+	 *
+	 * The day a modeset is written, this flag changes, in one place, on
+	 * purpose, and somebody has to mean it.
+	 *
+	 * --- Failing to map is not failing to attach ---------------------------
+	 *
+	 * A refusal here would lose the machine its display over an inability to
+	 * ask the hardware a question -- which is GX-007's mistake with a
+	 * different register. The adapter registers either way; `regs` stays
+	 * null and the mode-read is skipped.
+	 */
+	a->regs = pci_map_bar_ro(d, GEN9_MMIO_BAR, 0,
+				 (u32)(a->mmio_size > 0xFFFFFFFFull
+				       ? 0xFFFFFFFFu : a->mmio_size));
+
+	if (!a->regs)
+		kprintf("intel-display: could not map %s's register window at "
+			"%p -- the display is still driven, its mode just "
+			"cannot be read\n", m->name,
+			(void *)(uintptr_t)a->mmio);
 
 	info = boot_info();
 
@@ -262,6 +317,22 @@ bool intel_display_attach(const struct pci_device *d)
 
 	a->disp = disp;
 	adapter_count++;
+
+	/* **The first thing this kernel has ever read off a Gen9.**
+	 *
+	 * After registering rather than before, so that a machine whose
+	 * registers say something unexpected still has its display in the
+	 * table. This call writes nothing and returns whether it found a pipe
+	 * scanning out; what it prints is the interesting part, and it prints a
+	 * disagreement with the boot handoff as a disagreement, with both
+	 * numbers and no verdict.
+	 *
+	 * It is given the framebuffer firmware described, which is the only
+	 * independent statement about this screen the kernel has. On the
+	 * Gateway that is the UEFI GOP mode, and the registers should agree
+	 * with it -- two sources, never compared on this machine by anybody. */
+	if (a->regs)
+		intel_modeset_read(a->regs, &info->fb);
 
 	/* Nothing to bring back after a suspend, and nothing pretending
 	 * otherwise -- the same declaration the other two backends make. */
@@ -306,6 +377,77 @@ bool intel_display_self_test(void)
 {
 	bool ok = true;
 	unsigned i;
+
+	/* 0. **The window a BAR gets mapped through** -- `pci_bar_window`, which
+	 *    is shared with every other driver in this kernel and had no test
+	 *    of its own until this one.
+	 *
+	 *    Checked from here because this is the driver that needed it
+	 *    exposed, and worth checking precisely because the rest of the
+	 *    mapping cannot be: QEMU emulates no Intel display engine, so that
+	 *    path runs on exactly one computer this project owns, with no
+	 *    serial port on it.
+	 *
+	 *    **This arithmetic existed twice for about an hour.** The first
+	 *    version of this change copied it into this file rather than
+	 *    calling `pci_map_bar`, because `pci_map_bar` maps writable and
+	 *    this driver wants read-only -- so a permission difference produced
+	 *    a duplicated calculation. `pci_map_bar_ro` is the fix, and the
+	 *    arithmetic is in one place with a test on it.
+	 *
+	 *    Asserted as a **property** rather than as a table of answers,
+	 *    because the property is what the mapping needs and the constants
+	 *    are just one way of satisfying it: the window must start at or
+	 *    below the BAR, end at or above its last byte, and be whole pages
+	 *    at both ends. A version that rounds the length up but forgets that
+	 *    the base moved satisfies two of those three, and leaves the last
+	 *    page of a 16 MB register file unmapped -- which shows up as a
+	 *    fault at the far end of the address space, nowhere near here. */
+	{
+		static const struct { u64 base, size; const char *what; } CASES[] = {
+			{ 0xa0000000ull, 16ull << 20, "the Gateway's, as lspci reports it" },
+			{ 0xa0000800ull, 0x1000ull,   "a BAR that is not page aligned" },
+			{ 0xa0000fffull, 1ull,        "one byte in the last of a page" },
+			{ 0xa0001000ull, 0x1000ull,   "exactly one aligned page" },
+			{ 0x90000000ull, 256ull << 20, "the aperture, for scale" },
+		};
+
+		for (i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+			paddr_t first = 0;
+			u64 span = 0;
+			u64 base = CASES[i].base, size = CASES[i].size;
+
+			pci_bar_window((paddr_t)base, size, &first, &span);
+
+			if ((u64)first > base) {
+				kprintf("intel-display: window for %s starts at "
+					"%llx, past the %llx it must cover\n",
+					CASES[i].what,
+					(unsigned long long)first,
+					(unsigned long long)base);
+				ok = false;
+			}
+
+			if ((u64)first + span < base + size) {
+				kprintf("intel-display: window for %s ends at "
+					"%llx and the register file ends at "
+					"%llx\n", CASES[i].what,
+					(unsigned long long)((u64)first + span),
+					(unsigned long long)(base + size));
+				ok = false;
+			}
+
+			if (((u64)first & (PAGE_SIZE - 1)) ||
+			    (span & (PAGE_SIZE - 1)) || !span) {
+				kprintf("intel-display: window for %s is %llx "
+					"+ %llx, which is not whole pages\n",
+					CASES[i].what,
+					(unsigned long long)first,
+					(unsigned long long)span);
+				ok = false;
+			}
+		}
+	}
 
 	/* 1. The things it must recognise, with the answer it must give.
 	 *

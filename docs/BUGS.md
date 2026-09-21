@@ -355,13 +355,44 @@ Checked against the entries by `python scripts/make-issues.py --check`.
      with both values printed — rather than silently taken as one thing or the
      other.
 
-- **One measured thing this does not explain, and does not guess at.**
-  `TRANS_DDI_FUNC_CTL` at `0x6F400` reads `0x00210000`, whose bit 31 — the
-  function-enable — is **clear**, on the transcoder whose `TRANSCONF` says
-  enabled and whose timings are live. This project cannot reconcile those and
-  has therefore written down both, in the driver and in
-  `docs/hardware/intel-gen9-gateway-registers.txt`, and concluded nothing. A
-  plausible sentence here would be read as a fact by whoever writes the modeset.
+- **One measured thing this did not explain — and a second reading of it,
+  20 September.** `TRANS_DDI_FUNC_CTL` at `0x6F400` was read twice on the same
+  machine, hours apart:
+
+  | | value | bit 31 |
+  |---|---|---|
+  | graphics session | `0x00210000` | clear — **disabled** |
+  | kernel session | `0x82210000` | set — enabled, DP SST, 6 bpc |
+
+  The runs differ in one known way: the kernel session ran
+  `echo 0 > /sys/class/graphics/fb0/blank` first, to wake the panel. This
+  session did not, and read a machine whose desktop had been idle several
+  minutes. **That is a correlation and this entry does not claim it is the
+  cause.**
+
+  What matters is what a driver may conclude, and there the two runs agree
+  completely:
+
+  ```
+  TRANSCONF_EDP        0xc0000000  enabled and active   -- BOTH runs
+  timings at 0x6F000   the panel's real mode            -- BOTH runs
+  PIPE_DDI_FUNC_CTL    enabled in one, disabled in the other
+  ```
+
+  **So the register that agreed with the lit panel both times is `TRANSCONF`,
+  and the one that did not is the DDI function control.** That is not a
+  preference, it is the only thing two disagreeing readings can settle, and it
+  decided the fix: the transcoder scan added on 20 September selects on
+  `TRANSCONF_ENABLE` and treats the DDI control as something to *report*.
+
+  **Which came within one design decision of reintroducing this very bug.** The
+  obvious way to select a transcoder is to look for `TRANS_DDI_FUNC_ENABLE` —
+  it is the register whose name says "is this transcoder driving a port". On
+  the first of those two readings that selector finds **no transcoder at all**,
+  on a machine whose screen is on: the same false negative GX-013 is about,
+  reintroduced by the fix for it, and it would have been just as invisible.
+  The only reason it was not is that the anomaly had been written down as an
+  anomaly instead of being tidied away.
 
 ---
 
