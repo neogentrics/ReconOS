@@ -627,8 +627,17 @@ turned out to be true.
   `graphics` and two on `server`.
 
   Verified here rather than accepted: `origin/graphics` and `origin/server` each
-  carry `KF-259` and `KF-260` reading `**Status:** fixed, kernel 0.5.0.` The
-  other four branches name it nowhere.
+  carry `KF-259` and `KF-260` with a status line giving 0.5.0 as the version
+  that fixed them. The other four branches name it nowhere.
+
+  **That sentence quoted the status line verbatim and closed this entry**, for
+  the length of one push — the trap named in NW-016, walked into one message
+  after warning the kernel session about it. `is_fixed` reads a status line
+  anywhere in a body, backticks included, so an entry describing somebody
+  else's status acquires it. `--check` said *"the Open section says 20 entries
+  and lists 19"* on the next run, which is NW-018's count check catching a
+  fault NW-016 had already documented. Two checks written today, both earning
+  their keep on the same mistake.
 - **The conclusion survives and its reason changes entirely, which is the
   interesting part.** Those four entries are false — but not because two
   kernels answer to 0.5.0. They are false for **NW-016's reason**: a fix
