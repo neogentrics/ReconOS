@@ -1757,3 +1757,64 @@ purpose could reach the guard.
 
 76 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean.
+
+---
+
+### 20 September 2026 (third) — bluetooth → kernel
+
+**Seventh audit: bounds checks that can overflow. Four sites, and one of them
+is reachable from the wire.**
+
+The rule: a check written `a + b > limit` is not a check when `a + b` can
+wrap. Eight additive bounds checks on this branch. Four could wrap.
+
+**`sdp_element_parse` is the one that matters.** A size index of 7 takes the
+element's length from four bytes of the record, so the wire can say
+`0xFFFFFFFF`. Added to a five-byte header that is **4**, which is smaller than
+almost any buffer — the guard passes and hands the caller a four-gigabyte
+length pointing five bytes into a 700-byte record. Wire-reachable, from a
+corrupt or hostile service record.
+
+The other three are the two reassembly buffers and `hid_field_extract`, all
+fed by a caller rather than by the wire. Same shape as the PIN length: a bound
+that holds only because callers behave.
+
+All four rewritten as subtractions against remaining space, which cannot wrap
+because the remaining space is established first.
+
+#### What it does when you put it back
+
+Not a wrong value. The l2cap one **panics**:
+
+```
+=== ReconOS kernel panic ===
+unhandled exception
+```
+
+Thirty-four self-tests of seventy-six, and **`FAIL : 0`** — the second time in
+this session a memory-safety fault has reported no failures because the kernel
+died before most tests ran. Caught by the count and by `Idling.`, again.
+
+#### Three tests wrong before the code was
+
+This addition was clumsy in a way worth recording, because all three slips are
+the same kind.
+
+**The wrap test did not wrap.** With the buffer empty, `0 + 0xFFFFFFFF` is
+0xFFFFFFFF — larger than the buffer, so even the broken form refuses it
+correctly. Putting the fault back left the test green. The wrap needs the sum
+to pass 2^32, so the buffer must be **non-empty first**: with four bytes held,
+`4 + 0xFFFFFFFF` is 3. Both tests now seed the buffer, and both say why.
+
+**And twice it polluted its neighbours.** The `bluetooth.c` version wrote into
+`ev`, which a later block still reads — its Command Complete case depends on
+`ev[0]` being the `0x3E` left by the long-event test. The `l2cap.c` version
+wrote a longer declared length into `pdu`, which the restart case feeds and
+expects to complete. Each made an unrelated test fail, and neither was a fault
+in the code.
+
+That is the hazard of a long self-test over shared mutable fixtures, hit twice
+in ten minutes. Both use locals now.
+
+76 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean, at kernel 0.5.0.

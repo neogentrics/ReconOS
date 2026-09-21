@@ -546,6 +546,12 @@ bool hid_field_extract(const u8 *report, u32 report_len, u32 bit_offset,
 	 * position and then rounded up to a byte, rather than comparing bytes
 	 * -- a field ending at bit 17 needs three bytes, and byte arithmetic
 	 * on the offset alone loses that. */
+	/* Both additions can wrap for an offset near the top of the range,
+	 * and a wrapped bound is a bound that lets everything through.
+	 * `bit_size` is already known to be 32 or less. */
+	if (bit_offset > 0xFFFFFF00u)
+		return false;
+
 	last_bit = bit_offset + bit_size;
 
 	if ((last_bit + 7u) / 8u > report_len)

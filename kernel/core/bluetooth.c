@@ -139,8 +139,13 @@ bool hci_event_feed(struct hci_event_reassembly *r, const u8 *pkt, u32 len)
 	/* More than the buffer holds. Cannot happen from a controller that
 	 * follows the specification -- 255 is the largest parameter length the
 	 * one-byte field can express -- so this is about what a broken or
-	 * unplugged device sends, and it must not be a memory write. */
-	if (r->have + len > sizeof(r->buf)) {
+	 * unplugged device sends, and it must not be a memory write.
+	 *
+	 * **Written as a subtraction because the addition wraps.** `len` comes
+	 * from the transport, and `have + len` for a large one is a small
+	 * number, which turns this guard into a permission. `have` never
+	 * exceeds the buffer, so `sizeof - have` cannot wrap in its turn. */
+	if (len > sizeof(r->buf) - r->have) {
 		r->overruns++;
 		hci_reassembly_reset(r);
 		return false;
@@ -797,6 +802,58 @@ bool bt_hci_self_test(void)
 		} else if (r.buf[3] != 0x09 || r.buf[4] != 0x10) {
 			kputs("  bluetooth: the second event came back with "
 			      "the first one's opcode\n");
+			ok = false;
+		}
+	}
+
+	/* --- a transport packet whose length wraps the bounds check ------
+	 *
+	 * `have + len` for a large `len` is a small number, and a guard that
+	 * computes one is a guard that agrees. The consequence is not a wrong
+	 * value: it is `kmemcpy` with that length.
+	 *
+	 * The length comes from the transport rather than from the wire, so
+	 * this needs a broken driver or a hostile controller rather than a
+	 * hostile packet -- which is a reason to check it here, not a reason
+	 * to assume it cannot happen. Same shape as the PIN length that was
+	 * bounded only by convention.
+	 */
+	{
+		hci_reassembly_reset(&r);
+		r.overruns = 0;
+
+		/* **One byte first.** With the buffer empty the sum does not
+		 * wrap -- `0 + 0xFFFFFFFF` is larger than the buffer and even
+		 * the broken form refuses it. One byte held makes the sum
+		 * zero, which passes every comparison. The l2cap twin of this
+		 * test had the same omission and was found the same way. */
+		/* A local byte, not `ev`.
+		 *
+		 * The first version wrote into `ev`, which later blocks in
+		 * this function still rely on -- the Command Complete case
+		 * checks that an event answering nothing is not read as
+		 * answering something, and that depends on `ev[0]` still
+		 * being the 0x3E left by the long-event case. Setting it here
+		 * made an unrelated test fail, which is a test polluting its
+		 * neighbours rather than a fault in the code. */
+		{
+			static const u8 one = HCI_EV_COMMAND_COMPLETE;
+
+			hci_event_feed(&r, &one, 1);
+		}
+
+		if (r.have != 1) {
+			kprintf("  bluetooth: the setup byte left %u in the "
+				"buffer, expected 1 -- without it the wrap "
+				"below cannot happen\n", r.have);
+			ok = false;
+		}
+
+		if (hci_event_feed(&r, ev, 0xFFFFFFFFu) || r.overruns != 1) {
+			kputs("  bluetooth: a transport packet claiming four "
+			      "gigabytes was accepted on top of one byte "
+			      "already held; that sum wraps to zero, and the "
+			      "next line is a copy of that length\n");
 			ok = false;
 		}
 	}

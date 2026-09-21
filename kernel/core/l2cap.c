@@ -142,7 +142,11 @@ bool l2cap_acl_feed(struct l2cap_reassembly *r, u16 handle, u8 pb,
 		r->handle = handle;
 	}
 
-	if (r->have + len > sizeof(r->buf)) {
+	/* Subtraction, not addition: `len` comes from the transport and
+	 * `have + len` wraps for a large one, which turns this guard
+	 * into a permission. `have` never exceeds the buffer, so
+	 * `sizeof - have` is safe. */
+	if (len > sizeof(r->buf) - r->have) {
 		/* Past what this kernel said it could take. A peer told 672 in
 		 * the Configure Request should never do this, so it is either
 		 * a device that ignored the negotiation or a reassembly that
@@ -705,6 +709,64 @@ bool l2cap_self_test(void)
 				    4)) {
 			kputs("  l2cap: a stray fragment from another link "
 			      "destroyed the PDU being assembled\n");
+			ok = false;
+		}
+	}
+
+	/* --- an ACL fragment whose length wraps the bounds check ---------
+	 *
+	 * The same hazard as `hci_event_feed`'s, in the parallel function.
+	 * Both were written the same way and both were wrong the same way,
+	 * which is the argument for checking parallel implementations
+	 * together rather than trusting that one was copied correctly.
+	 */
+	{
+		l2cap_reassembly_reset(&r);
+		r.oversized = 0;
+
+		/* **The buffer has to be non-empty first, and the first
+		 * version of this test forgot.**
+		 *
+		 * With `have` at zero, `0 + 0xFFFFFFFF` does not wrap -- it is
+		 * 0xFFFFFFFF, which is larger than the buffer, so even the
+		 * additive form refuses it correctly. Putting the broken
+		 * check back left this green.
+		 *
+		 * The wrap needs the sum to pass 2^32. With four bytes
+		 * already held, `4 + 0xFFFFFFFF` is 3, which is smaller than
+		 * any buffer and sails through into a four-gigabyte copy.
+		 */
+		/* A local buffer, not the shared `pdu`.
+		 *
+		 * The first version wrote a longer declared length into
+		 * `pdu`, which later blocks still feed and expect to
+		 * complete -- the restart case reads it as an eight-byte PDU.
+		 * Changing it here made that test fail, which is this test
+		 * polluting its neighbours rather than a fault in the code.
+		 * The same slip happened in `bluetooth.c` minutes earlier,
+		 * with `ev`. */
+		{
+			u8 partial[4];
+
+			put_le16(partial, 64);	/* longer than we feed */
+			put_le16(partial + 2, L2CAP_CID_SIGNALLING);
+			l2cap_acl_feed(&r, 0x0001, ACL_PB_START_FLUSHABLE,
+				       partial, 4);
+		}
+
+		if (r.have != 4) {
+			kprintf("  l2cap: the setup fragment left %u bytes, "
+				"expected 4 -- without them the wrap below "
+				"cannot happen and the test proves nothing\n",
+				r.have);
+			ok = false;
+		}
+
+		if (l2cap_acl_feed(&r, 0x0001, ACL_PB_CONTINUATION, pdu,
+				   0xFFFFFFFFu) || r.oversized != 1) {
+			kputs("  l2cap: a continuation claiming four "
+			      "gigabytes was accepted on top of four bytes "
+			      "already held; that sum wraps to 3\n");
 			ok = false;
 		}
 	}

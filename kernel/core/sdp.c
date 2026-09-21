@@ -92,8 +92,19 @@ bool sdp_element_parse(const u8 *p, u32 len, struct sdp_element *out)
 		break;
 	}
 
-	/* Declared longer than what is here. Refused rather than clamped. */
-	if (out->header_len + out->data_len > len)
+	/* Declared longer than what is here. Refused rather than clamped.
+	 *
+	 * **Written as a subtraction because the addition wraps.** A size
+	 * index of 7 takes `data_len` from four bytes of the record, so the
+	 * wire can say 0xFFFFFFFF -- and `5 + 0xFFFFFFFF` is 4, which is less
+	 * than almost any `len`. The check passed and handed the caller a
+	 * four-gigabyte length pointing five bytes into a 700-byte buffer.
+	 *
+	 * `len >= out->header_len` is established first, so the subtraction
+	 * cannot wrap in its turn. Found by listing every additive bounds
+	 * check rather than by a test; a test would have needed to think of
+	 * the value first. */
+	if (out->header_len > len || out->data_len > len - out->header_len)
 		return false;
 
 	out->data = p + out->header_len;
@@ -501,6 +512,62 @@ bool sdp_self_test(void)
 				"low half is a number and returning it would "
 				"be an answer\n", v);
 			ok = false;
+		}
+	}
+
+	/* --- a length chosen so the bounds check overflows ---------------
+	 *
+	 * Size index 7 takes the length from four bytes of the record, so the
+	 * wire can name 0xFFFFFFFF. Added to a five-byte header that is 4,
+	 * which passes almost any comparison -- the guard becomes a
+	 * permission, and the caller is handed four gigabytes starting five
+	 * bytes into the buffer.
+	 *
+	 * Not a value a test would think of unprompted. It came from listing
+	 * every additive bounds check on this branch and asking which of them
+	 * could wrap.
+	 */
+	{
+		static const u8 wrapping[9] = {
+			0x3F,				/* SEQ, 4-byte length */
+			0xFF, 0xFF, 0xFF, 0xFF,		/* 4294967295         */
+			0x00, 0x00, 0x00, 0x00
+		};
+
+		if (sdp_element_parse(wrapping, sizeof(wrapping), &e)) {
+			kprintf("  sdp: an element declaring %u bytes inside "
+				"nine was accepted -- the header plus that "
+				"length wraps to 4\n", e.data_len);
+			ok = false;
+		}
+
+		/* And one just below the wrap, which is an ordinary refusal. */
+		{
+			static const u8 big[9] = {
+				0x3F, 0x00, 0x01, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00
+			};
+
+			if (sdp_element_parse(big, sizeof(big), &e)) {
+				kputs("  sdp: an element declaring 65536 "
+				      "bytes inside nine was accepted\n");
+				ok = false;
+			}
+		}
+
+		/* A length that exactly fits must still work, or the fix has
+		 * turned the guard into a refusal of everything. */
+		{
+			static const u8 exact[6] = {
+				0x35, 0x04, 0x08, 0x2A, 0x08, 0x2B
+			};
+
+			if (!sdp_element_parse(exact, sizeof(exact), &e) ||
+			    e.data_len != 4) {
+				kputs("  sdp: an element that exactly fills "
+				      "its buffer was refused\n");
+				ok = false;
+			}
 		}
 	}
 
