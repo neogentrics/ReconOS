@@ -574,6 +574,22 @@ def check_versions(text):
               'entries name were not checked')
         return 0
 
+    """Only lines the diff ADDS, which is the whole correctness of this.
+
+    A released version is one some commit *set*. Reading `VERSION` out of an
+    arbitrary commit tells you what the line happened to say while that commit
+    was current, which is a different question and gives a wrong answer with a
+    straight face.
+
+    The kernel session hit exactly that while deriving NW-016's answer:
+    `git log -S"inode_to_read"` finds `bb6052a`, whose `VERSION` reads 0.2.27 --
+    five numbers *before* the 0.2.29 that KF-227's own entry says it was found
+    in. Not a paradox: two version sequences from before the tracks merged, laid
+    end to end rather than interleaved.
+
+    So do not `git show <commit>:kernel/Makefile` here, however much tidier it
+    looks. `^+` is doing real work.
+    """
     published = set(re.findall(r'^\+VERSION := ([\d.]+)', out.stdout, re.M))
     if current:
         published.add(current)
