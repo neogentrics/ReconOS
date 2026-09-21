@@ -928,11 +928,35 @@ bool bt_hci_self_test(void)
 			ok = false;
 		}
 
-		/* Anything else answers no command. */
-		if (hci_event_command_result(ev, 6, &opcode, &status)) {
-			kputs("  bluetooth: an event that answers no command "
-			      "was read as answering one\n");
-			ok = false;
+		/* Anything else answers no command.
+		 *
+		 * **Its own bytes, not the shared `ev`.** This read `ev` and
+		 * relied on `ev[0]` still being the 0x3E an unrelated block
+		 * had left there a hundred and seventy-five lines earlier.
+		 * That is an assertion whose meaning is decided somewhere
+		 * else: edit the long-event case and this one silently starts
+		 * testing a different event, or nothing.
+		 *
+		 * Found by auditing for reads of a shared fixture that the
+		 * reading block does not write -- after two additions in one
+		 * hour broke neighbours through exactly this coupling. */
+		{
+			u8 other[6];
+
+			other[0] = 0x3E;	/* an LE meta event */
+			other[1] = 4;
+			other[2] = 0x01;
+			other[3] = 0x00;
+			other[4] = 0x00;
+			other[5] = 0x00;
+
+			if (hci_event_command_result(other, 6, &opcode,
+						     &status)) {
+				kprintf("  bluetooth: event %02x answers no "
+					"command and was read as answering "
+					"one\n", other[0]);
+				ok = false;
+			}
 		}
 
 		/* Truncated is not a result either. */

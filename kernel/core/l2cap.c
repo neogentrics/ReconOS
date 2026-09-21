@@ -573,6 +573,19 @@ bool l2cap_self_test(void)
 	struct l2cap_reassembly r;
 	struct l2cap_header h;
 	struct l2cap_signal sig;
+
+	/* **`pdu` is written once, at the top, and read-only after that.**
+	 *
+	 * Eight blocks below feed it and none re-establishes it, so a block
+	 * that writes it changes the fixture for every later one. That
+	 * happened: a case added in the middle set a longer declared length,
+	 * and the restart case two hundred lines down failed for a reason
+	 * nothing in it mentioned.
+	 *
+	 * A block needing different bytes declares its own, as the oversized
+	 * and overflow cases do. The rule is cheaper than re-establishing the
+	 * fixture eight times, and it is written here so that breaking it is
+	 * visible rather than discovered later. */
 	u8 pdu[L2CAP_PDU_MAX];
 	u8 out[64];
 	u16 a, b, c, d;
@@ -803,13 +816,22 @@ bool l2cap_self_test(void)
 
 	/* --- a PDU larger than the MTU this kernel advertises ------------ */
 	{
+		u8 big[8];
+
 		l2cap_reassembly_reset(&r);
 		r.oversized = 0;
 
-		put_le16(pdu, L2CAP_MTU + 1);
-		put_le16(pdu + 2, L2CAP_CID_SIGNALLING);
+		/* Its own buffer. This wrote into the shared `pdu`, which
+		 * every block above reads and none of them re-establishes --
+		 * so it worked only by being last. A block added after it
+		 * would have inherited a PDU declaring 673 bytes and failed
+		 * for a reason nothing in it mentions. */
+		put_le16(big, L2CAP_MTU + 1);
+		put_le16(big + 2, L2CAP_CID_SIGNALLING);
+		put_le16(big + 4, 0);
+		put_le16(big + 6, 0);
 
-		if (l2cap_acl_feed(&r, 0x0001, ACL_PB_START_FLUSHABLE, pdu,
+		if (l2cap_acl_feed(&r, 0x0001, ACL_PB_START_FLUSHABLE, big,
 				   8) || r.oversized != 1) {
 			kprintf("  l2cap: a PDU declaring %u bytes was "
 				"accepted against a %u-byte buffer\n",

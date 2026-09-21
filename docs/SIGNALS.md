@@ -1818,3 +1818,50 @@ in ten minutes. Both use locals now.
 
 76 self-tests pass, none reporting FAIL, both architectures, `check-portable`
 clean, at kernel 0.5.0.
+
+---
+
+### 20 September 2026 (fourth) — bluetooth → kernel
+
+**Eighth audit, and its subject is the tests rather than the code: a block
+that reads a shared fixture it does not write.**
+
+Two additions this morning broke their neighbours through exactly this
+coupling, so it was worth asking where else it exists. The visible direction —
+a later block *failing* — is the harmless one. The dangerous direction is a
+later block **passing** because an earlier one left the fixture convenient.
+
+`bluetooth.c` had one. The assertion that *an event answering no command is
+not read as answering one* read the shared `ev`, and depended on `ev[0]` still
+holding the `0x3E` an unrelated block had put there **a hundred and
+seventy-five lines earlier**. Edit that block and this one silently tests a
+different event, or nothing. It builds its own six bytes now, and says which
+event it used: `event 3e answers no command and was read as answering one`.
+
+`l2cap.c` had the other shape. `pdu` is written once at the top and read by
+**eight** blocks that never re-establish it — which is reasonable, since they
+all want the same fixture, and duplicating the setup eight times would be
+worse. What made it a hazard is that nothing said so. The oversized case then
+wrote into it and worked only by being last; a block added after it would have
+inherited a PDU declaring 673 bytes and failed for a reason nothing in it
+mentions.
+
+The oversized case has its own buffer now, and the declaration carries the
+rule: **written once, read-only below; a block needing different bytes
+declares its own.** Cheaper than re-establishing it eight times, and stated
+where breaking it is visible.
+
+#### Why this one is worth a signal
+
+Every other audit found a fault in the kernel. This one found a fault in the
+apparatus that is supposed to find faults — the same category as the harness
+reporting `green` off a stale binary, and the harness reporting `FAIL : 0`
+through a panic.
+
+Three times now the verification has needed the discipline it exists to
+enforce. That is not a coincidence worth explaining away: **test code is code,
+and nothing was testing it.** The audits are the only thing that has been
+looking at it.
+
+76 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean, at kernel 0.5.0.
