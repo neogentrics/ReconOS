@@ -9,6 +9,58 @@ way for the two to disagree.
 
 ---
 
+## v0.4.79 — the file manager asks before it acts, and now something checks
+
+`src/recon_explorer.c` is 2,955 lines and had no suite. It is also **the one
+application here that deletes things**, and the rule keeping that safe is a
+rule about *order*: it asks first, and the file is still there while it is
+asking.
+
+No photograph can check that. A picture of a dialog proves a dialog appeared;
+it cannot prove the file survived to the moment the picture was taken. In a
+suite the question and the directory are read in the same breath — and a
+mutation that moves the file **before** raising the question fails on exactly
+that line.
+
+### Picked by measurement, not by hunch
+
+The biggest desktop sources with no suite linking them:
+
+| | lines |
+| --- | --- |
+| `recon_control_panel.c` | 8,979 |
+| `recon_shell.c` | 7,264 |
+| `recon_cmd.c` | 3,668 |
+| `recon_explorer.c` | 2,955 |
+
+And the cost of reaching them is **mostly shared**: 82 stubs already existed,
+the explorer needed 49 more, the control panel 55 — largely the same 49. Most
+of those turned out to have real sources worth linking instead, so what was
+actually written is 34 stubs and nine more files in the target.
+
+### An unfocused window refuses keys, which a test found by doing nothing
+
+`recon_appwin_handle_key` returns false unless the window is focused. That is
+right — a keystroke belongs to whatever is in front — and the first run of this
+suite found it the way such things are found: a test pressed Down, nothing
+moved, and the report said `selected: [-1] (none)`.
+
+### What it found that is a question rather than a fault
+
+`path_is_protected` guards `RECON_DIR_SYSTEM` **and nothing else**. So a file
+manager opened at the root will offer to move `/Users` — every account's files
+— to the Recycle Bin on one keystroke, and the bin is on the same volume.
+
+Deliberately not changed here. Whether the top-level folders should be
+undeletable is a ruling about what a file manager is *for*, and the answer
+that suits an administrator may not suit a workstation. It is on the board.
+What the suite holds is that the refusal which does exist is real: `/System`
+raises no question at all and says why.
+
+**61 suites.**
+
+---
+
 ## v0.4.78 — what a page asks of an answer
 
 `required` asks whether there is an answer. Everything HTML has for asking

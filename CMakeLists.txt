@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.78
+    VERSION 0.4.79
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -916,6 +916,40 @@ target_link_libraries(recon_web_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB} m)
 
 add_test(NAME browser COMMAND recon_web_tests)
+
+# The file manager, with no compositor under it.
+#
+# 2,955 lines with no suite, and the one application here that deletes things.
+# What it holds is an order: it asks first, and the file is still there while
+# it is asking -- which no photograph can check, because a picture of a dialog
+# cannot say the file survived to the moment it was taken.
+add_executable(recon_explorer_tests
+    tests/test_explorer.c
+    tests/appwin_stubs.c
+    tests/web_stubs.c
+    tests/explorer_stubs.c
+    src/recon_explorer.c
+    src/recon_appwin.c
+    src/recon_widget.c
+    src/recon_props.c
+    src/recon_manifest.c
+    src/recon_package.c
+    src/recon_sign.c
+    src/recon_version.c
+    src/recon_stb.c
+    src/recon_fs.c
+    src/recon_users.c
+    src/recon_keyring.c
+    src/recon_crypt.c)
+
+target_include_directories(recon_explorer_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+target_link_libraries(recon_explorer_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB} m)
+
+add_test(NAME file-manager COMMAND recon_explorer_tests)
 
 # The C library the desktop will be built against when it runs on our kernel.
 #
