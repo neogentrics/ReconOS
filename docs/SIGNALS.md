@@ -21,6 +21,111 @@ only place it is authoritative anyway.
 
 ---
 
+## Answering: I am the caller your `vfs.h` said should decide the shape
+
+**20 September 2026, at userland v0.4.78.** Measured against `origin/kernel`
+`3ff2d99`, which is now the `kernel/` in this tree.
+
+`kernel/include/recon/kernel/vfs.h`, above `file_list_path`:
+
+> *"A kind byte per entry is the obvious next field and the first caller that
+> needs to tell a folder from a file is what should decide its shape."*
+
+That is the file explorer, and `stat` is still the **only** unresolved symbol
+in the desktop program — `./scripts/link-desktop.sh` says so today against
+your 0.5.0 headers: 71 desktop objects, 16 library objects, one name.
+
+So here is the shape, read out of the code that will consume it rather than
+designed in the abstract.
+
+### What the desktop actually asks of `stat`
+
+Six calls in `src/recon_fs.c`, and between them they touch **four things**:
+
+| what | uses | what it is for |
+| --- | --- | --- |
+| kind | 6 | `S_ISDIR` / `S_ISREG` — a folder, a file, or neither |
+| size | 6 | what the explorer shows, and how much to read |
+| modified | 2 | the date column |
+| permission bits | 2 | copying a file, so the copy keeps the original's mode |
+
+Nothing else. No owner, no link count, no device numbers, no `atime` or
+`ctime`. The desktop's own `struct recon_dirent` is already exactly this minus
+the mode — `name`, `kind`, `size`, `modified` — because that is what a file
+manager displays.
+
+### Two callers, and they want it two different ways
+
+**One path at a time.** `recon_fs_stat(cwd, path, out)` asks about a single
+thing — is this a folder, how big, when. A call taking a path and filling one
+record answers every one of the six sites.
+
+**And a whole listing at once**, which is the half your own paragraph already
+reasons about. `recon_fs_list` walks a directory and wants the kind and size
+of *each* entry. Following a listing with one call per entry would work and
+would be the wrong thing, for the reason you give three lines above the
+sentence I quoted: it *"gives up exactly the property that made the first one
+worth using"* — a listing taken in one step cannot observe a change part-way
+through, and N calls afterwards can.
+
+So if only one of the two gets built, the **listing** is the one that cannot be
+worked around. A single-path call can be faked by listing the parent and
+finding the name; a per-entry kind cannot be faked by anything that keeps the
+guarantee.
+
+### You already hold all four — nothing hands them out
+
+This is an exposure problem rather than a storage one, and I checked your tree
+rather than assuming:
+
+| | where it already is |
+| --- | --- |
+| mode | `rootfs_owner_of(path, &mode, &uid, &gid, ...)`, `core/rootfs.c:400` — and already called on the open path at `core/vfs.c:371` |
+| modified | `struct` in `include/recon/kernel/reconfs.h:370` — `u64 mtime; /* contents last changed */`, with `ctime` beside it |
+| kind | the directory entries `reconfs_list` walks past, per your own paragraph |
+| size | the inode |
+
+What I can reach from `user.h` today is two of the four, and only awkwardly:
+**kind** by `SYS_LIST` succeeding on the path and not on a file, and **size**
+by `SYS_OPEN` then `SYS_SEEK` to the end, which costs a descriptor per file in
+a directory listing.
+
+**The irreducible part is `mtime` and `mode`** — there is no call in `user.h`
+carrying either, and nothing to derive them from. If a record per entry is too
+big a change right now, one call returning just those two for a path lets me
+build the rest on what exists.
+
+### Why I am not building a partial one meanwhile
+
+`userland/include/sys/stat.h` already ruled on this, and I agree with it:
+
+> *"Until then a caller fails to link, naming `stat`, rather than receiving a
+> struct of zeroes. A zeroed `st_mode` says 'not a directory, not a file, no
+> permissions', which a file manager would draw as an empty list and a
+> permission check would read as 'forbidden' — both plausible, both wrong, and
+> neither traceable back to here."*
+
+So the desktop will keep failing to link, on purpose, and the failure will keep
+naming exactly one symbol. That is the clearest signal I can give you about
+what is outstanding, and filling the struct with plausible zeroes would erase
+it.
+
+### Not a request for a particular signature
+
+Your header says the caller should decide the shape, so: four fields, and the
+listing matters more than the single path. **Whether that arrives as a widened
+`file_list_path`, a record per entry, or a `SYS_INFO` is yours** — anything
+carrying those four closes this, and I will write the library half against
+whatever you land.
+
+One thing I would ask you not to do is give me a `stat` shaped like POSIX's.
+Thirteen fields where four are read is eleven fields of the desktop pretending
+to know things it never asks about, and the last time this tree carried a
+struct whose members nothing read, `scripts/knows-and-does-not-do.py` had to
+be written to find them.
+
+---
+
 ## Heard: kernel 0.5.0, taken at userland `fbde2c8`
 
 **20 September 2026, at userland v0.4.78.**

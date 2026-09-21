@@ -250,6 +250,28 @@ drawing touches, and all three are answered.
 
 ## Nothing can ask what a file is
 
+> **Sharpened, 20 September 2026, against kernel 0.5.0.** This is an
+> *exposure* problem, not a storage one — the kernel already holds every one
+> of the four facts the desktop reads:
+>
+> | | where it already is |
+> | --- | --- |
+> | mode | `rootfs_owner_of(path, &mode, &uid, &gid, ...)`, `core/rootfs.c:400`, already called at `core/vfs.c:371` |
+> | modified | `u64 mtime` in `include/recon/kernel/reconfs.h:370` |
+> | kind | the directory entries `reconfs_list` walks past |
+> | size | the inode |
+>
+> And the desktop reads **only four**: kind (6 uses), size (6), modified (2),
+> permission bits (2, for copying a file so the copy keeps its mode). No owner,
+> no link count, no `atime`, no device numbers.
+>
+> `kernel/include/recon/kernel/vfs.h` says *"the first caller that needs to
+> tell a folder from a file is what should decide its shape"*. That caller is
+> the file explorer, and the shape is above. Sent as an entry in
+> `docs/SIGNALS.md`, with the note that the **listing** matters more than the
+> single path: following a listing with one call per entry gives up the
+> property their own header says makes the listing worth using.
+
 **Where:** `userland/libc/`, 15 September 2026, immediately after the socket
 calls landed. With sockets answered this is **the largest group left** in the C
 library, and it is the one standing between the desktop and its own filesystem
@@ -512,7 +534,7 @@ already portable.
 
 ---
 
-## Nothing can make a directory, so the volume has no shape
+## ~~Nothing can make a directory, so the volume has no shape~~ — built, 14 September 2026
 
 **Where:** working out what `userland/init/recon_init.c` could say about
 storage, 14 September 2026. It asks `SYS_LIST` what is at the root of the
@@ -876,17 +898,24 @@ Then a volume has a size, a free figure, and something to format.
 
 ---
 
-## Setting a display mode
+## ~~Setting a display mode~~ — answered, kernel 0.5.x
 
 **Where:** Display Settings, where screen resolution is the last row still
 marked not built.
 
-ReconOS takes whatever size the window or the screen it was given is.
+`kernel/core/display.c` sets a mode through the controller's own PCI BARs,
+with AMD and Intel drivers beside it. Its header opens by naming exactly the
+gap this row described: until it existed *"the kernel had exactly one
+relationship with a screen — it drew into the framebuffer the bootloader had
+been handed, at the size the firmware happened to pick"*.
 
-**Note:** this one is *not* fully blocked. wlroots on a DRM backend can already
-enumerate and set modes on real hardware, so the userland half is buildable
-now and the backend can be swapped later. Listed here because the eventual
-answer comes from the kernel, not because the work has to wait for it.
+**The remaining half is the desktop's.** The `resolution` row on the board says
+the path that lists modes and sets one has never run, because no backend here
+offers any — that is still true, and it now has somewhere to be true against.
+
+*Found on 20 September, when this branch's copy of `kernel/` was brought up
+from 0.2.48 to 0.5.0. It had been answered for some time and this file went on
+asking, which is what a list nobody reads against the tree does.*
 
 ---
 
