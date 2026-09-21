@@ -485,6 +485,40 @@ drains, and that counter stays at zero.
 **So: `32 out` with `ring full` growing means the register, not the wire.** Read
 that line before concluding anything about the network.
 
+### Reading the other three rows from the boot report
+
+The same trick as above, applied to what the register read could not close. The
+point is not prediction for its own sake — it is that a maintenance window is
+one shot, and *"it did not work"* is worth very little afterwards while *"out
+stalled at 32 and ring full climbed"* is worth a fix.
+
+Every line below is one the kernel already prints. Nothing here needs new code.
+
+| what failed | what the report shows | strength |
+|---|---|---|
+| **the reset** | `r8169: the card at B:D.F did not finish a reset` and **no `r8169:` summary line for that card at all** — attach returns false | **decisive**, it says so in words |
+| **the transmit poll (`0x38`)** | `32 out`, `ring full` present and climbing, `0 in` | **decisive**, see the section above |
+| **the receive ring** | `0 in`, **and no `bad`/`no buffer` at all** — those three counters print together and only when one is non-zero | **suggestive**, not decisive |
+| **interrupts** | `0 interrupt(s)` and the boot's own line: *"N card(s) can raise one, M cannot and are polled"* | **decisive**, and expected — NW-005 |
+
+**The receive row is the weak one and it is worth saying why**, because it is the
+row most likely to be over-read. `0 in` is also what a healthy card on a network
+that never answers reports. What narrows it is the company it keeps: the PHY
+status is *confirmed* against the silicon, so if the report says `link up,
+1000 Mb` and frames are going out and **nothing whatever comes back — no frames,
+no errors, no dropped buffers** — then the card is not walking the receive ring,
+because a card that is walking it and seeing rubbish would be counting rubbish.
+
+`stocked` does **not** help here and should not be read as if it does. It counts
+descriptors currently holding a buffer, and it is 32 both when the ring is
+working and being refilled and when it has never been touched. A healthy boot on
+the emulated Intel prints `4 in, 4 out, 32 stocked` — the 32 is not evidence of
+anything.
+
+**Capture the summary lines verbatim.** They are three lines and they carry every
+counter named above; a photograph of them is worth more than any description of
+what the machine seemed to do.
+
 ### What this does not close, and it is most of the risk
 
 **The reset sequence, the interrupts, and a frame on the wire are all
