@@ -612,7 +612,8 @@ turned out to be true.
 - **Found by** reading the README for a different reason entirely — which is
   the only way it could have been found, because nothing in the tree compares
   the two.
-- **Fixed by** correcting the sentence to 45, and by making the checker read
+- **Fixed in** kernel 0.4.4 on `network`, by correcting the sentence to 45,
+  and by making the checker read
   every `N suites` in the file rather than only the one inside the badge URL.
   A derivable number is derivable wherever it appears; checking it in one
   spelling and not another is the same fault as not checking it at all, with
@@ -734,7 +735,8 @@ turned out to be true.
   the symptom. It has never fired: 408 of 500 is 82% of the way there and the
   register grows every day across five branches. This is the one entry here
   that records a fault caught **before** it cost anything.
-- **Fixed by** two changes, of which only the second is a fix. `LIST_LIMIT` is
+- **Fixed in** kernel 0.4.3 on `network`, by two changes of which only the
+  second is a fix. `LIST_LIMIT` is
   2000, which buys time and will run out again. `refuse_if_truncated` refuses
   to act on any listing that came back at exactly the limit, because *exactly
   that many* and *cut off at that many* are the same listing from here — the
@@ -782,7 +784,9 @@ turned out to be true.
   the register was never wrong — both entries kept their original, now stale,
   links. Nothing in the repository could have detected this, and nothing did;
   the count was the only evidence.
-- **Fixed by** keying on the entry identifier, `[A-Z]{2}-\d+`, which is the one
+- **Fixed in** kernel 0.4.2 on `network` — the same bump as NW-010, because
+  one number was taken for both — by keying on the entry identifier,
+  `[A-Z]{2}-\d+`, which is the one
   part of a heading the register promises not to reword or reuse. Two pieces
   beyond the swap, both needed:
 
@@ -851,7 +855,8 @@ turned out to be true.
   one and it does not exist"* — which is worth more than the missing function,
   because it is the only kind of proof that an interface lacks something a
   caller needs rather than something it might need.
-- **Fixed by** `netdev_primary()`, and by giving both predicates names in one
+- **Fixed in** kernel 0.4.2 on `network`, by `netdev_primary()`, and by
+  giving both predicates names in one
   place: `has_cable` (`up && link`) for broadcasts, which must not require an
   address because DHCP has to send before it has one, and `is_addressable`
   (that, and an address) for everything else. `netdev_route` and

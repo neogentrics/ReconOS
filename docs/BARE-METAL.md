@@ -418,6 +418,13 @@ by measurement rather than by reading.
 **Fifteen offsets, fifteen agreements, none of them previously run against
 hardware.**
 
+**And the kernel session's own caution, which belongs next to the table rather
+than after it:** *fifteen offsets from one part in one firmware state at one
+moment is not a specification.* This is one RTL8168, at one revision, as its
+Linux driver had left it. It is far better evidence than a map written from
+memory and it is not a datasheet — the failure mode to guard against is a value
+that is true on this machine becoming a constant in a driver for every machine.
+
 ### Two bit-level checks, which are better than the offsets
 
 **The command register.** The card reads `0x37: Command = 0x0c`, and ethtool
