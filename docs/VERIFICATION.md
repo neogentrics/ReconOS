@@ -1730,3 +1730,87 @@ with a 10 ms gap:  12 of 120    <- stalled at 12
   recorded rather than explained, and the counter comparison is the instrument
   to reach for next: **the guest says it answered and the client says it did not
   hear**, which is a sharper starting point than a flake.
+
+### VF-042 -- the server hung up on one client in four hundred, and the reason was a comment that was true
+
+- **What was open** VF-041 ended with an observation and no diagnosis: roughly
+  once in a hundred or two a connection was made, a request sent, and nothing
+  came back. The guest's own counter said it had answered. That put the loss
+  between the guest's socket and the client, and this seat had not proved
+  which.
+- **It was the server**, and the capture says so without any inference. One
+  flow, from the hunt that found an empty answer at request 49 of 400:
+
+```
+0.089  client -> server  AP  seq 8000002  ack 1513334715  len 54   <- the request
+0.090  server -> client  AF  seq 1513334715  ack 8000002  len 0    <- FIN, no data
+```
+
+  **The server's FIN acknowledges the SYN and not the fifty-four bytes that
+  had already arrived.** It closed the connection without ever reading the
+  request.
+- **The line that did it had a comment explaining why it was right:**
+
+  > `c->have > 0` is what tells a partly-read request from an idle keep-alive
+  > connection: some of a head has arrived, so the rest is coming. With nothing
+  > read yet, a zero means the client is finished and the connection should
+  > close rather than be spun on.
+
+  Every word of that is true on a host, where `recv` answers 0 only at end of
+  stream. **On the target a zero means *nothing buffered*** -- which is VF-013,
+  this project's own entry, in the same file, three hundred lines further up.
+  `serve.c` is compiled unchanged for both, and this is the one place where the
+  difference decided the behaviour.
+- **What it cost** A connection accepted a moment before its first packet was
+  processed was hung up on. The window is about a millisecond, so it is rare,
+  and rare is what kept it: the request that failed at position 49 was
+  indistinguishable from a network hiccup, and on any single page load it would
+  never be seen.
+- **The fix is to delete the distinction rather than to invert it.** There is
+  one path now: a zero means nothing arrived, and a deadline decides when to
+  give up. That is correct on the host too, merely later -- a client that has
+  closed will not send again, and waiting a bounded time before agreeing is not
+  a different answer.
+- **Measured, before and after, on four hundred connections each:**
+
+```
+before   1 empty in 400
+after    0 empty in 400, twice -- 0 in 800
+```
+
+- **Then the fix's own check caught the fix's own bug.** The first version
+  restarted the idle clock on every pass, which had been harmless while the
+  connection was closed on the spot and made the deadline **unreachable** the
+  moment it decided anything. A connection that said nothing would have held
+  one of four slots for ever, which is worse than the fault being repaired. The
+  clock is started where a connection becomes ready for a request instead: at
+  accept, and in `conn_next` for the one after it.
+- **And then one number turned out to be three questions.** Two seconds is
+  right for a race measured in milliseconds and wrong for a browser that
+  fetches a page, parses it and comes back for the stylesheet. So:
+
+```
+part of a request has arrived   RECV_DEADLINE_MS    15000   bytes already committed
+nothing, and nothing before     HTTP_IDLE_MS         2000   accept to first packet
+nothing, but it has answered    HTTP_KEEPALIVE_MS   10000   a client deciding
+```
+
+  Measured on the machine: a connection that says nothing is closed after
+  **2.0 s**, one left idle after a request after **10.1 s**, and a client
+  pausing three seconds between requests is answered every time. Ten rather
+  than the sixty a server with thousands of descriptors would use, because this
+  pool holds four.
+- **One of those measurements was wrong twice before it was right**, and it was
+  the client each time. A scratch script that did one `recv` per request read
+  the *body* of the first answer as the *head* of the second and reported two
+  of three. That is the same fault 0.30.0 fixed in the machine suite, with the
+  same sentence attached to it: **a client that cannot reassemble a response is
+  not measuring the server.** It is easy to fix in the suite and easy to
+  reintroduce in the next throwaway script, which is worth knowing about
+  oneself.
+- **What the suites can and cannot do about this.** A one-in-four-hundred race
+  is not something forty connections will catch, and the machine suite is not
+  going to open four hundred at two a second. The instrument that found it is
+  the pair that should be reached for again: **the guest's own counter against
+  the client's**, which turns "a flake" into "it answered and I did not hear",
+  and then a capture.

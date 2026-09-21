@@ -187,6 +187,45 @@ static int send_all(int fd, const char *buf, size_t len,
 #define RECV_STALLS_MAX 2000000
 
 /*
+ * How long a connection that has sent nothing is held.
+ *
+ * Separate from `RECV_DEADLINE_MS` because the two wait for different things.
+ * That one waits for bytes a client has already committed to, which this
+ * kernel may deliver at about a kilobyte a second, so it is fifteen seconds.
+ * This one waits only for the gap between a connection being accepted and its
+ * first packet being processed -- measured at about a millisecond in the
+ * capture behind VF-042 -- so two seconds is four orders of magnitude of
+ * margin.
+ *
+ * It is short for a reason as well as long for one: the pool holds four
+ * connections, and a client that opened one and went away should not keep a
+ * quarter of this server for a quarter of a minute.
+ */
+#define HTTP_IDLE_MS 2000
+
+/*
+ * And how long a connection that has already answered something is held
+ * while it waits for the next request.
+ *
+ * A third number, because it is a third question. `RECV_DEADLINE_MS` waits
+ * for bytes already committed to; `HTTP_IDLE_MS` waits for the gap between
+ * accepting a connection and its first packet arriving; this waits for a
+ * client to decide what to ask next.
+ *
+ * **Found by giving the first two one number.** Two seconds is right for a
+ * race measured in milliseconds and wrong for a browser that fetches a page,
+ * parses it, and comes back for the stylesheet: measured, a client pausing
+ * three seconds between requests got one answer out of three. Reconnecting is
+ * not free here -- a handshake costs about half a second at this machine's
+ * sustained rate -- so the connection is worth keeping.
+ *
+ * Ten seconds rather than the sixty or seventy-five a server with thousands
+ * of descriptors would use, because this pool holds **four**. A client that
+ * has gone away must not keep a quarter of this server for a minute.
+ */
+#define HTTP_KEEPALIVE_MS 10000
+
+/*
  * Read more of a request, knowing what a zero means on this kernel.
  *
  * --- The fault this exists for ---
@@ -228,7 +267,7 @@ static int send_all(int fd, const char *buf, size_t len,
  * so.
  */
 static int read_more(int fd, char *buf, size_t *have, size_t room,
-                     int in_progress, unsigned long *stalls,
+                     unsigned long deadline_ms, unsigned long *stalls,
                      unsigned long since, const struct http_site *site)
 {
 	long n;
@@ -243,12 +282,31 @@ static int read_more(int fd, char *buf, size_t *have, size_t room,
 	}
 	if (n < 0 && (errno == EINTR || errno == EAGAIN))
 		return 1;
-	if (n != 0 || !in_progress)
+	if (n != 0)
 		return 0;
 
-	/* Nothing taken, and there is known to be more. See above. */
+	/*
+	 * Nothing taken, and a zero does not say why.
+	 *
+	 * **This used to close the connection when nothing had been read
+	 * yet**, on the reasoning that a partly-read request means more is
+	 * coming while an untouched one means the client is finished. That is
+	 * true on a host, where `recv` answers 0 only at end of stream. It is
+	 * false on the target, where 0 means *nothing buffered* -- which is
+	 * the whole of VF-013 -- and this file is compiled unchanged for both.
+	 *
+	 * What it cost: a connection accepted a moment before its request
+	 * packet was processed was hung up on. Roughly one in four hundred,
+	 * and the capture is unambiguous -- the server's FIN acknowledged the
+	 * SYN and not the fifty-four bytes that had already arrived. VF-042.
+	 *
+	 * So there is one path now and a deadline decides on both systems. It
+	 * is correct on the host too, merely later: a client that has closed
+	 * will not send again, and waiting a bounded time before agreeing is
+	 * not a different answer.
+	 */
 	if (site->now_ms) {
-		if (site->now_ms() - since >= RECV_DEADLINE_MS)
+		if (site->now_ms() - since >= deadline_ms)
 			return -1;
 	} else if (*stalls >= RECV_STALLS_MAX) {
 		return -1;
@@ -977,6 +1035,16 @@ static void conn_next(struct http_conn *c)
 	c->requests++;
 	c->state = CONN_HEAD;
 	c->stalls = 0;
+
+	/*
+	 * The idle clock starts again here, because this connection is now
+	 * waiting for a *new* request rather than the rest of an old one.
+	 * Without this, a keep-alive client's second request would be measured
+	 * against the moment the connection was accepted, and a connection
+	 * held open longer than `HTTP_IDLE_MS` would be dropped between
+	 * requests it was about to make.
+	 */
+	c->since = c->site && c->site->now_ms ? c->site->now_ms() : 0;
 }
 
 /*
@@ -1233,6 +1301,28 @@ static int conn_answer(struct http_conn *c, const struct http_site *site)
  * returns immediately so the next one gets a turn, and comes back to exactly
  * where it was because the state is in the slot rather than on the stack.
  */
+/*
+ * How long to wait for a request head, which depends on what is being waited
+ * for.
+ *
+ *   part of one has arrived   the rest is committed and this kernel may
+ *                             deliver it slowly -- `RECV_DEADLINE_MS`
+ *   nothing, first request    the gap between accept and the first packet,
+ *                             about a millisecond -- `HTTP_IDLE_MS`
+ *   nothing, but it has
+ *   answered before           a client deciding what to ask next --
+ *                             `HTTP_KEEPALIVE_MS`
+ *
+ * Three questions, three numbers. They were one for a while and the middle
+ * case is the one that suffered: see VF-042.
+ */
+static unsigned long head_deadline(const struct http_conn *c)
+{
+	if (c->have)
+		return RECV_DEADLINE_MS;
+	return c->requests ? HTTP_KEEPALIVE_MS : HTTP_IDLE_MS;
+}
+
 static int conn_step(struct http_conn *c)
 {
 	const struct http_site *s = c->site;
@@ -1255,10 +1345,43 @@ static int conn_step(struct http_conn *c)
 			 * read yet, a zero means the client is finished and
 			 * the connection should close rather than be spun on.
 			 * See `read_more`. */
-			if (c->have == 0)
-				c->since = s->now_ms ? s->now_ms() : 0;
+			/*
+			 * A connection that has sent nothing is given a
+			 * shorter grace than one mid-request, and the
+			 * difference is what each is waiting for.
+			 *
+			 * Mid-request, the wait is for bytes the client has
+			 * already committed to and the kernel may deliver at
+			 * a kilobyte a second -- that is `RECV_DEADLINE_MS`.
+			 * With nothing read, the wait is only for the gap
+			 * between accepting a connection and its first packet
+			 * being processed, which the capture in VF-042 puts
+			 * at about a millisecond. `HTTP_IDLE_MS` is four
+			 * orders of magnitude more than that, and still short
+			 * enough that a client which has gone away does not
+			 * hold one of four slots for fifteen seconds.
+			 */
+			/*
+			 * `since` is **not** restarted here, and the first
+			 * draft of this fix restarted it.
+			 *
+			 * It used to, harmlessly, because with nothing read
+			 * the connection was closed on the spot and the
+			 * deadline was never consulted. The moment a deadline
+			 * decided instead, resetting the clock on every pass
+			 * meant it could never elapse -- and a connection
+			 * that said nothing would have held one of four slots
+			 * **for ever**, which is worse than the fault being
+			 * fixed.
+			 *
+			 * Caught by the check written for the other half of
+			 * this change, in the same run. It is set where a
+			 * connection becomes ready for a request instead: at
+			 * accept, and in `conn_next` for the one after it.
+			 */
 			got = read_more(c->fd, c->buf, &c->have,
-			                sizeof(c->buf), c->have > 0,
+			                sizeof(c->buf),
+			                head_deadline(c),
 			                &c->stalls, c->since, s);
 			if (got < 0) {
 				/* Half a request line, and then silence. The
@@ -1405,7 +1528,8 @@ static int conn_step(struct http_conn *c)
 			}
 
 			got = read_more(c->fd, c->buf, &c->have, sizeof(c->buf),
-			                1, &c->stalls, c->since, s);
+			                RECV_DEADLINE_MS, &c->stalls, c->since,
+			                s);
 			if (got < 0) {
 				send_status(c->fd, 408, s->server_name,
 				            s->bytes_sent);
@@ -1451,8 +1575,8 @@ static int conn_step(struct http_conn *c)
 	 * head has been read and declared a length, so the bytes are promised.
 	 * A zero here is *not yet* every time. */
 	if (c->have < c->need) {
-		got = read_more(c->fd, c->buf, &c->have, sizeof(c->buf), 1,
-		                &c->stalls, c->since, s);
+		got = read_more(c->fd, c->buf, &c->have, sizeof(c->buf),
+		                RECV_DEADLINE_MS, &c->stalls, c->since, s);
 		if (got < 0) {
 			/* The head arrived and declared a length the body
 			 * never reached. Unlike above there *is* a request to

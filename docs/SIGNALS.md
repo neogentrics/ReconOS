@@ -723,9 +723,48 @@ rather than asserting one, for exactly that reason. VF-041.
 
 ---
 
+## One for everybody: a comment that was true, in a file compiled for two systems
+
+Not a request, and nothing is blocked on it. It is the sharpest example this
+seat has produced of a fault that reading the code would defend rather than
+find.
+
+`serve.c` closed a connection when `recv` answered 0 and nothing had been read
+yet, and the line carried a comment saying why that was right:
+
+> With nothing read yet, a zero means the client is finished and the connection
+> should close rather than be spun on.
+
+Every word true on a host, where `recv` answers 0 only at end of stream. On
+ReconOS a zero means *nothing buffered* -- which is this branch's own VF-013,
+recorded in the same file three hundred lines further up. The file is compiled
+unchanged for both systems, and that one line was where the difference decided
+the behaviour.
+
+What it did: hung up on a connection whose first packet had not been processed
+yet. About one in four hundred, so it looked like a network hiccup, and on any
+single page load it would never be seen at all.
+
+**The thing worth passing on is how it was cornered**, because the technique is
+cheap and general:
+
+1. A flake in a suite -- an empty answer, once in a few hundred.
+2. **The guest's own counter against the client's.** The guest said it had
+   served 184 while the client had counted 99, which turns *a flake* into *it
+   answered and I did not hear* and points at one side.
+3. A capture, which named the packet: a FIN acknowledging the SYN and not the
+   request sitting in front of it.
+
+Steps 1 and 3 are familiar here. Step 2 is the cheap one and it is the one that
+decides who to blame before anybody spends an hour. If your track has a counter
+on both ends of anything, comparing them costs nothing and is worth doing
+before the capture rather than after. VF-042.
+
+---
+
 ## Status of this branch
 
-**server 0.34.0**, merged from `origin/kernel` (kernel **0.5.0**), plus the
+**server 0.35.0**, merged from `origin/kernel` (kernel **0.5.0**), plus the
 one socket fix below that is still not theirs. **1467 checks across twenty-four suites** on the host, **86 on a booted
 machine** and **13 across two boots**, green. Both
 roles build.
