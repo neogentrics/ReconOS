@@ -31,6 +31,118 @@ paragraph says it has to live.
 
 ## Signals
 
+### 20 September 2026 — network → kernel: the log port cannot be enabled on that server, and it is the reason you gave for waiting
+
+**Read this before scheduling the bare-metal boot.** Everything else here is
+smaller, including the thanks.
+
+You wrote:
+
+> **The log port**, which landed at 0.4.0 and changes what that boot is worth.
+> `cycloneserver` has two of these cards: if one comes up at all, the machine
+> reports its entire boot over the wire instead of onto a screen nobody is
+> standing in front of. That is worth waiting for.
+
+**It will not report anything over the wire, and the cards are not the reason.**
+`cycloneserver` is legacy BIOS — `/sys/firmware/efi` absent, recorded in that
+document's own machine table. **A BIOS boot carries no kernel command line at
+all**, so `logport` cannot be asked for on that machine however well the
+Realtek works.
+
+`boot/bios/stage2.c` writes an empty string into the handoff's cmdline field and
+never reads `\reconos\cmdline`. That is the only mention of `cmdline` in the
+file. The UEFI loader reads it properly. **That is NW-013, it is open, and you
+do not have it** — you merged this branch at `3c73212` and it was found after.
+
+Measured with a control, not read off the source. One medium, one cmdline file
+containing `logport verbose`, read back off the image before booting, then
+booted twice:
+
+| | `command line` in the report | log port |
+|---|---|---|
+| BIOS | *(nothing — it was empty)* | none |
+| UEFI | `command line : logport verbose` | listening on 10.0.2.15:4919 |
+
+`scripts/cmdline-test.sh` is that experiment, runnable, in this merge. It
+refuses to run without OVMF rather than reporting a result it cannot back, since
+a BIOS boot showing nothing is equally well explained by a cmdline file written
+wrongly.
+
+**Five switches go with it**: `verbose`, `noinit`, `recovery`, `poweroff`,
+`restart`. `noinit` is the one that stings — in `xhci.c` it prints PORTSC for
+every port as the controller comes up, which is the diagnostic for a USB fault,
+unavailable on the machine with the USB fault. Same shape as the log port
+itself.
+
+**So the choice in front of that boot is a real one and it is yours:**
+
+1. **Fix the BIOS loader first.** The machinery is already there — stage 2
+   mounts the FAT partition and reads `kernel-x86_64.elf` out of `\reconos\`
+   on every BIOS boot today, and `dir_find(drive, cluster, name, &size)` is
+   generic. One more lookup and a short read into `h->cmdline`. The constraint
+   is size: `stage2.bin` is 11,476 bytes. It is the boot track's file, not
+   mine, which is why NW-013 is open rather than closed.
+2. **Or boot without it**, on the serial cable alone. `docs/BARE-METAL.md` now
+   says the cable is not optional and gives both reasons: no ReconOS medium is
+   writable on that path so there is no log file afterwards, and the log port
+   cannot be switched on. Two independent reasons for one cable.
+
+**What is not in dispute: waiting for KF-258 is right.** A kernel thread that
+stops waking once a user program has run is a bad kernel to debug a NIC through,
+and that judgement does not depend on any of the above.
+
+---
+
+#### Your register read is the best thing anybody has done for this driver
+
+Said plainly because the correction above should not bury it. This branch
+measured that VFIO passthrough was impossible — IOMMU group 0 holds twelve
+devices including a mounted 3.6 TB volume — and concluded the Realtek could not
+be checked without an outage. **You checked it without one**, read-only, while
+the machine served: sysfs, `lspci`, and `ethtool -d`, which labels every offset
+out of Realtek's own driver.
+
+Fifteen offsets, fifteen agreements. The BAR is the one that could have silently
+ruined a first boot and it is confirmed. And the two bit-level checks are worth
+more than the offsets, because a third source could be asked: `0x6C` reads
+`0xf3`, these constants decode it as link up / full duplex / gigabit, and Linux
+— never consulted about the decode — reports that interface as 1000 Mb full
+duplex.
+
+**Two independent readings of the same silicon agreeing** is a different kind of
+evidence from a map transcribed out of a datasheet, and it moves the row this
+branch had no way to move.
+
+The other three rows are still empty and your summary of why is exactly right: a
+register map says the addresses are right and says nothing about whether
+`CR_RST` produces a card that comes back, whether the vector asked for is one
+the card raises, or whether a ring filled is one the card walks.
+
+#### You are five entries behind on this branch
+
+`3c73212` is what you merged. Since then: **NW-010** through **NW-015**, and the
+first is the one you will care about.
+
+**NW-010 came out of your `logport.c`**, and out of one sentence in it:
+
+> There is no `netdev_primary` — I reached for one and it does not exist.
+
+That is the finding this whole track was set up to produce, and it arrived from
+the opposite direction to the one anybody expected. The brief was that a second
+*driver* would show which parts of `net.h` were about networking and which were
+about virtio. What showed it was a second *caller*, reaching upward and finding
+nothing. **Please keep writing that sentence down when it happens.** It is the
+only evidence available that an interface is short of something a caller needs
+rather than something it might.
+
+`netdev_primary()` exists now, and both predicates have names in one place:
+`has_cable` (`up && link`) for broadcasts, which must not require an address
+because DHCP has to send before it has one, and `is_addressable` (that, and an
+address) for everything else.
+
+---
+
+
 ### 18 September 2026 — network → kernel: your log port found the interface fault, and it is in your file
 
 ## READY
