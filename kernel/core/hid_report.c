@@ -1227,6 +1227,66 @@ bool hid_report_self_test(void)
 		}
 	}
 
+	/* --- two reports, and the offsets that belong to neither ---------
+	 *
+	 * **This guard was unreachable by every test that existed.** The real
+	 * controller in `sdp.c` has forty-four report ids and is refused, but
+	 * one step earlier, by the usages check -- deleting this guard left
+	 * that test green. The single-report-id case in `bt_mouse.c` does not
+	 * reach it either, because one is not more than one.
+	 *
+	 * So: two reports, each otherwise complete and well-formed. Nothing
+	 * else here objects to them. What makes a layout impossible is that
+	 * `bit_offset` accumulates across every Input item in the descriptor,
+	 * so the second report's fields are placed after the first's rather
+	 * than at zero -- and every offset in the map then belongs to no
+	 * report that the device actually sends.
+	 */
+	{
+		static const u8 two_reports[] = {
+			0x05, 0x01, 0x09, 0x02,
+			0xA1, 0x01,
+			0x85, 0x01,		/*   Report ID 1          */
+			0x09, 0x30, 0x09, 0x31,	/*   Usage X, Usage Y     */
+			0x15, 0x81, 0x25, 0x7F,
+			0x75, 0x08, 0x95, 0x02,
+			0x81, 0x06,		/*   Input: bits 0..15    */
+			0x85, 0x02,		/*   Report ID 2          */
+			0x09, 0x30, 0x09, 0x31,
+			0x15, 0x81, 0x25, 0x7F,
+			0x75, 0x08, 0x95, 0x02,
+			0x81, 0x06,		/*   Input: bits 16..31   */
+			0xC0
+		};
+		struct hid_mouse_layout m;
+
+		if (!hid_report_parse(two_reports, sizeof(two_reports),
+				      &info)) {
+			kputs("  hidrep: a two-report descriptor was "
+			      "refused outright\n");
+			ok = false;
+		} else if (info.report_id_count != 2) {
+			kprintf("  hidrep: %u report ids counted, expected "
+				"2\n", info.report_id_count);
+			ok = false;
+		} else if (!info.fields_usable) {
+			kprintf("  hidrep: the two-report descriptor was "
+				"withheld for another reason (%s), so this "
+				"case still does not reach the guard it is "
+				"about\n",
+				info.fields_unusable ? info.fields_unusable
+						     : "none given");
+			ok = false;
+		} else if (hid_report_mouse_layout(&info, &m)) {
+			kprintf("  hidrep: two reports produced a mouse "
+				"layout with X at bit %u -- the second "
+				"report's fields sit after the first's, so "
+				"no offset in it matches a report the device "
+				"sends\n", m.x_offset);
+			ok = false;
+		}
+	}
+
 	/* --- buttons with no axes are not a mouse ------------------------- */
 	{
 		static const u8 buttons_only[] = {

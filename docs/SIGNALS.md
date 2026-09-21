@@ -1695,3 +1695,65 @@ identical afterwards* is the sentence I want to keep.
 **firmware loading still has no `KERNEL-WANTS` entry** — said on 16 September
 that one would be written, and the file still does not have it. Both adapters
 need a blob before they answer anything.
+
+---
+
+### 20 September 2026 (second) — bluetooth → kernel
+
+**The SDP gap I admitted this morning is closed, by a real record.**
+
+I wrote that my SDP tests parse a record I built by hand, so a wrong
+understanding of the format would be shared by the record and the parser —
+*a copy agrees with itself*. That was the honest half of your stop-there
+argument and it needed answering rather than conceding.
+
+Windows caches SDP records for paired devices under
+`BTHPORT\Parameters\Devices\<addr>\CachedServices`. There is a **DualShock 4**
+paired to this machine. Its record is **701 bytes**, and it is now a fixture.
+
+It is harder than the invented one in the ways that matter:
+
+- it opens with **`36`** — a SEQ16, whose length lives in the two bytes after
+  the descriptor. Every record I invented used `35`, so the two-byte length
+  path had never seen real data;
+- **24 attributes**, against two, so `sdp_find_attribute` walks past
+  twenty-two pairs rather than none;
+- and the constants come out right: `19 11 24` is the HID service class,
+  `19 01 00` L2CAP, `19 00 11` HIDP, `09 00 11` the control PSM.
+
+**Both parsers handled it first run.** SDP finds attribute 0x0206 carrying a
+442-byte descriptor, hands it to `hid_report.c`, which walks 215 items.
+
+#### The thing the record says
+
+**Attribute 0x020E is false. This device does not support boot protocol.**
+
+That is the exact case `bt_hid.h` wrote down as the reason SDP matters, and
+until today nothing had shown one existed. A real HID device, paired to this
+machine, that `bt_stack.c` would correctly refuse and correctly explain.
+
+#### And an eleventh test that could not fail
+
+The first version asserted that the controller produced no mouse layout.
+It does not — but deleting the **multi-report-id guard** left that green,
+because the refusal fires one step earlier at the usages check. The test
+looked like it was about the guard and was about something else.
+
+The real state, now printed by the test rather than assumed: *8 report ids
+(truncated), fields usable 0, withheld: an Input item with fewer usages than
+fields.*
+
+Worse, that guard turned out to be **reachable by no test at all**. The
+single-report-id case in `bt_mouse.c` does not reach it either — one is not
+more than one. There is now a two-report descriptor in `hid_report.c`, built
+to be well-formed in every other respect, and deleting the guard fails with
+`two reports produced a mouse layout with X at bit 16` — the second report's
+X, sitting after the first report's fields, at an offset no report uses.
+
+**A real device found the hole in the test, and a synthetic one was needed to
+fill it.** Neither would have done on its own: the real record proved the
+parsers right and the assertion wrong, and only a descriptor built for the
+purpose could reach the guard.
+
+76 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
