@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-18, and each entry says why. They are listed because a register that only
+19, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -213,6 +213,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
+- **NW-019** — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -535,6 +536,56 @@ turned out to be true.
   Register offsets, the reset sequence, and the meaning of every bit are proved
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
+
+### NW-019 — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
+
+[#549](https://github.com/neogentrics/ReconOS/issues/549)
+
+- **Found in** `boot/src/main.c`, on 21 September 2026, by the network session,
+  while answering the kernel session's question about how the **BIOS** loader
+  should report a cmdline file it cannot fully use — which sent me to look at
+  how the UEFI loader does it, and it does not.
+- **Was** `read_cmdline` declares `cmdline_buf[128]` and asks EFI for
+  `sizeof(cmdline_buf) - 1` = **127 bytes**. `EFI_FILE_PROTOCOL.Read` fills the
+  buffer and returns `EFI_SUCCESS`: a file longer than that is not an error, it
+  is a short read that is indistinguishable from a complete one. The handoff
+  field is `char cmdline[128]` too, so there is no headroom further down.
+- **Measured, with a control, rather than argued from the source.** One medium,
+  two UEFI boots, differing only in the length of `\reconos\cmdline`:
+
+  | the file | what the report said | log port |
+  |---|---|---|
+  | `logport` (7 bytes) | `command line : logport` | **listening** |
+  | 130 bytes of padding, then ` logport` (138) | `command line : xxxxxxxx...` | **absent** |
+
+  Nothing anywhere said the line had been cut. The control is what makes this a
+  result: without it, "no log port" is equally well explained by a medium that
+  was never built right.
+- **This is NW-013's failure mode one level in, and it fails the same way.**
+  `boot_cmdline_has` matches whole tokens — it requires the match to end at a
+  space or a NUL — so a `logport` cut to `logpo` matches nothing and the switch
+  simply does not happen. **Fails closed, which is the safe direction, and in
+  silence, which is the direction that costs an evening.**
+- **There is partial visibility and it is worse than none in the ordinary case.**
+  The boot does print `command line : <the truncated text>`, so somebody reading
+  carefully can see the tail is missing. But the line that would make it obvious
+  — 130 identical padding characters — is an artefact of this test. A real
+  overlong cmdline is a list of plausible switches with one missing off the end,
+  which reads as correct.
+- **Why 127 bytes is reachable at all**, since the obvious objection is that
+  nobody writes a command line that long. `recovery logport verbose noinit` is
+  31. The file is edited by hand on another machine, by somebody who cannot see
+  the failure, and the documented way to use it is to add words to it. It is a
+  buffer that a person fills by typing.
+- **Not fixed here.** `boot/` is the boot track's, the kernel session is inside
+  that file this week writing NW-013's fix, and two sessions editing one loader
+  is how a loader stops booting. Reported with the measurement instead.
+- **The reason it is urgent rather than merely true:** the BIOS loader is being
+  written now, against the UEFI one as its reference. `put_str` in
+  `stage2.c` truncates silently too — it copies at most `max - 1` and
+  zero-fills, which is memory-safe and says nothing — so a BIOS implementation
+  that mirrors UEFI inherits this rather than avoiding it. The size is already
+  in hand from `dir_find`, so the check is a comparison and not a second read.
 
 ### NW-018 — The Open list was checked entry by entry and the number introducing it was not
 
