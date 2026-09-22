@@ -232,6 +232,8 @@ AREA = {
     'KF-263': 'kernel',
     # The measuring rig, like KF-261: scripts/ rather than anything that boots.
     'KF-264': 'build',
+    # Also the rig: a script edited while bash was still reading it.
+    'KF-268': 'build',
     # The other two tracks' registers, which arrived with their branches and
     # had no line here at all. Read off their own titles, 20 September 2026.
     #

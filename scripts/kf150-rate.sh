@@ -34,13 +34,49 @@
 # It alternates between two already-built kernels and never rebuilds, because a
 # rebuild between samples is a third variable.
 set -u
-cd "$(dirname "$0")/.."
+
+# --- Run from a copy of this file, because this file gets edited -----------
+#
+# **bash does not read a script into memory. It reads it incrementally,
+# keeping a byte offset**, and parses each top-level command as it reaches it.
+# Edit the file while it is running and every offset past the edit is wrong.
+#
+# Measured, 21 September 2026, and it cost the tail of a 28-minute run: 17
+# lines were added near the top of this file while a 180-a-side measurement was
+# at about iteration 40. All 360 boots completed correctly -- `one_boot` and
+# the loop had been parsed long before -- and then bash went to read the
+# summary block, which it had not reached yet, resumed from a stale offset and
+# landed inside a quoted string:
+#
+#   scripts/kf150-rate.sh: line 223: unexpected EOF while looking for matching `"'
+#
+# This file is 207 lines. The damage is exactly bounded: **everything already
+# parsed ran correctly, everything not yet parsed was destroyed.** The
+# measurement survived and the report of it did not, which is the worst
+# available split -- the expensive half is the one that lived.
+#
+# **Four sessions share this repository and edit each other's scripts.** A rule
+# saying "do not edit a running script" is a rule nobody can follow, because
+# the person editing is usually not the person running. So the script takes a
+# copy of itself and runs that, and the original can be edited freely.
+#
+# The copy is made before anything else happens, so what runs is what was on
+# disk at launch -- which is also the honest thing for a measurement to do.
+if [ -z "${RECON_SELF_COPY:-}" ]; then
+	RECON_SELF_DIR=$(cd "$(dirname "$0")" && pwd) || exit 2
+	RECON_SELF_COPY=$(mktemp) || exit 2
+	cat "$0" > "$RECON_SELF_COPY" || exit 2
+	export RECON_SELF_COPY RECON_SELF_DIR
+	exec bash "$RECON_SELF_COPY" "$@"
+fi
+
+cd "$RECON_SELF_DIR/.."
 
 BEFORE_ELF=${1:?give the pre-fix kernel ELF}
 AFTER_ELF=${2:?give the post-fix kernel ELF}
 N=${3:-60}
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK"; rm -f "$RECON_SELF_COPY"' EXIT
 
 [ -f "$BEFORE_ELF" ] || { echo "no kernel at $BEFORE_ELF"; exit 2; }
 [ -f "$AFTER_ELF" ]  || { echo "no kernel at $AFTER_ELF"; exit 2; }

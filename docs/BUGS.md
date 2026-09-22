@@ -4664,6 +4664,48 @@ passed with the bug present, which is not a test at all.
 
 ### KF-150 — About one boot in sixty, a user program does not finish, and nothing says why
 
+- **Measured, 21 September 2026: 180 boots a side, 360 boots, and NOT ONE
+  STALL ON EITHER ARM. This is a null result and it is recorded as one.**
+
+  ```
+  before   0 stalled, 180 finished, 0 neither
+  after    0 stalled, 180 finished, 0 neither
+  ```
+
+  **The control is how you can tell it measured nothing.** The pre-fix arm was
+  supposed to reproduce the fault; it did not, so nothing here bears on whether
+  KF-258's fix works. Zero against zero has the same shape as KF-208, which
+  this entry already cites: the broken kernel passes, so passing is what a fix
+  and a non-fix both produce.
+
+  **What 180 does buy is that this is no longer a shrug.** At one in sixty, a
+  clean sweep of 180 has probability (59/60)^180 = **4.9%**. Sixty a side would
+  have been 36% and said nothing either way. So either a one-in-twenty
+  coincidence happened, or —
+
+- **The conclusion, stated as narrowly as the evidence allows: on this tree,
+  removing that one line no longer reproduces a one-in-sixty stall.** That is
+  not *"the fix works"* and it is not *"the fault is gone"*. The before arm
+  here is **not** the kernel the rate was measured on — 1-in-60 comes from arm
+  A of the KF-148 measurement, which predates KF-258 entirely and predates
+  KF-259, KF-260, KF-261, KF-262 and the `logport.c` change with it. The rate
+  is stale. Something else may have fixed it; it may never have been
+  one-in-sixty; it may need conditions this rig does not produce.
+
+  **The one thing that can be said is the one thing that was asked:** the rate
+  quoted in this entry cannot be reproduced today by the change it was
+  attributed to.
+
+- **Conditions, since one of the two candidates is load-sensitive.** The
+  graphics session ran its aarch64 matrix throughout. Interleaving is what
+  answers that — both arms had whatever the conditions were — but see the
+  split below: it constrains one candidate and not the other.
+
+- **The harness died before printing its summary** (KF-268: the file was edited
+  while it was running). The counts above are the last progress line, which
+  prints the same variables, and are corroborated by the absence of any kept
+  stall log — the harness writes one per stall and wrote none.
+
 - **Correction, 21 September 2026 — the first attempt at a rate measurement
   compared two trees, not one change, and is withdrawn.**
   `scripts/kf150-rate.sh` says in its own comment that the two kernels *"must
@@ -8387,6 +8429,68 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-268 — A script edited while it was running destroyed the report of the run, and kept the run
+
+- **Found:** 21 September 2026, here, by doing it. Seventeen lines were added
+  near the top of `scripts/kf150-rate.sh` while a 180-boots-a-side measurement
+  was at about iteration 40 of 180. All 360 boots completed. The script then
+  died before printing a single line of its summary:
+
+  ```
+  scripts/kf150-rate.sh: line 223: unexpected EOF while looking for matching `"'
+  ```
+
+  The file is 207 lines.
+
+- **Why, and the mechanism is the useful part.** **`bash` does not read a
+  script into memory.** It reads it incrementally, keeping a byte offset, and
+  parses each top-level command as it reaches it. Functions and compound
+  commands are parsed whole the first time they are encountered.
+
+  So the damage is exactly bounded, and it split in the worst available
+  direction:
+
+  | | parsed before the edit? | outcome |
+  |---|---|---|
+  | `one_boot`, the `for` loop | yes | **ran correctly, all 360 boots** |
+  | the summary block after the loop | no | read from a stale offset, parsed into the middle of a quoted string, died |
+
+  **The expensive half lived and the cheap half died.** Twenty-eight minutes of
+  measurement survived; the four `printf` lines that report it did not.
+
+- **The result was recoverable, and only by luck.** The progress line prints
+  the running counts on every iteration, so `180/180 before 0 stalled after 0
+  stalled` was the last thing in the log — the same variables the summary would
+  have printed. Corroborated independently: the harness copies a log to `$PWD`
+  for every stall, and there are none. Had the progress line not existed, the
+  run would have been unrecoverable.
+
+- **"Do not edit a running script" is not a rule anybody here can follow.**
+  Four sessions share this repository and edit each other's scripts; the person
+  editing is routinely not the person running. A rule that depends on one
+  person knowing what another is doing is a rule that will be broken, which is
+  this register's most repeated finding in a new costume.
+
+- **Fixed in** kernel 0.5.20. The script takes a copy of itself and `exec`s
+  that, before it does anything else, so the file on disk can be edited freely
+  while a run is in flight. `RECON_SELF_COPY` marks the re-executed instance
+  and `RECON_SELF_DIR` carries the original location, since `$0` is now a
+  temporary file; the copy is removed by the existing EXIT trap.
+
+  It also makes the measurement honest in a way it was not before: **what runs
+  is what was on disk when the run started**, rather than whatever the file
+  happened to say at the moment bash next needed to read from it.
+
+- **Break-tested both ways, because a guard nobody has watched fail is not a
+  guard.** With the copy in place, forty-one lines were inserted into the file
+  six seconds into a run: the run completed and printed its full summary. That
+  is the same edit, at the same point, that destroyed the previous one.
+
+- **Every other script in `scripts/` has the same exposure** and has not been
+  given the same treatment. Recorded rather than quietly fixed everywhere,
+  because the ones that matter are the ones that run long enough to be edited
+  underneath, and that is a judgement per script rather than a sweep.
 
 ### KF-264 — Every boot in the rate harness waited out a timeout it had finished with in three seconds
 
