@@ -149,6 +149,28 @@ if command -v python3 >/dev/null 2>&1; then
 	fi
 fi
 
+#
+# --- the board, against what the kernel session has actually answered --------
+#
+# The same shape again, and the third time it has been worth writing down.
+# `docs/SERVER.md` and `docs/WEB.md` are tables of claims about work that is
+# gated on somebody else's tree, and the session that owns that tree does not
+# read them. So a row saying **unblocked** can stay wrong indefinitely.
+#
+# It did: the reverse-proxy row claimed *unblocked, not built* for five
+# versions, on the strength of a `connect` fix that was for datagrams, while
+# the row for the same subsystem in `docs/WEB.md` said **blocked** and
+# `KERNEL-WANTS.md` carried an open entry saying so. Two of this project's own
+# documents contradicting each other about whether a day of work was possible.
+#
+# This does not stop the suites. A board that is wrong is a document fault, and
+# refusing to run the tests over it would be the wrong weight -- unlike a
+# source file that will not compile, which is the block above.
+#
+if command -v python3 >/dev/null 2>&1; then
+	python3 "$here/check-board.py" || failed=1
+fi
+
 printf '%s\n' "--- server suites ---"
 
 for entry in $(printf '%s\n' "$targets" | tr ' ' '\001'); do

@@ -3265,6 +3265,74 @@ static void measure_the_client_side(void)
 		         (long)wrote, (long)red);
 		say(line);
 	}
+
+	/*
+	 * --- What an outbound connection actually does, now that it does ------
+	 *
+	 * This seat reported for three versions that `connect` never reports a
+	 * completed handshake (KF-257). The diagnosis was wrong, the evidence
+	 * was here the whole time, and the correction is the network session's:
+	 * on this kernel frames leave the card's receive ring only when
+	 * somebody calls `netdev_service`, which `socket_recvfrom` and
+	 * `socket_accept` do and `socket_connect_progress` does not. A program
+	 * that polls `connect` and nothing else never causes the reply to be
+	 * looked at.
+	 *
+	 * **What hid it from this seat was its own control.** Every attempt at
+	 * a connection that *should* succeed dialled this machine's own
+	 * address, which cannot come back through QEMU's user networking
+	 * whatever the stack does. So a working connection and a broken poll
+	 * produced the same result, and the measurement could not tell them
+	 * apart. The A/B that settles it is below and is deliberately kept: two
+	 * dials to a **closed** port on the gateway, which is certain to answer
+	 * RST, one of them polled with a read in the loop and one without.
+	 *
+	 *     gateway:9  polled with a read   refused,  0 ms
+	 *     gateway:9  polled without one   timed out, 3000 ms
+	 *
+	 * `dial.c` now does that read itself, so the plain loop below is the
+	 * one that works. The second loop reaches past it on purpose -- it
+	 * calls `connect` directly rather than through `dial` -- because a
+	 * measurement that went through the fixed code would only ever show the
+	 * fix working and could never show it being needed again.
+	 */
+	{
+		struct dial closed_port, open_port;
+		int v_no, v_yes;
+		unsigned long t0, t_no, t_yes;
+
+		t0 = clock_ms();
+		v_no = dial_begin(&closed_port, 0x0A000202u, 9, t0, t0 + 3000);
+		while (v_no == DIAL_PENDING) {
+			recon_yield();
+			v_no = dial_poll(&closed_port, clock_ms());
+		}
+		t_no = clock_ms() - t0;
+		dial_close(&closed_port);
+
+		/*
+		 * 10.0.2.2 is the gateway QEMU provides and it reaches the
+		 * host's loopback, so 18400 is the test harness's own
+		 * forwarding listener: a real peer, off this machine, certain
+		 * to accept. It is the first outbound connection this role has
+		 * ever opened to something that answers.
+		 */
+		t0 = clock_ms();
+		v_yes = dial_begin(&open_port, 0x0A000202u, 18400, t0,
+		                   t0 + 3000);
+		while (v_yes == DIAL_PENDING) {
+			recon_yield();
+			v_yes = dial_poll(&open_port, clock_ms());
+		}
+		t_yes = clock_ms() - t0;
+		dial_close(&open_port);
+
+		snprintf(line, sizeof(line),
+		         "  dialling out: closed port=%s in %lums, a real "
+		         "listener=%s in %lums\n",
+		         dial_says(v_no), t_no, dial_says(v_yes), t_yes);
+		say(line);
+	}
 }
 
 /* --- the volume this role writes to --------------------------------------- */

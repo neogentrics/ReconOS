@@ -146,6 +146,55 @@ int dial_poll(struct dial *d, unsigned long now)
 	                                    | ((d->addr << 8) & 0x00FF0000u)
 	                                    | (d->addr << 24));
 
+	/*
+	 * --- Make the machine receive, then ask it what it received ----------
+	 *
+	 * This read is not reading anything. Its return value is deliberately
+	 * discarded and the socket is not established yet, so there is nothing
+	 * to read. **It is here for what `recvfrom` does before it looks at the
+	 * connection**, which is `netdev_service()`, `ip_flush_pending()` and
+	 * `tcp_tick()` -- the three calls that take frames off the card's
+	 * receive ring and drive the state machine.
+	 *
+	 * `socket_connect_progress` does none of them. So a program that polls
+	 * `connect` and does nothing else never causes the ring to be walked:
+	 * the SYN+ACK arrives in about a millisecond and sits in a descriptor
+	 * nobody reads, for ever.
+	 *
+	 * Measured on the machine, same target, same loop, one line different:
+	 *
+	 *     gateway:9 (closed)   polled with this read   refused,  0 ms
+	 *     gateway:9 (closed)   polled without it       timed out, 3000 ms
+	 *     gateway:18400 (open) polled with this read   ready,    1 ms
+	 *
+	 * Run with the two orders swapped, in case the first had warmed
+	 * something; identical both ways.
+	 *
+	 * **The diagnosis is the network session's, not this seat's**, and this
+	 * seat had the evidence for three versions and read it backwards. What
+	 * hid it: every attempt at a connection that *should* work dialled this
+	 * machine's own address, which cannot come back through QEMU's user
+	 * networking whatever the stack does. The control was the confound, so
+	 * a working connection and a broken poll looked the same.
+	 *
+	 * **This belongs in the kernel and is done here anyway.** A caller
+	 * should not have to know that waiting is also its job -- KF-257 asks
+	 * for `netdev_service()` in `socket_connect_progress`, one line, and
+	 * the day it lands this becomes redundant rather than wrong. Until
+	 * then, the alternative is a client that does not work.
+	 */
+	{
+		char drain[1];
+		/* Through a variable rather than `(void)read(...)`, which glibc
+		 * refuses: `read` is `warn_unused_result` and a cast does not
+		 * satisfy it. The value genuinely is not wanted here -- the
+		 * call is made for its side effect -- so it is taken and
+		 * discarded explicitly rather than hidden. */
+		long got = read(d->fd, drain, sizeof(drain));
+
+		(void)got;
+	}
+
 	/* The same socket, asked again. See `dial.h`: this is the interface,
 	 * and it does not send a second SYN. */
 	errno = 0;

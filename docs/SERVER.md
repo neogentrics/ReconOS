@@ -49,13 +49,13 @@ role's to build and is listed because this role is what will be waiting on it.
 | A configuration file | server | **built** | `server/config.c` — name, port, resolver, clock and sites, read at boot. **Written over HTTP since 0.33.0**: a configuration is superseded rather than edited, because nothing here can replace a file. `POST /api/config` parses a candidate and writes the next numbered generation in `/System/Config`; the machine reads the highest at boot, so every configuration it has ever run is still there. Takes effect at the next start, deliberately |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine, and **uploads now proved to survive a reboot** (VF-025). `scripts/server-disk.sh` makes the volume |
 | DNS **resolver** (client) | server | **built** | `server/dns.c` — 72 checks, **resolving real names on the machine**. A resolver is a *connected* datagram, which this kernel has had all along |
-| DNS (authoritative, recursive, split-horizon) | server | **blocked** | a *server* must reply to whoever asked, which needs `recvfrom`. The blocked half; see VF-017 for how the entry came to cover both |
-| DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
-| DDNS | server | **blocked** | follows DNS |
+| DNS (authoritative, recursive, split-horizon) | server | **blocked** | a *server* must reply to whoever asked, which needs `recvfrom`. The blocked half; see VF-017 for how the entry came to cover both [needs: kw-datagram-address] |
+| DHCP (leases, reservations, PXE staging) | server | **blocked** | same [needs: kw-datagram-address] |
+| DDNS | server | **blocked** | follows DNS [needs: kw-datagram-address] |
 | NTP **client** (measuring) | server | **built** | `server/ntp.c` — 41 checks, measuring against `time.cloudflare.com` on the machine, which it resolves itself. Reports the offset; **cannot correct it** |
-| NTP time *setting* | server | **blocked** | nothing can set this clock: `SYS_TIME` and `SYS_WALLTIME` both read and nothing writes. And `SYS_WALLTIME` counts whole seconds — VF-021 |
+| NTP time *setting* | server | **blocked** | nothing can set this clock: `SYS_TIME` and `SYS_WALLTIME` both read and nothing writes. And `SYS_WALLTIME` counts whole seconds — VF-021 [needs: kw-time] |
 | PTP | server | not started | needs hardware timestamping |
-| Reverse proxy | server | **unblocked, not built** | `connect` is fixed (KF-244); `server/dial.c` is the client half |
+| Reverse proxy | server | **unblocked, not built** | An outbound TCP connection works: measured on the machine opening to a real listener in **1 ms**, and answering **refused** to a closed port in 1 ms rather than timing out. This row said *unblocked* once before on a wrong reading and was moved to **blocked** the same day by `scripts/check-board.py`; it is back, this time with a connection rather than an inference. `server/dial.c` is the client half and drains the receive ring itself — see VF-045 for why it has to |
 | Multi-queue NIC drivers | kernel | **blocked** | virtio-net only |
 | LACP bonding, VLAN, bridging | kernel | not started | firewall role needs it first |
 | Stateful firewall / NAT | kernel | not started | firewall role owns it |
@@ -87,10 +87,10 @@ role's to build and is listed because this role is what will be waiting on it.
 | subsystem | owner | status | note |
 |---|---|---|---|
 | Parallel naming (`M16` → `M17`) | server | **built** | `server/identity.c` — 34 checks |
-| Peer discovery on first boot | server | **blocked on one thing now** | `connect` is fixed and `dial.c` is ready. What remains: **a program cannot learn its own address**, so nothing knows what range to sweep |
+| Peer discovery on first boot | server | **blocked** | **One thing now, and this time the connection was tested rather than assumed.** Dialling works. What remains is that **a program cannot learn its own address**, so nothing knows what range to sweep [needs: kw-own-address] |
 | Configuration clone onto unlike hardware | server | spec | discovery first |
 | Service supervisor | server | **partial** | `server/service.c` — 37 checks, and **two services** now: the web server and the clock. Adding the second changed nothing in the loop, which is what the shape was for. In-process only: **nothing can start a program**, so this is not process supervision and does not pretend to be |
-| Cron / job scheduler | server | **blocked** | no user-mode timer |
+| Cron / job scheduler | server | **blocked** | no user-mode timer [needs: kw-time] |
 | Structured REST / RPC management API | server | **partial** | `GET /api/status`, `/api/services`, `/api/log`, `/api/resolve`; `POST /api/name` and `/api/upload`. Takes **`application/json`** as well as a form since 0.27.0 — `server/http/jsonread.c`, 128 checks — so it can be driven by a program rather than only by a person. Still no schema and no discovery |
 | Hypervisor daemon | server | not started | needs VT-x from the kernel |
 | Container runtime | server | **blocked** | no namespaces, no cgroups |
@@ -125,7 +125,7 @@ document specifies and this role should not duplicate the work.
 | DRM / KMS, GPU drivers | kernel | not started |
 | Remote desktop daemon (RDP / VNC / SPICE) | server | not started |
 | Hardware video encode for remote desktop | kernel | not started |
-| Multi-session broker | server | **blocked** — nothing can start a program |
+| Multi-session broker | server | **blocked** — nothing can start a program [needs: kw-start-program] |
 
 ---
 

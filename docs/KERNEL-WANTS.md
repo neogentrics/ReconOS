@@ -16,7 +16,7 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
-## `accept` cannot say who connected, so nothing can be restricted or attributed
+## `accept` cannot say who connected, so nothing can be restricted or attributed {#kw-peer-address}
 
 **Where:** guarding the server role's writing endpoints, 16 September 2026.
 
@@ -70,7 +70,7 @@ three.
 
 ---
 
-## A burst of more than about 2880 bytes stalls, and then trickles in at a kilobyte a second
+## A burst of more than about 2880 bytes stalls, and then trickles in at a kilobyte a second {#kw-burst-stall}
 
 **Where:** building file upload for the server role, 16 September 2026. Found
 because every upload over about 4 KiB returned an empty reply; measured from
@@ -166,7 +166,7 @@ gets **408** and a log entry, rather than a closed connection and silence.
 None of that makes uploads fast. It makes them bounded, and it makes the
 failure visible.
 
-## ~~`connect` says yes to a closed port~~ -- fixed as KF-244, **not yet pushed**
+## ~~`connect` says yes to a closed port~~ -- fixed as KF-244, **not yet pushed** {#kw-connect-closed-port}
 
 > **Answered in kernel 0.2.48 by the kernel session, 16 September 2026.**
 > `SYS_CONNECT` now returns `SYS_OK` when established, `SYS_EAGAIN` while the
@@ -213,7 +213,7 @@ failure visible.
 >
 > The rest of this entry is what it said before.
 
-## `connect` says yes to a closed port, so nothing can find anything
+## `connect` polls for a reply that nothing makes the machine receive {#kw-connect-handshake}
 
 **Where:** building peer discovery for the server role, 16 September 2026. Hit
 before a line of it could be written, and **measured on the machine rather than
@@ -221,6 +221,45 @@ deduced** -- the code suggested it and a boot confirmed it.
 
 *Filed from the server role. So is the datagram entry below it, for the same
 reason `docs/ROLES.md` gives.*
+
+> ### Corrected 21 September 2026, and no longer blocking
+>
+> **This entry said for three versions that `connect` never reports a completed
+> handshake. That was the wrong diagnosis and the evidence against it was in
+> this seat's own boot log the whole time.**
+>
+> The correction is the network session's (NW-021). On this kernel frames leave
+> the card's receive ring only when somebody calls `netdev_service`, which
+> `socket_recvfrom` and `socket_accept` do and `socket_connect_progress` does
+> not. So a program polling `connect` and doing nothing else never causes the
+> reply to be looked at. The SYN+ACK arrives in about a millisecond and sits in
+> a descriptor nobody reads.
+>
+> They stated it as a prediction that could be wrong, which is why it was worth
+> testing rather than agreeing with. Same target, same loop, one line different:
+>
+> ```
+> gateway:9 (closed)   polled with a read in the loop   refused,  0 ms
+> gateway:9 (closed)   polled without one               timed out, 3000 ms
+> gateway:18400 (open) polled with a read in the loop   ready,    1 ms
+> ```
+>
+> Run again with the two orders swapped, in case the first had warmed
+> something. Identical both ways.
+>
+> **What hid it was this seat's own control.** Every attempt at a connection
+> that *should* succeed dialled this machine's own address -- which cannot come
+> back through QEMU's user networking whatever the stack does. A working
+> connection and a broken poll therefore looked the same, and three versions of
+> measurement could not tell them apart. A control that cannot succeed is not a
+> control.
+>
+> **The ask stands and its weight has changed.** `socket_connect_progress`
+> should call `netdev_service()` the way `socket_accept` does -- one line -- so
+> that a caller does not have to know that waiting is also its job. But it
+> blocks nothing now: `server/dial.c` does the read itself, an outbound
+> connection is measured opening in 1 ms, and the reverse proxy is off this
+> entry. See VF-045.
 
 ### The measurement
 
@@ -282,21 +321,32 @@ is worth something on its own.
 
 Failing that, anything that lets a program ask the state of a connection.
 
-### The other half of the same problem
+---
 
-**A program cannot learn its own address.** `struct recon_machine` carries the
-processor, the memory, the page size and the architecture, and nothing about
-the network. The kernel knows -- it prints `net: eth0 is 10.0.2.15, via
-10.0.2.2` at boot -- and there is no way to ask.
+## A program cannot learn its own address, so discovery has nothing to sweep {#kw-own-address}
 
-So even with a working `connect`, discovery would not know what to sweep. An
-address and a mask on `struct recon_machine` would answer it; the structure is
-already grown by appending, and `recon_machine_facts` already handles a kernel
-newer than its caller.
+**Where:** peer discovery for the server role. Written as a subsection of the
+`connect` entry above until 21 September 2026, and **split out when that entry
+stopped blocking anything and this one did not.** Two facts under one heading
+are two facts that get closed together.
+
+`struct recon_machine` carries the processor, the memory, the page size and the
+architecture, and nothing about the network. The kernel knows -- it prints
+`net: eth0 is 10.0.2.15, via 10.0.2.2` at boot -- and there is no way to ask.
+
+Outbound connections work now, so this is the whole of what discovery waits on:
+it can dial anything, and it does not know what range to dial. An address and a
+mask on `struct recon_machine` would answer it; the structure is already grown
+by appending, and `recon_machine_facts` already handles a kernel newer than its
+caller.
+
+There is a second reason to want it that is not discovery. This role's own
+console prints the machine's address by reading it out of a configuration file,
+which is the address somebody *said* it has rather than the one it answers on.
 
 ---
 
-## A file can be created and never changed, so nothing can be corrected in place
+## A file can be created and never changed, so nothing can be corrected in place {#kw-replace-file}
 
 ### What is missing
 
@@ -356,7 +406,7 @@ The middle one is the one this role would use tomorrow.
 
 ---
 
-## A datagram cannot carry an address, so DNS and DHCP cannot be written
+## A datagram cannot carry an address, so DNS and DHCP cannot be written {#kw-datagram-address}
 
 **Where:** opening the server role on branch `server`, 15 September 2026. Hit
 before a line of either service could be written.
@@ -443,7 +493,7 @@ else on its own list.
 
 ---
 
-## ~~There is no way for a program to ask for memory~~ — answered, 15 September 2026
+## ~~There is no way for a program to ask for memory~~ — answered, 15 September 2026 {#kw-malloc}
 
 > **Answered in kernel 0.2.38 / v0.4.33.** `SYS_MAP` with an fd of -1 returns a
 > demand-paged anonymous range, spelled exactly as this entry proposed, so
@@ -575,7 +625,7 @@ above -- so it is worth having, second.
 
 ---
 
-## Nothing can ask what a file is
+## Nothing can ask what a file is {#kw-stat}
 
 **Where:** `userland/libc/`, 15 September 2026, immediately after the socket
 calls landed. With sockets answered this is **the largest group left** in the C
@@ -679,7 +729,7 @@ claimed twice, which has happened and is in `docs/BUGS.md`. Name the numbers and
 
 ---
 
-## There is no way for a program to give memory back
+## There is no way for a program to give memory back {#kw-free-memory}
 
 **Where:** the other half of the entry above, left open when that one was
 answered on 15 September 2026.
@@ -715,7 +765,7 @@ arrived at.
 
 ---
 
-## The console and a program both own the screen
+## The console and a program both own the screen {#kw-screen-ownership}
 
 **Where:** `kernel/user/paint.c`, the first ReconOS program written in C, on
 14 September 2026. Found by photographing the panel rather than by reading the
@@ -777,7 +827,7 @@ already portable.
 
 ---
 
-## Nothing can make a directory, so the volume has no shape
+## Nothing can make a directory, so the volume has no shape {#kw-make-directory}
 
 **Where:** working out what `userland/init/recon_init.c` could say about
 storage, 14 September 2026. It asks `SYS_LIST` what is at the root of the
@@ -844,7 +894,7 @@ to catch it.
 
 ---
 
-## ~~Nothing in user mode can ask the machine to turn off~~ -- built, 14 September
+## ~~Nothing in user mode can ask the machine to turn off~~ -- built, 14 September {#kw-power-off}
 
 **`SYS_POWER`, in kernel 0.2.30.** `recon_power(POWER_ACTION_OFF)` and
 `recon_power(POWER_ACTION_RESTART)` in `userland/include/recon.h`. Behind
@@ -915,7 +965,7 @@ with `arch/` doing the machine-specific part.
 </details>
 ---
 
-## A program has to be inside the kernel image to run at all
+## A program has to be inside the kernel image to run at all {#kw-program-outside-image}
 
 **Where:** `userland/init/recon_init.c`, 14 September 2026, which is the first
 ReconOS program that is a system rather than a self-test -- it reads the
@@ -984,7 +1034,7 @@ is a separate decision and wants a machine that can be recovered without it.
 
 ---
 
-## Nothing in user mode can start a program
+## Nothing in user mode can start a program {#kw-start-program}
 
 **Where:** everywhere, the moment there is more than one thing to run. Hit on
 14 September 2026 while writing the C environment: there is a `crt0`, a syscall
@@ -1021,7 +1071,7 @@ whatever entering a new address space costs on each machine.
 
 ---
 
-## Creating a file with a mode
+## Creating a file with a mode {#kw-create-mode}
 
 **Where:** `src/recon_tls.c`, generating the private key for remote access.
 
@@ -1061,7 +1111,7 @@ has to be gone back over.
 
 ---
 
-## Who somebody is, enforced by something underneath
+## Who somebody is, enforced by something underneath {#kw-identity-enforced}
 
 **Where:** everywhere. Stated plainly in System Information and the README.
 
@@ -1105,7 +1155,7 @@ set-user-id.
 
 ---
 
-## Processes
+## Processes {#kw-processes}
 
 **Where:** `src/recon_modules.c` loads applications with `dlopen`; launching
 anything external is `fork()`. Watchtower reads `/proc`.
@@ -1123,7 +1173,7 @@ can be stopped without stopping the thing that drew its window.
 
 ---
 
-## Storage that knows how big it is
+## Storage that knows how big it is {#kw-storage-size}
 
 **Where:** `src/recon_fs.c`, and the Storage page in the Control Panel.
 
@@ -1141,7 +1191,7 @@ Then a volume has a size, a free figure, and something to format.
 
 ---
 
-## Setting a display mode
+## Setting a display mode {#kw-display-mode}
 
 **Where:** Display Settings, where screen resolution is the last row still
 marked not built.
@@ -1155,7 +1205,7 @@ answer comes from the kernel, not because the work has to wait for it.
 
 ---
 
-## Machine facts read out of the host's filesystem
+## Machine facts read out of the host's filesystem {#kw-machine-facts}
 
 **Where:** `src/recon_procinfo.c` reads `/proc/cpuinfo` and `/proc/meminfo`.
 `src/recon_net.c` reads `/sys/class/net/*/statistics/*` for the Data Used page
@@ -1184,7 +1234,7 @@ to count. That half stays open.
 
 ---
 
-## Randomness
+## Randomness {#kw-randomness}
 
 **Where:** `src/recon_tls.c`, seeding the certificate's key, and
 `src/recon_control.c` making a remote-access key.
@@ -1222,7 +1272,7 @@ later. A key generator told `EINVAL` would report *itself* broken.
 
 ---
 
-## The control socket's proof of identity
+## The control socket's proof of identity {#kw-control-socket-identity}
 
 **Where:** `include/recon_control.h`.
 
@@ -1253,7 +1303,7 @@ pipes and shared memory are built, sockets are not.
 
 ---
 
-## An open bug is not a closed door
+## An open bug is not a closed door {#kw-open-bug}
 
 **Read this before deciding the kernel is too broken to build against.**
 
@@ -1280,7 +1330,7 @@ question from *buggy*.
 
 ---
 
-## ~~The one gap that blocks the most work: sockets~~ -- answered, 15 September 2026
+## ~~The one gap that blocks the most work: sockets~~ -- answered, 15 September 2026 {#kw-sockets}
 
 > **Answered in kernel 0.2.41 / v0.4.38.** Five calls -- `SYS_SOCKET`,
 > `SYS_BIND`, `SYS_LISTEN`, `SYS_ACCEPT`, `SYS_CONNECT` -- and the design
@@ -1332,7 +1382,7 @@ roles in `docs/ROLES.md` simultaneously, and it is the next thing the kernel
 track is building.
 
 
-## Time
+## Time {#kw-time}
 
 **Where:** file timestamps in the explorer, the clock, the certificate's
 validity dates.
@@ -1353,7 +1403,7 @@ duration comes out negative.
 
 ---
 
-## Memory that will not leak a secret
+## Memory that will not leak a secret {#kw-memory-secrets}
 
 **Where:** `src/recon_mail.c`, `src/recon_mailwin.c`, `src/recon_crypt.c`.
 
@@ -1417,7 +1467,7 @@ desktop feature is waiting on, which is what this file is for.
 
 ---
 
-## Running another operating system inside this one
+## Running another operating system inside this one {#kw-nested-virt}
 
 **Where:** nowhere yet. Asked for on 2026-09-05 as a thing for later, with the
 question "is that a kernel thing or a system thing".

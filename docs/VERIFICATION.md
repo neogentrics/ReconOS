@@ -1817,6 +1817,68 @@ nothing, but it has answered    HTTP_KEEPALIVE_MS   10000   a client deciding
   the client's**, which turns "a flake" into "it answered and I did not hear",
   and then a capture.
 
+### VF-045 -- three versions of a wrong diagnosis, and the control that could not succeed
+
+- **What this seat reported, and kept reporting.** KF-257: *`connect` never
+  reports a handshake that completed.* Filed 16 September, restated at every
+  merge, and named in `docs/SERVER.md`, `docs/WEB.md` and
+  `docs/KERNEL-WANTS.md` as the thing blocking the reverse proxy and peer
+  discovery. It was wrong.
+- **The correction is the network session's, and they made it falsifiable.**
+  On this kernel frames leave the card's receive ring only when somebody calls
+  `netdev_service`, which `socket_recvfrom` and `socket_accept` do and
+  `socket_connect_progress` does not. So a program that polls `connect` and
+  does nothing else never causes the reply to be looked at. They wrote it as a
+  prediction with a stated way to be wrong -- *a loop that reads from any
+  socket between attempts completes quickly; one that touches nothing else
+  never completes at all* -- which is why it was worth an hour of machine time
+  instead of an agreement.
+- **The first run appeared to refute it, and reporting that would have been the
+  expensive mistake.** A loop with a read in it timed out exactly like the one
+  without. Both were dialling **this machine's own address**.
+- **Which is the finding underneath the finding.** Every attempt this seat ever
+  made at a connection that *should* succeed dialled 10.0.2.15, its own
+  address. That cannot come back through QEMU's user networking whatever the
+  stack does. So a working connection and a broken poll produced identical
+  output, and three versions of measurement could not tell them apart. **A
+  control that cannot succeed is not a control** -- it is a second copy of the
+  failure, and it makes the experiment agree with whatever you already think.
+- **The A/B that settles it uses a closed port**, which is certain to answer a
+  RST, so a segment definitely arrives and definitely changes a connection's
+  state:
+
+```
+gateway:9  (closed)   polled with a read in the loop   refused,   0 ms
+gateway:9  (closed)   polled without one               timed out, 3000 ms
+gateway:18400 (open)  polled with a read in the loop   ready,     1 ms
+```
+
+  Run again with the first two swapped, in case the earlier one had warmed
+  something. Identical both ways. The prediction is confirmed as stated.
+- **And the instrumentation was the difference between a result and a story.**
+  The read sits behind `if (d->fd >= 0)`, which is necessary and is also
+  exactly how this could have proved nothing: a descriptor that was never
+  valid would skip every read, both loops would be identical, and they would
+  agree perfectly while testing nothing. So the reads were counted and the
+  count printed -- `44671 reads` -- before any conclusion was drawn from them.
+  A run reporting `reads=0` would have said nothing about the theory while
+  looking like it had refuted it.
+- **Fixed in userland, in `dial.c`, one read per poll.** It reads nothing: the
+  socket is not established and there is nothing to read. It is there for what
+  `recvfrom` does *before* it looks at the connection. The kernel ask stands --
+  a caller should not have to know that waiting is also its job -- and it
+  blocks nothing now.
+- **What it unblocks.** An outbound TCP connection works and is measured
+  working. The reverse proxy is off the blocked list for the first time. Peer
+  discovery is down to one thing, `kw-own-address`, split out of the `connect`
+  entry the same day because two facts under one heading get closed together.
+- **The oldest line in the boot log changed without being touched.** The
+  original probe has printed `closed port=timed out` since 0.31.0 and now
+  prints `closed port=refused`. It had been answering the wrong question
+  correctly.
+
+---
+
 ### VF-044 -- the gap 0.29.0 named, closed, and the four mutants that found the checks
 
 - **What 0.29.0 wrote down about itself** *What is not compressed, said
