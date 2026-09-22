@@ -8787,35 +8787,85 @@ boot log.
   > from one print's presence to all prints, and the variable that matters is
   > position, not existence.*
 
-- **It predicts something falsifiable before any rig is built.** One 4 ms line
-  against a 10 ms tick is roughly a coin flip; two lines are near-certain. This
-  used two prints and got a deterministic result, **so a single-print variant
-  should be intermittent.** Ten boots of a one-print build settles it, and if
-  it is deterministic either way the elapsed-time story is wrong.
+- **MEASURED, and the elapsed-time mechanism above is dead.** QEMU does not
+  throttle the UART. The network session sampled the serial log every 100 ms
+  through a boot and took the **peak** window rather than an average:
 
-- **The caveat this session adds, and it cuts against the mechanism above.**
-  QEMU's 16550 commonly reports THR empty immediately and hands the byte
-  straight to its backend — it does not necessarily emulate baud timing at all.
-  If it does not, the spin does not spin, the 4 ms is never spent, and what a
-  print costs is two vmexits a character: microseconds.
+  ```
+  total         14,924 characters
+  peak           5,240 characters in one 100 ms window  = 52,400 chars/sec
+  115200 8N1 cap                                        = 11,520 chars/sec
+  ```
 
-  Arithmetic that makes this worth settling first: a boot here is 372 lines,
-  roughly 22,000 characters. At a *real* 115200 that is **1.9 seconds of pure
-  serial time in a 3.6-second boot**. So either more than half of every boot in
-  this project is spent spinning on a UART, or QEMU is not throttling. Both are
-  interesting and neither is currently known.
+  **Four and a half times the cap.** The THR-empty bit reports ready
+  immediately, the spin loop does not spin, and the 4 ms was never spent. Every
+  consequence drawn from it goes with it.
+
+- **So the 1.9-seconds-in-3.6 arithmetic resolves the other way, and that is
+  worth keeping on its own account:** the serial time is *not* spent, and a
+  boot's 3.6 seconds is real work. This project is not half UART.
+
+- **Two measurements were junk before the one that worked, and the failures are
+  the instructive part.**
+
+  The first divided total characters by wall time and got 255/sec — measuring
+  the **60-second timeout** rather than the boot. That is KF-264 reappearing in
+  another session's instrument about an hour after it was fixed in this one.
+
+  The second stopped at the first 500 ms plateau and got 4,278/sec, which is
+  *below* the cap and would have read as **"consistent with throttling"**. It
+  was nearly reported.
+
+  > **A number below a cap proves nothing about a cap; only a number above it
+  > does.**
+
+  That is one-sided evidence in a new costume, and the same shape as a clean
+  control proving nothing about a fault. It belongs beside KF-208 and the
+  KF-150 null result rather than only here.
+
+- **What survives is not elapsed time.** Each `inb`/`outb` is a vmexit, so a
+  sixty-character line is roughly 120 of them — at a microsecond or two each,
+  about 200 µs against a 10 ms tick. Two percent, not forty: **too small to be a
+  timing story.**
+
+  But a vmexit is not only time. It is a return to the host and a re-entry, and
+  **re-entry is where a pending virtual interrupt gets injected.** A halt with
+  no intervening vmexit gives the hypervisor no injection point; a line of
+  output gives it 120. The mechanism may be **interrupt-delivery opportunities**
+  rather than elapsed time, which is a different thing and fits the evidence
+  better.
+
+- **And that flips what the one-print experiment tests, which is why it is
+  still the first thing to run.** The timing story predicted flakiness — one
+  4 ms line against a 10 ms tick is a coin flip. That prediction is void. Under
+  the injection story a single line is already ~120 opportunities, so one print
+  should be **deterministic**.
+
+  | one print, ten boots | conclusion |
+  |---|---|
+  | intermittent | something timing-shaped after all |
+  | deterministic | injection points, not elapsed time |
+
+  Same boot, same cost, and it now discriminates between the two survivors
+  instead of confirming a hypothesis that has since died.
 
 - **The tests, cheapest first, and none of them print:**
 
-  | test | what it settles |
-  |---|---|
-  | measure what one line actually costs | whether there was ever any elapsed time to be the cause |
-  | spin with interrupts on, emit nothing | elapsed time is the mechanism |
-  | `inb`/`outb` a port, emit nothing | the vmexit is the mechanism |
-  | read `power_idle_tickless()` from an end-of-boot summary | whether the processor idled at all |
+  | test | what it settles | state |
+  |---|---|---|
+  | measure what one line actually costs | whether there was ever elapsed time to be the cause | **done — there was not** |
+  | one print, ten boots | intermittent means timing, deterministic means injection points | next |
+  | `inb`/`outb` a port, emit nothing | the vmexit is the mechanism | after that |
+  | read `power_idle_tickless()` from an end-of-boot summary | whether the processor idled at all | independent |
+  | ~~spin with interrupts on, emit nothing~~ | ~~elapsed time is the mechanism~~ | **dropped — there is a measurement against it** |
 
-  The last answers a different half from the others: it says whether the
-  processor idled, not what unstuck it.
+  The `power_idle_tickless` one answers a different half from the others: it
+  says whether the processor idled, not what unstuck it.
+
+  **The cheapest test was the only one that could have been right to run
+  first.** Two of the four were testing consequences of a premise that a single
+  boot showed to be false, and one of those was the arm its own author expected
+  to succeed.
 
 - **Status:** open. What is established is that the backstop has never fired on
   an unfixed kernel, and that every attempt to watch it from inside the idle
@@ -12233,7 +12283,7 @@ Areas, matching the [error code](ERRORS.md) letters where they apply:
 The **Was** field is the one that matters. A register full of symptoms is a
 list of complaints; a register full of causes is something to learn from.
 
-## Two things this register has learned about finding things
+## Three things this register has learned about finding things
 
 **The disassembly disagreeing with the theory is a result, not a null result.**
 Three times now this project has gone to an instrument expecting to confirm
@@ -12249,6 +12299,24 @@ worse to own than a fault, because a fault gets found.
 including the moment it starts being real — has no failing behaviour to notice
 and no test that can go red. Those belong in the register precisely because
 nothing else would ever record them.
+
+**A number below a cap proves nothing about a cap. Only a number above it
+does.** From the network session, 22 September 2026, having nearly reported the
+number that would have been wrong: measuring the serial port at 4,278
+characters a second reads as *"consistent with throttling"* and is consistent
+with anything at all, because a workload that simply does not produce more
+output looks identical. The measurement that settled it was 52,400 against a
+cap of 11,520 — **four and a half times over, which no amount of not-throttling
+can explain.** They got there by sampling every 100 ms and taking the *peak*
+window; an average over the boot would have diluted it below the cap and
+confirmed the wrong thing.
+
+This is one-sided evidence in a new costume, and the register already holds two
+others: KF-208, where a broken kernel passes twelve boots so passing says
+nothing, and KF-150's null result, where a clean control means the fault was
+never reproduced rather than fixed. **The recurring error is treating the
+absence of an excess as evidence of a limit.** Ask what number could only occur
+if the hypothesis were false, and go and get that one.
 
 ## Three ways a fault stays hidden
 
