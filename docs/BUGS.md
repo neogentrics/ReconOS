@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-19, and each entry says why. They are listed because a register that only
+20, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -214,6 +214,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
 - **NW-020** — Branches printing the same version for different kernels
+- **NW-021** — Two of the three places that wait for a frame drive the network; the third only asks
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -536,6 +537,92 @@ turned out to be true.
   Register offsets, the reset sequence, and the meaning of every bit are proved
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
+
+### NW-021 — Two of the three places that wait for a frame drive the network; the third only asks
+
+[#571](https://github.com/neogentrics/ReconOS/issues/571)
+
+- **Found in** `kernel/core/socket.c`, on 21 September 2026, by the network
+  session, from a symptom the server session reported: `connect` never seeing
+  an established handshake, the SYN+ACK arriving in about a millisecond and
+  nothing happening until the peer retransmitted six seconds later.
+- **Was** a card that cannot get an MSI-X vector is **polled**, not
+  interrupt-driven — every card on this rig, and the boot says so on each run:
+  *"1 card(s) can raise one, 2 cannot and are polled"*. Nothing arrives by
+  itself. A frame leaves the receive ring only when somebody calls
+  `netdev_service()`, which is the sole caller of `->poll`, with no timer behind
+  it.
+
+  | | drives the poll |
+  |---|---|
+  | `socket_accept` (`socket.c:211`) | **yes** |
+  | `socket_recvfrom` (`socket.c:416`) | **yes** |
+  | `socket_connect_progress` (`socket.c:319`) | **no** — reads `tcp_state_of` and returns |
+
+  So a caller spinning on `socket_connect_progress` never causes the ring to be
+  walked. The SYN+ACK sits in a descriptor nobody looks at. **Inbound worked
+  because accept polls; outbound hung because connect does not**, on one stack,
+  in one file.
+- **The file says so itself, eleven lines above one of the two call sites that
+  honours it.** Found by the kernel session, and it is better evidence than the
+  absence was — three functions where one differs is weak; a file contradicting
+  its own stated principle is not:
+
+  > the handshake completes when a frame is processed, and the thread that
+  > processes frames may be this one. A caller waits by doing something else
+  > and asking again.
+
+  That is the rule `socket_connect_progress` breaks, in the same file, about the
+  same handshake.
+- **Confirmed by measurement, by the server session, on the machine.** Three
+  dials, and then the first two run again swapped in case the earlier had warmed
+  something — identical both ways:
+
+  | target | loop | result |
+  |---|---|---|
+  | `gateway:9`, closed | with a read between attempts | refused, **0 ms** |
+  | `gateway:9`, closed | with nothing between attempts | timed out, **3000 ms** |
+  | `gateway:18400`, open | with a read between attempts | ready, **1 ms** |
+
+- **And the first run of that measurement appeared to refute it**, which is the
+  part worth keeping. Two loops to the machine's own `:80`, one with a read and
+  one without, both timing out at exactly 3000 ms. Clean-looking and worthless:
+  every connection this branch had ever attempted dialled **its own address**,
+  which cannot come back through QEMU's user networking whatever the stack does.
+  So a working connection and a broken poll had produced identical output for
+  three versions, and no amount of care in the measuring could separate them.
+
+  In the server session's words, and this is the most portable thing to come out
+  of it: **a control that cannot succeed is not a control — it is a second copy
+  of the failure, and it agrees with whatever you already believe.** The closed
+  port rescued it, because a RST comes back in a millisecond and that is a
+  segment definitely arriving and definitely changing a connection's state.
+- **The guard that nearly hid it**, also theirs: the read sits behind
+  `if (fd >= 0)`. Necessary, and precisely how the experiment could have proved
+  nothing — a descriptor never valid skips every read, both loops become the
+  same loop, and they agree perfectly while testing nothing. They counted the
+  reads and printed the number (44,671) before drawing any conclusion. That
+  counter is the reason the apparent refutation got a second look.
+- **Not fixed here.** `socket.c` is the kernel session's, and they are treating
+  it as a ruling rather than a typo, which is right: servicing inside
+  `connect_progress` had to be shown to be a repair rather than a change of
+  contract.
+
+  **It is a repair.** Accept's rule says a caller waits by *doing something
+  else* — which works for accept and recvfrom because those calls **are** the
+  something else. A caller waiting on a handshake has none available: it cannot
+  send on a socket that has not connected, and cannot meaningfully recv on it.
+  The nearest way to satisfy the rule is to call `socket_recvfrom` on a half-open
+  socket purely for the side effect, which is an obligation a header must not
+  impose in silence. And `net.h:594-595` declares both functions with nothing
+  about driving the stack at all — so there is no contract to preserve, only an
+  undocumented duty that two of its three call sites already absorb.
+- **What it was costing.** The server session's reverse proxy, blocked since
+  0.31.0. Their `dial.c` now does one read per poll — reading nothing, present
+  entirely for what `recvfrom` does before it looks at the connection — and
+  their entry is marked non-blocking rather than closed, because a caller should
+  not have to know that waiting is also its job. The day the line lands in
+  `socket_connect_progress`, that read becomes redundant rather than wrong.
 
 ### NW-020 — Branches printing the same version for different kernels
 
