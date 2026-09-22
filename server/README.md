@@ -32,7 +32,7 @@ covers the operating system.
 | **Version** | 0.38.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 22 September 2026 |
-| **Checks** | 1558 across twenty-five suites, by `scripts/server-tests.sh`,
+| **Checks** | 1583 across twenty-five suites, by `scripts/server-tests.sh`,
 107 more on a booted machine by `scripts/machine-tests.sh`, and 19 across two
 boots by `scripts/config-round-trip.sh` |
 | **Kernel** | 0.5.14, merged from `origin/kernel` — **plus one fix that is not in their tree**, see below |
@@ -268,7 +268,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_log` | 24 | a ring of recent entries, and the count that stops it lying |
 | `server_logfile` | 45 | numbering segments, and the sort order that makes a log readable |
 | `server_dial` | 38 | three answers, and the two ways of confusing them |
-| `server_config` | 172 | reading a configuration, and the files that must not be believed |
+| `server_config` | 197 | reading a configuration, and the files that must not be believed |
 | `server_chunked` | 116 | reading a chunked body, and every way of framing one twice |
 | `server_jsonread` | 128 | reading JSON, and every document that means two things |
 | `server_accept` | 93 | choosing what to send, and the headers that are read wrong |

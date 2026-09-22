@@ -226,6 +226,79 @@ int main(void)
 	refuses("[site a.example]\nindex start.html\n", CONFIG_EINCOMPLETE, 1,
 	        "an index does not make a site complete");
 
+	/* --- a site that asks somebody else ----------------------------------
+	 *
+	 * `proxy` is the other answer to the question `root` answers: where do
+	 * this name's replies come from. So the checks here are mostly about
+	 * the two not being allowed together, and about a malformed upstream
+	 * stopping the configuration from loading rather than one request at a
+	 * time.
+	 */
+	{
+		struct config c;
+
+		ok(parse("[site a.example]\nproxy 10.0.2.2:8080\n",
+		         &c) == CONFIG_OK,
+		   "a site may proxy instead of having a root");
+	}
+
+	refuses("[site a.example]\nroot /a\nproxy 10.0.2.2:8080\n",
+	        CONFIG_ECONFLICT, 3,
+	        "a site may not both serve and proxy -- two answers to one "
+	        "question, resolved by whichever the code checked first");
+	refuses("[site a.example]\nproxy 10.0.2.2:8080\nroot /a\n",
+	        CONFIG_ECONFLICT, 3,
+	        "and the refusal does not depend on which was written first");
+
+	refuses("[site a.example]\nproxy 10.0.2.2\n", CONFIG_EVALUE, 2,
+	        "an upstream without a port is refused -- there is no sensible "
+	        "default to dial");
+	refuses("[site a.example]\nproxy 10.0.2.2:0\n", CONFIG_EVALUE, 2,
+	        "port zero is refused: it is the wildcard a listener uses and "
+	        "nothing to dial");
+	refuses("[site a.example]\nproxy 10.0.2.2:70000\n", CONFIG_EVALUE, 2,
+	        "and a port past 65535");
+	refuses("[site a.example]\nproxy 10.0.2.999:80\n", CONFIG_EVALUE, 2,
+	        "and an address that is not four bytes");
+	refuses("[site a.example]\nproxy upstream.example:80\n",
+	        CONFIG_EVALUE, 2,
+	        "and a name, which would need a resolver to read the "
+	        "configuration that says where the resolver is");
+	refuses("[site a.example]\nproxy :80\n", CONFIG_EVALUE, 2,
+	        "and a port with no host");
+	refuses("[site a.example]\nproxy 10.0.2.2:\n", CONFIG_EVALUE, 2,
+	        "and a host with no port");
+	refuses("[site a.example]\nproxy 10.0.2.2:80\nproxy 10.0.2.3:80\n",
+	        CONFIG_EREPEATED, 3,
+	        "and two upstreams for one site");
+
+	/* The value is kept both ways, and the parsed half is what `dial.h`
+	 * takes. Checked because a parser that validated without producing
+	 * would push the second reading to the point of use. */
+	{
+		struct config c;
+		const char *text = "[site a.example]\nproxy 10.0.2.2:8080\n";
+
+		if (config_parse(text, strlen(text), &c) == CONFIG_OK
+		    && c.site_count == 1) {
+			ok(c.sites[0].proxies == 1,
+			   "a proxying site says so");
+			ok(strcmp(c.sites[0].upstream, "10.0.2.2:8080") == 0,
+			   "and keeps what the file said, for the console to "
+			   "show back");
+			ok(c.sites[0].upstream_addr == 0x0A000202u,
+			   "and the address parsed once, here, rather than "
+			   "again at the point of use");
+			ok(c.sites[0].upstream_port == 8080,
+			   "and the port beside it");
+		} else {
+			ok(0, "a proxying site says so");
+			ok(0, "and keeps what the file said");
+			ok(0, "and the address parsed once");
+			ok(0, "and the port beside it");
+		}
+	}
+
 	/* --- the root, which is the boundary everything else is checked against - */
 
 	/*

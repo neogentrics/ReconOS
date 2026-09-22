@@ -251,12 +251,21 @@ static int port_of(const char *text, size_t len, unsigned *out)
 	return 1;
 }
 
-/* A dotted quad, and only that. A name here would need a resolver to read the
- * configuration that says where the resolver is. */
-static int address_ok(const char *text)
+/*
+ * A dotted quad, and only that. A name here would need a resolver to read the
+ * configuration that says where the resolver is.
+ *
+ * Produces the value as well as the verdict, so that the thing which decides
+ * an address is well formed and the thing which turns it into a number are one
+ * function. Two would be two readings of the same text that can disagree --
+ * `http.h` has the long version of this argument. `out` may be null for a
+ * caller that only wants the verdict.
+ */
+static int address_ok(const char *text, unsigned int *out)
 {
 	size_t n = length(text);
 	size_t i = 0;
+	unsigned int addr = 0;
 	int parts = 0;
 
 	if (n == 0 || n > 15)
@@ -273,6 +282,7 @@ static int address_ok(const char *text)
 		}
 		if (digits == 0 || digits > 3 || value > 255)
 			return 0;
+		addr = (addr << 8) | value;
 		parts++;
 		if (i == n)
 			break;
@@ -282,7 +292,53 @@ static int address_ok(const char *text)
 		if (i == n)
 			return 0;	/* a trailing dot */
 	}
-	return parts == 4;
+	if (parts != 4)
+		return 0;
+	if (out)
+		*out = addr;
+	return 1;
+}
+
+/*
+ * `a.b.c.d:port`, which is how an upstream is written.
+ *
+ * One field rather than two because it is one fact -- an administrator moving
+ * a service moves both halves, and two keys that must agree is two keys that
+ * can disagree. Port zero is refused: it is the wildcard a listener uses and
+ * nothing to dial.
+ */
+static int upstream_ok(const char *text, unsigned int *addr,
+                       unsigned short *port)
+{
+	char host[16];
+	size_t n = length(text);
+	size_t colon = 0;
+	unsigned long value = 0;
+	size_t i;
+
+	while (colon < n && text[colon] != ':')
+		colon++;
+	if (colon == 0 || colon == n || colon >= sizeof(host))
+		return 0;
+
+	for (i = 0; i < colon; i++)
+		host[i] = text[i];
+	host[colon] = '\0';
+	if (!address_ok(host, addr))
+		return 0;
+
+	for (i = colon + 1; i < n; i++) {
+		if (!is_digit(text[i]))
+			return 0;
+		value = value * 10 + (unsigned long)(text[i] - '0');
+		if (value > 65535)
+			return 0;
+	}
+	if (i == colon + 1 || value == 0)
+		return 0;
+
+	*port = (unsigned short)value;
+	return 1;
 }
 
 /* An index is a file name, not a path: `index root/../../etc/passwd` would
@@ -319,7 +375,8 @@ static int index_ok(const char *name)
 	X("resolver", 0)        \
 	X("clock",    0)        \
 	X("root",     1)        \
-	X("index",    1)
+	X("index",    1)        \
+	X("proxy",    1)
 
 /* Returns 1 if the key exists, and sets `*in_site` to where it belongs. */
 static int key_known(const char *key, size_t len, int *in_site)
@@ -336,7 +393,7 @@ static int key_known(const char *key, size_t len, int *in_site)
 
 struct seen {
 	int name, port, resolver, clock;	/* at the top level */
-	int root, index;			/* in the current site */
+	int root, index, proxy;			/* in the current site */
 };
 
 static int apply_top(struct config *into, struct seen *seen, const char *key,
@@ -370,7 +427,7 @@ static int apply_top(struct config *into, struct seen *seen, const char *key,
 		if (!take(into->resolver, sizeof(into->resolver), value,
 		          value_len))
 			return fail(into, CONFIG_EVALUE, line, value, value_len);
-		if (!address_ok(into->resolver))
+		if (!address_ok(into->resolver, 0))
 			return fail(into, CONFIG_EVALUE, line, value, value_len);
 		into->has_resolver = 1;
 		return CONFIG_OK;
@@ -401,6 +458,32 @@ static int apply_site(struct config *into, struct seen *seen, const char *key,
 			return fail(into, CONFIG_EVALUE, line, value, value_len);
 		if (!config_root_ok(site->root))
 			return fail(into, CONFIG_EVALUE, line, value, value_len);
+		/* The other order. Both are checked, because a site is wrong
+		 * whichever of the two was written second. */
+		if (seen->proxy)
+			return fail(into, CONFIG_ECONFLICT, line, key, key_len);
+		return CONFIG_OK;
+	}
+	/* proxy */
+	if (is_word(key, key_len, "proxy")) {
+		if (seen->proxy)
+			return fail(into, CONFIG_EREPEATED, line, key, key_len);
+		seen->proxy = 1;
+		if (!take(site->upstream, sizeof(site->upstream), value,
+		          value_len))
+			return fail(into, CONFIG_EVALUE, line, value, value_len);
+		if (!upstream_ok(site->upstream, &site->upstream_addr,
+		                 &site->upstream_port))
+			return fail(into, CONFIG_EVALUE, line, value, value_len);
+		site->proxies = 1;
+		/*
+		 * Refused here rather than at the end of the section, so the
+		 * reported line is the second of the two keys -- which is the
+		 * one the administrator just added and the one they are
+		 * looking for.
+		 */
+		if (seen->root)
+			return fail(into, CONFIG_ECONFLICT, line, key, key_len);
 		return CONFIG_OK;
 	}
 	/* index */
@@ -429,8 +512,9 @@ static int open_section(struct config *into, struct seen *seen,
 	size_t i;
 	size_t name_len;
 
-	/* The previous site, if there is one, must have had a root. */
-	if (into->site_count && !seen->root) {
+	/* The previous site must have said where its answers come from --
+	 * a root of its own, or an upstream to ask. */
+	if (into->site_count && !seen->root && !seen->proxy) {
 		struct config_site *last = &into->sites[into->site_count - 1];
 
 		return fail(into, CONFIG_EINCOMPLETE, last->line, last->host,
@@ -477,6 +561,7 @@ static int open_section(struct config *into, struct seen *seen,
 	into->site_count++;
 
 	seen->root = 0;
+	seen->proxy = 0;
 	seen->index = 0;
 	return CONFIG_OK;
 }
@@ -500,8 +585,21 @@ int config_parse(const char *text, size_t len, struct config *into)
 		for (i = 0; i < sizeof(*into); i++)
 			raw[i] = 0;
 	}
-	seen.name = seen.port = seen.resolver = seen.clock = 0;
-	seen.root = seen.index = 0;
+	/*
+	 * All of it, by one initializer rather than field by field.
+	 *
+	 * This used to read `seen.name = seen.port = ... = 0;` on two lines,
+	 * which is the shape `docs/SIGNALS.md` already warns about: every
+	 * field added later has to be remembered in a second place. Adding
+	 * `proxy` proved the point immediately -- the new field was left
+	 * uninitialized and a site's first `proxy` key was compared against
+	 * whatever the stack held.
+	 *
+	 * `-Werror=maybe-uninitialized` caught it, which is luck rather than
+	 * design: the compiler could see through the inlining this time. The
+	 * declaration below cannot be got wrong by the next person.
+	 */
+	seen = (struct seen){ 0 };
 
 	if (len > CONFIG_FILE_MAX)
 		return fail(into, CONFIG_EFILE_LONG, 0, "", 0);
@@ -590,7 +688,7 @@ int config_parse(const char *text, size_t len, struct config *into)
 	}
 
 	/* The last site, which nothing else will check. */
-	if (into->site_count && !seen.root) {
+	if (into->site_count && !seen.root && !seen.proxy) {
 		struct config_site *last = &into->sites[into->site_count - 1];
 
 		return fail(into, CONFIG_EINCOMPLETE, last->line, last->host,
@@ -684,7 +782,8 @@ const char *config_reason(int verdict)
 	case CONFIG_ESECTION:    return "a section header this cannot read";
 	case CONFIG_ETOOMANY:    return "more sites than this server holds";
 	case CONFIG_EDUPLICATE:  return "two sites with the same name";
-	case CONFIG_EINCOMPLETE: return "a site with no root";
+	case CONFIG_EINCOMPLETE: return "a site that says neither root nor proxy";
+	case CONFIG_ECONFLICT:   return "a site with both a root and a proxy";
 	case CONFIG_EFILE_LONG:  return "the file is too large";
 	default:                 return "unknown";
 	}

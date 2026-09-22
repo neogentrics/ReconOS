@@ -92,6 +92,7 @@
 #define CONFIG_EDUPLICATE    (-8)  /* two sites with the same name */
 #define CONFIG_EINCOMPLETE   (-9)  /* a site missing something it must have */
 #define CONFIG_EFILE_LONG   (-10)  /* the file is over CONFIG_FILE_MAX */
+#define CONFIG_ECONFLICT    (-11)  /* a site told to do two incompatible things */
 
 /*
  * One configured site.
@@ -104,6 +105,28 @@ struct config_site {
 	char host[CONFIG_VALUE_MAX];
 	char root[CONFIG_VALUE_MAX];
 	char index[CONFIG_VALUE_MAX];
+
+	/*
+	 * Or: pass everything to another machine instead of answering it here.
+	 *
+	 * **A site does one or the other and never both.** `root` and `proxy`
+	 * are two answers to one question -- where does a request for this name
+	 * get its answer -- and a configuration that gave both would be
+	 * resolved by whichever the code happened to check first. That is a
+	 * decision made by accident, so it is refused instead: CONFIG_ECONFLICT.
+	 *
+	 * The address is kept **both ways**. `upstream` is what the file said,
+	 * because the console shows the administrator what they wrote and not
+	 * this parser's opinion of it; `addr` and `port` are what `dial.h`
+	 * takes. Parsed here rather than at the point of use, so a malformed
+	 * address is a configuration that will not load rather than a site that
+	 * fails one request at a time.
+	 */
+	char upstream[CONFIG_VALUE_MAX];	/* "a.b.c.d:port", as written */
+	unsigned int   upstream_addr;		/* host order, as dial.h takes */
+	unsigned short upstream_port;
+	int  proxies;
+
 	unsigned line;			/* where the section started, for errors */
 };
 
