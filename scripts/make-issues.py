@@ -649,7 +649,32 @@ def check_versions(text):
     current = m.group(1) if m else None
 
     named = sorted(set(re.findall(r'\*\*Fixed in\*\* kernel (\d+\.\d+\.\d+)', text)))
+
+    '''
+    Say what was NOT examined, which this did not and should have.
+
+    **A count a check derives from its own traversal cannot detect a traversal
+    that skipped things** -- the server session's formulation, and this function
+    was an instance. It reported "N version(s) named by entries" with N counted
+    by the same regex that decides what to look at, so a register full of
+    entries this pattern cannot read would report a small N and a clean bill.
+
+    It reads 50 of the 266 lines that say **Fixed in**. That is correct and was
+    invisible. The rest use conventions this check has no business validating:
+    `vX.Y.Z` is the desktop project's version and belongs to its change log, and
+    several name a source file rather than a version at all. A few are prose
+    *about* the field rather than uses of it, which is the NW-016 trap again.
+
+    So the number is reported as a fraction. A reader learns the scope without
+    reading the source, and a convention change that pushes entries out of this
+    pattern shows up as the fraction moving rather than as silence.
+    '''
+    total = len(re.findall(r'\*\*Fixed in\*\*', text))
+    skipped = total - len(re.findall(r'\*\*Fixed in\*\* kernel \d+\.\d+\.\d+', text))
+
     if not named:
+        print('  no entry names a kernel version, out of %d that say Fixed in'
+              % total)
         return 0
 
     """`--diff-merges` is not optional here -- NW-017.
@@ -712,8 +737,10 @@ def check_versions(text):
     for b in bad:
         print('  ' + b)
 
-    print('  %d version(s) named by entries, %d not released'
-          % (len(named), len(bad)))
+    print('  %d kernel version(s) named by entries, %d not released '
+          '(%d of %d Fixed-in lines name one; the rest are the desktop\'s '
+          'vX.Y.Z, or a file, and are not checked here)'
+          % (len(named), len(bad), total - skipped, total))
     return 1 if bad else 0
 
 
