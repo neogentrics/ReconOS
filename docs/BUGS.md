@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-18, and each entry says why. They are listed because a register that only
+17, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -4667,8 +4667,8 @@ passed with the bug present, which is not a test at all.
 
 > ### Measured against KF-258's fix on 20 September 2026, and the measurement failed
 >
-> **Sixty boots a side, interleaved, two kernels differing by twenty-four
-> bytes. Zero stalls on both sides. That is not a pass; it is a run with no
+> **Sixty boots a side, interleaved, two kernels differing by one source
+> change. Zero stalls on both sides. That is not a pass; it is a run with no
 > power, and the control is how you can tell.**
 >
 > ```
@@ -4694,6 +4694,18 @@ passed with the bug present, which is not a test at all.
 > was walked into by the session that wrote the interleaving specifically to
 > avoid a different confound. Controlling for load and forgetting power is one
 > good habit crowding out another.
+>
+> **A correction to the sentence above, made the same day.** It first read
+> *two kernels differing by twenty-four bytes*. Twenty-four bytes is the
+> difference in their **size**; their contents differ across 1.2 million bytes,
+> because removing a call changes the code size and shifts every address after
+> it. The claim was checked with `cmp -l` only when the pair was rebuilt, and it
+> was wrong in the direction that sounds more rigorous.
+>
+> It does not weaken the experiment — the two binaries differ by exactly one
+> source change, which is the thing being varied — but *"twenty-four bytes"*
+> invites a reader to picture a patch rather than a relink, and a number offered
+> as precision should be one somebody measured.
 >
 > **What the run does establish:** the harness works, both binaries boot, and
 > `scripts/kf150-rate.sh` now exits 2 with the arithmetic printed when the

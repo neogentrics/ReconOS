@@ -561,13 +561,28 @@ def check_open(text):
     missing = [b for b in open_now if b not in named]
     extra = [b for b in named if b not in open_now]
 
+    # **And the number written beside them, which nothing read.** (BT, and
+    # found by the bluetooth session)
+    #
+    # This function compared the SET of identifiers and never the figure the
+    # section opens with -- so the one number in `## Open` that was remembered
+    # rather than derived drifted to 18 over a list of 17, with this checker
+    # running clean over it the whole time. That is exactly what the docstring
+    # above says happens to every remembered count in this project, printed
+    # directly above the count it was not checking.
+    said = re.match(r'\s*(\d+)', head.group(1))
+    wrong_count = said and int(said.group(1)) != len(open_now)
+
     for b in missing:
         print('  %s is open and the Open section does not say so' % b)
     for b in extra:
         print('  %s is named as open and its own entry says otherwise' % b)
-    if not missing and not extra:
+    if wrong_count:
+        print('  the Open section says %s entries and lists %d'
+              % (said.group(1), len(open_now)))
+    if not missing and not extra and not wrong_count:
         print('  Open names all %d open entries and no others' % len(open_now))
-    return 1 if (missing or extra) else 0
+    return 1 if (missing or extra or wrong_count) else 0
 
 
 USAGE = """usage: make-issues.py [--dry-run | --check]
