@@ -83,13 +83,37 @@ the flattering version had stood.**
 
 Their duplication came from a patch script applied, reverted, and applied again.
 Every edit on this branch went through a small script doing
-`assert s.count(old) == 1` before replacing, so a second application finds
-nothing and dies. Checked after their report: the one phrase that appears twice
-here is two separate guards in two functions, not one pasted beside itself.
+`assert s.count(old) == 1` before replacing, and I recommended that to them as
+the thing that would have stopped it.
 
-**That is a precondition rather than a test**, and it reaches a class testing
-cannot: a duplicated guard is undetectable by running it. The assert makes the
-mutation impossible instead of detectable.
+**They already had it. It had passed twice.** And the reason is the finding:
+
+> An anchor that survives into its own replacement cannot detect reapplication.
+
+Their script inserted above its anchor — `new = COMMENT + GUARD + old` — so the
+anchor is reproduced verbatim. After the first application it still appears
+exactly once, `count == 1` holds, and the second run inserts another copy above
+it. The assert was neither wrong nor skipped. It was answering a question about
+the anchor, and the anchor was never consumed.
+
+**Most of the edits on this branch have that exact shape**, `s.replace(anchor,
+entry + anchor)`, which is how every `NW-` entry was inserted. So the precaution
+I recommended would not have protected this tree either.
+
+Scanned after their correction rather than assumed: no duplicate `NW-` heading,
+no duplicate function definition, no duplicate section. The one repeated
+`check_for` label is upstream's and pre-dates this branch — the x86_64 and
+aarch64 arms of one test, four occurrences here and four on `origin/kernel`.
+
+**So the tree is clean and the practice is not what kept it clean.** Running each
+script once did. That is the method-versus-luck line again, pointed at my own
+tooling, and it is the second time today I have described my own work wrongly
+and had to be corrected by someone auditing theirs.
+
+The corrected rule: **assert on something the edit destroys, or on the absence of
+the new text.** The framing that survives intact is why the tool is an assert at
+all — a duplicated guard fires exactly like a single one, so it needs a
+precondition rather than a test. Only the choice of precondition was wrong.
 
 ---
 
