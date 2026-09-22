@@ -35,7 +35,7 @@ covers the operating system.
 | **Checks** | 1517 across twenty-four suites, by `scripts/server-tests.sh`,
 98 more on a booted machine by `scripts/machine-tests.sh`, and 19 across two
 boots by `scripts/config-round-trip.sh` |
-| **Kernel** | 0.5.0, merged from `origin/kernel` |
+| **Kernel** | 0.5.14, merged from `origin/kernel` — **plus one fix that is not in their tree**, see below |
 
 The check figure is the first one this project has that was not assembled by
 hand. See **VF-012**: the suites had been run one `gcc` line at a time for
@@ -43,6 +43,31 @@ thirteen versions, and a suite nobody remembers to run is a suite that cannot
 fail.
 
 ---
+
+### What kernel this branch actually runs
+
+**0.5.14 from `origin/kernel`, plus `tcp_tick()` in `socket_accept`.** That
+line is the difference between a server that answers twelve requests and one
+that keeps going (VF-034). It has been offered to the kernel session three
+times and is not on their branch yet, so it is carried here.
+
+Which means a machine built from this branch **prints `ReconOS kernel 0.5.14`
+and does not behave like their 0.5.14.** That is worth stating in the place a
+person reads, because the version string is the only thing you can read off a
+running kernel — and the network session raised exactly this as NW-020, where
+three branches were answering to one number with three different trees.
+
+The number is deliberately **not** changed here. Renumbering the kernel belongs
+to the kernel session, who own it at merge time; a seat that renumbers
+unilaterally is how one number comes to mean four things. So this branch says
+what it has instead of claiming a number for it.
+
+`kernel/Makefile` also differs, and that one is not a behaviour change: it is
+the `ROLE=server` build, written as an override with a default so that
+`make ARCH=x86_64` with nothing else said produces exactly the bytes it
+produced before this branch existed.
+
+
 
 ## What works right now
 
