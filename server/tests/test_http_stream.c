@@ -859,9 +859,40 @@ int main(void)
 		fetch(port, "GET /tiny HTTP/1.1\r\nHost: m\r\n"
 		            "Accept-Encoding: gzip\r\n"
 		            "Connection: close\r\n\r\n", reply, sizeof(reply));
+		/*
+		 * Three, where the obvious version of this check is one.
+		 *
+		 * `!head_has(...)` on its own passes when the reply is
+		 * **empty** -- a server that crashed, a route that was never
+		 * registered, a connection that failed. `head_has` needs a
+		 * blank line to find, does not find one, and answers no, which
+		 * is exactly the answer this check wants. It would have gone
+		 * green on a server that said nothing at all.
+		 *
+		 * Demonstrated rather than asserted. With the route renamed so
+		 * `/tiny` answers 404 with no body, the suite reports:
+		 *
+		 *     FAIL  a body below the threshold is still answered
+		 *     FAIL  and arrives as the bytes that went in
+		 *
+		 * Two of the three. **The absence check is not in that list**
+		 * -- it passed, against a 404, which is the whole point: on its
+		 * own it was green on a server that was not serving this at
+		 * all.
+		 *
+		 * The network session found the same shape in their own log
+		 * port test, from this suite's note about `head_has`: *without
+		 * the word, the port yields nothing* passes when nothing comes
+		 * back for any reason. Theirs is saved by its neighbour. This
+		 * one had no neighbour.
+		 */
+		ok(strncmp(reply, "HTTP/1.1 200", 12) == 0,
+		   "a body below the threshold is still answered");
 		ok(!head_has(reply, "Content-Encoding"),
-		   "a body below the threshold is left alone, because framing "
-		   "would cost more than compression saves");
+		   "and is left alone, because framing would cost more than "
+		   "compression saves");
+		ok(body_of(reply) && strncmp(body_of(reply), TEXT, 16) == 0,
+		   "and arrives as the bytes that went in");
 	}
 
 	/* --- a HEAD of a compressed resource ---------------------------------- */
