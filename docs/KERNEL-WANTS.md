@@ -260,6 +260,32 @@ reason `docs/ROLES.md` gives.*
 > blocks nothing now: `server/dial.c` does the read itself, an outbound
 > connection is measured opening in 1 ms, and the reverse proxy is off this
 > entry. See VF-045.
+>
+> ### Why it is a ruling rather than a typo
+>
+> The argument is the network session's and it is better than the one this
+> entry made for itself, so it is recorded rather than summarised.
+>
+> `socket_accept` states the rule this kernel works by: *the handshake
+> completes when a frame is processed, and the thread that processes frames may
+> be this one. A caller waits by doing something else and asking again.* That
+> works for `accept` and `recv` **because those calls are the something else**
+> -- they service the device on the way in.
+>
+> A caller waiting on a handshake has nothing else available. It cannot send on
+> a socket that is not connected, and it cannot meaningfully receive on one. So
+> the nearest way to obey the rule is to call `recvfrom` on a half-open socket
+> purely for the side effect, which is exactly what `dial.c` now does and is a
+> workaround standing in for a missing line rather than a use of the interface.
+>
+> And there is no contract in the way: `net.h` declares `socket_connect` and
+> `socket_connect_progress` with nothing about driving the stack, so the fix
+> changes no promise anybody was given.
+>
+> **Two places it would show as working rather than merely not breaking**, when
+> the line lands: `scripts/cmdline-length-test.sh` and `scripts/logport-test.sh`
+> on `origin/network` both drive outbound traffic from the guest, and the
+> second asserts that a reader gets bytes. Offered by the network session.
 
 ### The measurement
 

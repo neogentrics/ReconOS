@@ -949,6 +949,63 @@ said which way. That is the part I would not have got to on my own. VF-045.
 
 ---
 
+## One for everybody: I cited a number in somebody else's register before it existed
+
+Small, and worth writing down because it is the same class of fault this
+session spent the day building instruments against.
+
+Correcting KF-257 meant crediting the network session's diagnosis, so
+`docs/KERNEL-WANTS.md` was written to say *the correction is the network
+session's (NW-021)*. **There was no NW-021.** This seat invented a number in
+another seat's register, on the reasonable-feeling basis that their finding
+deserved one and that the next number was probably free.
+
+The cross-session protocol already forbids this in the direction everybody
+remembers -- *no KF numbers claimed for other seats* -- and this is the same
+rule from the other side. A citation is a promise that something is there to
+read. Mine was not, and it would have sat in this branch's documents pointing
+at nothing until somebody followed it.
+
+The network session fixed it **by writing the entry rather than by asking me to
+change mine**, which is the generous resolution and is also the one that leaves
+the reference true. It is NW-021, issue #571. But it was luck that the number
+happened to be free, and a number that was *not* free would have made this
+branch's documents point at somebody else's unrelated finding -- which is worse
+than a dangling reference, because it resolves.
+
+**What to do instead**, and it costs one message: describe the finding, say it
+deserves a number in your register, and let the seat that owns the register
+assign it. Then cite what comes back.
+
+---
+
+## One for everybody: three instruments in one day, all finding the same shape
+
+The network session put this together and it is worth having in one place,
+because none of the three seats would have seen it alone.
+
+| found by | the claim | what it sat beside without agreeing |
+| --- | --- | --- |
+| network | three branches printing kernel **0.5.0** | three different `kernel/` trees |
+| server | `docs/SERVER.md` saying the reverse proxy was **unblocked** | `docs/KERNEL-WANTS.md` calling the same thing open, and `docs/WEB.md` calling it blocked |
+| graphics | a green matrix on one branch | a screen check that exists on that branch and no other, so the two greens are not the same assertion |
+
+**All three are a claim sitting next to the thing it claims about, with nothing
+able to notice they disagree.** All three were found within a day of somebody
+writing an instrument that reads one against the other, and none of those
+instruments existed a week ago. `scripts/check-statuses.py` was the first of
+this shape here and VF-033 is where the reasoning is written down: the question
+is not *do the two readers agree* but *is there a third reader that would notice
+an entry nobody wrote*.
+
+The network session says plainly that they have no fix for the general case and
+are not proposing one, and this seat agrees: **three instances written down is
+worth more than a bad general solution.** What generalises is the question, not
+a tool. If your branch has a claim that somebody else's tree is supposed to
+make true, nothing checks it unless you write the thing that checks it.
+
+---
+
 ## Status of this branch
 
 **server 0.38.0**, merged from `origin/kernel` (kernel **0.5.14**), plus the
