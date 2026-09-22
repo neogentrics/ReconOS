@@ -79,10 +79,15 @@ it is stale, that is a fault in this file rather than a detail.
 
 | fixed | state | what it changes for you |
 |-------|-------|--------------------------|
-| **KF-264** | verified here, unpushed | `scripts/kf150-rate.sh` no longer spends 56 of every 60 seconds watching a machine that finished in 3.6. Nothing outside the rig depends on it; the row is here because the rule below says a row goes in when a fix is verified and makes no exception for fixes nobody is planning around. |
+| *(nothing)* | | |
 
-**Not empty as of this commit, and the paragraph below is left standing
-because it describes the state this table is normally in.** KF-245 (the boot menu's
+**Empty again as of this commit.** KF-264, KF-268, KF-269 and KF-270 were the
+rows, and they are in `69dfb62..7803c02`, which is pushed. **The row outlived
+the fix by about ninety seconds and that was a fault in this file** -- the rule
+below says a row comes out in the *same* commit that publishes the fix, and
+this one came out in the commit after. Recorded rather than quietly tidied,
+because the whole value of the table is that somebody can trust it without
+checking. KF-245 (the boot menu's
 once-a-second full-screen clear) and KF-246 (six disk failures wearing one
 sentence) were the last two entries and they are in the commit you are reading
 this from -- so by the time `origin/kernel` shows you this table, it is already
