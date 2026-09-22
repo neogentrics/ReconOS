@@ -213,7 +213,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
-- **NW-020** — Five branches, three of them printing the same version for different kernels
+- **NW-020** — Branches printing the same version for different kernels
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
@@ -537,7 +537,7 @@ turned out to be true.
   by booting with the card and nowhere else — which for the Realtek has not
   happened at all.
 
-### NW-020 — Five branches, three of them printing the same version for different kernels
+### NW-020 — Branches printing the same version for different kernels
 
 [#550](https://github.com/neogentrics/ReconOS/issues/550)
 
@@ -590,6 +590,16 @@ turned out to be true.
   README. It exits 2 rather than 0 when it cannot tell, because a clone that has
   never fetched has no branches to compare and *"every version is unique"* is
   the one answer it must not give in that case.
+- **It has already shrunk, which is the check earning its keep rather than the
+  fault going away.** Re-run on 21 September: **0.5.4 is clear.** The kernel
+  session moved to 0.5.14 while `bluetooth` stayed at 0.5.4, so the number now
+  names one kernel. Nobody renumbered to fix it — it resolved because one side
+  moved on, which is how most of these will end and is not a reason to leave
+  them.
+
+  **0.5.0 remains, on three branches**: `graphics` (635ae1d8), `server`
+  (959d9850) and `userland` (64af7e42), mutually divergent, none containing
+  another.
 - **Proved both ways on live data.** It names the five collisions and exits 1;
   and 0.2.39, carried by two refs whose `kernel/` trees are identical, is
   correctly not flagged — the same number on the same kernel is not a collision
