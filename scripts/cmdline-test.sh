@@ -1,157 +1,221 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# Does a kernel command line reach the kernel? Asked of both loaders.
+# Does `\reconos\cmdline` reach the kernel, on BOTH loaders? (NW-013, KF-262)
 #
-# --- Why this exists ---------------------------------------------------------
+# **The UEFI boot is the control and it is not optional.** A BIOS boot that
+# shows no command line is equally well explained by a cmdline file written to
+# the wrong path inside the image -- and that explanation fails in the same
+# direction as the fault, so without the other loader booting the same medium,
+# a red result here means nothing. The network session made that point when
+# they found NW-013 and it is the reason this script exists in this shape.
 #
-# `boot/bios/stage2.c` writes an empty string into the handoff's cmdline field
-# and never reads `\reconos\cmdline`. The UEFI loader reads that file, strips a
-# trailing CR or LF, and passes it on. So every switch this kernel has is a
-# UEFI switch:
+# Four states are asserted, not two, because the fourth is the one both loaders
+# used to get wrong:
 #
-#   logport   verbose   noinit   recovery   poweroff   restart
+#   1  present, and it reaches the kernel        -- on BIOS and on UEFI
+#   2  absent                                    -- and neither loader complains
+#   3  too long for the loader's buffer          -- both refuse it, loudly,
+#                                                   and the kernel gets NOTHING
+#   4  ...which is state 3 on the other loader, asserted separately
 #
-# and nothing anywhere says so. That is NW-013, and it is open.
+# State 3 is KF-262. `EFI_FILE_PROTOCOL.Read` returns EFI_SUCCESS on a short
+# read, so an over-long file used to arrive silently truncated -- and
+# `boot_cmdline_has` matches whole tokens, so a `logport` cut to `logpo`
+# matches nothing and the switch simply does not happen. It failed closed and
+# silently, which is the combination that costs a day.
 #
-# It matters because of where it lands. The server in `docs/BARE-METAL.md` is
-# legacy BIOS. `logport.h` says the log port exists because the kernel's own
-# medium is USB and USB is the broken thing (KF-256) -- so it exists for the
-# machine that cannot record its own failure, and on that machine there is no
-# way to ask for it. `noinit` goes with it, and `noinit` is what makes
-# `xhci.c` print PORTSC for every port as the controller comes up: the
-# diagnostic for a USB fault, unavailable on the machine with the USB fault.
-#
-# --- Why nothing caught it ---------------------------------------------------
-#
-# `scripts/logport-test.sh` passes 7 of 7, over virtio-net and over e1000, and
-# every one of those runs enables the port with QEMU's `-append` on the
-# `-kernel` path -- which is neither loader. `verify-kernel.sh` does the same
-# wherever it needs a switch. **The BIOS loader's command line has never been
-# exercised by anything in this tree**, so nothing could have failed. A feature
-# can be fully tested and completely unreachable, and a green suite will not
-# mention it.
-#
-# --- The shape of the test ---------------------------------------------------
-#
-# One medium, one cmdline file, booted both ways. **The UEFI boot is the
-# control and it is not optional.** Without it, "no log port under BIOS" is
-# equally well explained by a cmdline file written to the wrong path or in the
-# wrong format -- in which case neither boot shows it, and the conclusion comes
-# out wrong in the same direction as the guess that prompted the test. The file
-# is also read back off the image before booting, so "the file is there and
-# says what it should" is a measurement rather than an assumption.
-#
-# Two switches are asked for, not one. `logport` announces itself in the boot
-# report and `verbose` changes it, so a run that shows neither is not a fact
-# about the log port in particular.
-#
-#   scripts/cmdline-test.sh
-#
-# Exits 0 when the two loaders agree, 1 when they disagree (the fault is
-# present), and 2 when the test could not answer -- which is a separate thing
-# from the fault and says so.
-#
-# Needs: qemu-system-x86_64, OVMF, sgdisk, mtools. All of them are already
-# needed by scripts/make-medium.sh or verify-kernel.sh.
-
+# Refuses rather than reporting an answer it cannot back: exit 2 when the tools
+# or OVMF are missing, exit 1 when a loader is wrong.
 set -u
 
 cd "$(dirname "$0")/.."
-
+ROOT=$PWD
 OVMF=${OVMF:-/usr/share/ovmf/OVMF.fd}
 
-command -v qemu-system-x86_64 >/dev/null || { echo "no qemu"; exit 2; }
-command -v sgdisk            >/dev/null || { echo "no sgdisk"; exit 2; }
-command -v mcopy             >/dev/null || { echo "no mtools"; exit 2; }
+for t in qemu-system-x86_64 mcopy mdir sgdisk; do
+	command -v "$t" >/dev/null || { echo "  no $t; cannot answer"; exit 2; }
+done
+[ -f "$OVMF" ] || { echo "  no OVMF at $OVMF; the control boot cannot run"; exit 2; }
 
-if [ ! -f "$OVMF" ]; then
-	echo "no OVMF at $OVMF -- refusing to run."
-	echo "  The UEFI boot is this test's control. Without it a BIOS boot"
-	echo "  showing nothing proves nothing, because a cmdline file written"
-	echo "  wrongly looks exactly like a loader that ignores it."
-	exit 2
-fi
+W=$(mktemp -d)
+trap 'rm -rf "$W"' EXIT
 
-WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
-IMG=$WORK/medium.img
+pass=0
+fail=0
 
-echo "  the kernel command line, through both loaders"
-
-scripts/make-medium.sh "$IMG" 512M >"$WORK/mk.log" 2>&1 || {
-	echo "    could not build the medium:"; tail -5 "$WORK/mk.log"; exit 2; }
-
-ESP_LBA=$(sgdisk -i 2 "$IMG" | sed -n 's/^First sector: \([0-9]*\).*/\1/p')
-[ -n "$ESP_LBA" ] || { echo "    could not find the EFI partition"; exit 2; }
-ESP_OFF=$((ESP_LBA * 512))
-
-WANT='logport verbose'
-printf '%s' "$WANT" > "$WORK/cmdline"
-mcopy -o -i "$IMG@@$ESP_OFF" "$WORK/cmdline" ::/reconos/cmdline 2>/dev/null || {
-	echo "    could not write the cmdline file onto the medium"; exit 2; }
-
-# Read back, so its presence is measured rather than assumed.
-GOT=$(mcopy -i "$IMG@@$ESP_OFF" ::/reconos/cmdline - 2>/dev/null)
-if [ "$GOT" != "$WANT" ]; then
-	echo "    the cmdline file did not read back as written:"
-	echo "      wrote [$WANT] read [$GOT]"
-	echo "    this test cannot say anything about either loader"
-	exit 2
-fi
-
-boot() {
-	local out=$1; shift
-	timeout 180 qemu-system-x86_64 -m 1024M -display none -no-reboot \
-		-netdev user,id=n0 -device e1000,netdev=n0 \
-		-drive if=none,id=stick,format=raw,file="$IMG" \
-		-device usb-ehci,id=ehci \
-		-device usb-storage,bus=ehci.0,drive=stick,bootindex=0 \
-		"$@" -serial file:"$out" >/dev/null 2>&1
+check() {
+	if [ "$1" = yes ]; then
+		printf '    %-56s ok\n' "$2"
+		pass=$((pass + 1))
+	else
+		printf '    %-56s FAILED\n' "$2"
+		[ -n "${3:-}" ] && printf '      %s\n' "$3"
+		fail=$((fail + 1))
+	fi
 }
 
-boot "$WORK/bios.log"
-boot "$WORK/uefi.log" -bios "$OVMF"
+echo "  the kernel command line, on both loaders"
 
-# `grep -c` prints 0 *and* exits 1 when it finds nothing, so `|| echo 0` would
-# append a second zero and the comparisons below would die on a two-line
-# number. `|| true` swallows the status without printing anything; the default
-# covers a missing file, where grep prints nothing at all.
-bios=$(grep -ac "log port" "$WORK/bios.log" 2>/dev/null || true); bios=${bios:-0}
-uefi=$(grep -ac "log port" "$WORK/uefi.log" 2>/dev/null || true); uefi=${uefi:-0}
+bash scripts/make-medium.sh "$W/m.img" >/dev/null 2>&1 || {
+	echo "    the medium would not build"; exit 2; }
 
-# Did either boot get far enough to be asked? A kernel that never started says
-# nothing about command lines, and must not be read as one that ignored it.
-for f in bios uefi; do
-	if ! grep -aq "ReconOS kernel" "$WORK/$f.log" 2>/dev/null; then
-		echo "    the $f boot never reached the kernel, so this test"
-		echo "    cannot answer. Its output:"
-		tail -5 "$WORK/$f.log" | sed 's/^/      /'
-		exit 2
+# Where the EFI partition starts, asked of the image rather than assumed.
+esp_lba=$(sgdisk -i 2 "$W/m.img" 2>/dev/null | grep -oE 'First sector: [0-9]+' | grep -oE '[0-9]+')
+[ -n "$esp_lba" ] || { echo "    could not find the EFI partition"; exit 2; }
+off=$((esp_lba * 512))
+
+# Put a command line on the medium, then READ IT BACK OFF THE IMAGE. A file
+# written to the wrong path is the competing explanation for every failure
+# below, so it is ruled out here rather than argued about later.
+set_cmdline() {
+	printf '%s' "$1" > "$W/cmdline"
+	mcopy -o -i "$W/m.img@@$off" "$W/cmdline" ::/reconos/cmdline 2>/dev/null || return 1
+	mdir -i "$W/m.img@@$off" ::/reconos 2>/dev/null | grep -qi cmdline
+}
+
+clear_cmdline() {
+	mdel -i "$W/m.img@@$off" ::/reconos/cmdline 2>/dev/null
+	! mdir -i "$W/m.img@@$off" ::/reconos 2>/dev/null | grep -qi cmdline
+}
+
+# Did the kernel actually run?
+#
+# **The first version of this script had no such question, and it cost the
+# afternoon.** A stray signing key left in the tree made the loader refuse an
+# unsigned kernel, so the BIOS guest never started one -- and the assertion
+# "bios is silent when there is no cmdline" PASSED, because a machine that
+# prints nothing is silent about everything. A check satisfied by the absence
+# of the thing it is checking is not a check.
+#
+# The graphics session's harness says this better than I can: *the guest never
+# reached the filesystem, so there is no image to prove the checker against --
+# this is not a filesystem fault.*
+booted() {
+	echo "$1" | grep -qa 'ReconOS kernel'
+}
+
+# What the KERNEL says about its command line, which is not the same string as
+# what a LOADER says about one.
+#
+# The first version grepped for `command line`, and the loader's own refusal --
+# "the command line is too long for this loader" -- contains it. So the
+# assertion that nothing was passed to the kernel was satisfied by the message
+# saying nothing was passed. KF-207's shape: a pattern another subsystem can
+# satisfy by printing.
+kernel_cmdline() {
+	echo "$1" | grep -aoE 'command line : .*' | head -1
+}
+
+boot() {
+	local mode=$1 out=$2 pid n
+	if [ "$mode" = uefi ]; then
+		timeout 90 qemu-system-x86_64 -m 512M -display none \
+			-serial file:"$out" -no-reboot -bios "$OVMF" \
+			-device qemu-xhci,id=xhci \
+			-drive if=none,id=stick,format=raw,file="$W/m.img" \
+			-device usb-storage,bus=xhci.0,drive=stick \
+			>/dev/null 2>&1 &
+	else
+		timeout 90 qemu-system-x86_64 -m 512M -display none \
+			-serial file:"$out" -no-reboot \
+			-drive if=none,id=d0,format=raw,file="$W/m.img" \
+			-device ide-hd,drive=d0 >/dev/null 2>&1 &
+	fi
+	pid=$!
+	n=0
+	while [ "$n" -lt 320 ]; do
+		grep -qa 'Idling' "$out" 2>/dev/null && break
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 0.25
+		n=$((n + 1))
+	done
+	kill "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+	tr -d '\r' < "$out"
+}
+
+# --- 1. present, and it reaches the kernel ---------------------------------
+
+WANT="logport verbose"
+
+if ! set_cmdline "$WANT"; then
+	echo "    could not write the cmdline onto the medium"; exit 2
+fi
+
+for mode in bios uefi; do
+	got=$(boot "$mode" "$W/$mode.log")
+	if ! booted "$got"; then
+		check no "$mode carries the command line to the kernel" \n			"the kernel never started -- this says nothing about cmdline"
+		continue
+	fi
+	line=$(kernel_cmdline "$got")
+	if echo "$line" | grep -qa "$WANT"; then
+		check yes "$mode carries the command line to the kernel"
+	else
+		check no "$mode carries the command line to the kernel" \
+			"the kernel said: ${line:-(no command line line at all)}"
 	fi
 done
 
-printf '    %-56s %s\n' "UEFI carries the command line" \
-	"$([ "$uefi" -gt 0 ] && echo ok || echo FAILED)"
-printf '    %-56s %s\n' "BIOS carries the command line" \
-	"$([ "$bios" -gt 0 ] && echo ok || echo "FAILED -- NW-013")"
+# --- 2. absent, and neither loader complains -------------------------------
 
-if [ "$uefi" -eq 0 ]; then
-	echo
-	echo "    The control failed: UEFI did not carry it either. That is a"
-	echo "    fault in this test or in the medium, not evidence about the"
-	echo "    BIOS loader. Do not record a result from this run."
-	exit 2
+if clear_cmdline; then
+	for mode in bios uefi; do
+		got=$(boot "$mode" "$W/${mode}-none.log")
+		if ! booted "$got"; then
+			check no "$mode is silent when there is no cmdline" \n				"the kernel never started -- silence proves nothing"
+			continue
+		fi
+		if echo "$got" | grep -qaiE 'cmdline:|command line is too long|would not read whole'; then
+			check no "$mode is silent when there is no cmdline" \
+				"$(echo "$got" | grep -aiE 'cmdline:|too long|read whole' | head -1)"
+		else
+			check yes "$mode is silent when there is no cmdline"
+		fi
+	done
+else
+	echo "    could not remove the cmdline; states 2 and 3 not asked"
+	fail=$((fail + 1))
 fi
 
-if [ "$bios" -eq 0 ]; then
-	echo
-	echo "    NW-013 is present. The UEFI boot reports:"
-	grep -a "command line" "$WORK/uefi.log" | head -1 | sed 's/^/      /'
-	echo "    and the BIOS boot reports no command line at all."
-	echo "    boot/bios/stage2.c writes an empty string and never reads"
-	echo "    \\reconos\\cmdline. dir_find and read_file are already there."
-	exit 1
+# --- 3. too long: refused loudly, and NOTHING passed -----------------------
+#
+# 200 bytes against a 128-byte field. The word that matters is at the front, so
+# a loader that truncated instead of refusing would still pass "logport" to the
+# kernel -- which is why the assertion is on the kernel's line being ABSENT
+# rather than on the loader's complaint alone.
+
+LONG="logport $(head -c 200 /dev/zero | tr '\0' 'x')"
+
+if set_cmdline "$LONG"; then
+	for mode in bios uefi; do
+		got=$(boot "$mode" "$W/${mode}-long.log")
+		if ! booted "$got"; then
+			check no "$mode refuses an over-long cmdline out loud" \n				"the kernel never started"
+			continue
+		fi
+		said=$(echo "$got" | grep -aiE 'too long|would not read whole' | head -1)
+		kern=$(kernel_cmdline "$got")
+
+		if [ -n "$said" ]; then
+			check yes "$mode refuses an over-long cmdline out loud"
+		else
+			check no "$mode refuses an over-long cmdline out loud" \
+				"nothing was said about it"
+		fi
+
+		if [ -z "$kern" ]; then
+			check yes "$mode passes none of it rather than a prefix"
+		else
+			check no "$mode passes none of it rather than a prefix" \
+				"the kernel got: $kern"
+		fi
+	done
+else
+	echo "    could not write the over-long cmdline"
+	fail=$((fail + 1))
 fi
 
-echo "    both loaders carry it -- NW-013 is fixed"
-exit 0
+echo
+echo "    $pass of $((pass + fail)) checks passed"
+[ "$fail" -eq 0 ] || exit 1

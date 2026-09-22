@@ -427,7 +427,27 @@
 # This one was killed at sixty-seven seconds, which is the cheapest of the five
 # and the reason it was not deferred. The temptation to defer is the whole
 # subject of KF-200 and it does not get weaker with practice.
-VERSION := 0.5.10
+#
+# **0.5.13 on 21 September 2026: twelve fixes on 0.5.0, and the number is
+# thirteen because twelve was taken.**
+#
+# This tree now holds every fix from both branches — six from here (NW-010,
+# NW-011, NW-012, NW-014, NW-017, NW-018) and six from the kernel session
+# (KF-258 through KF-262, and NW-013 which was theirs to fix). Twelve.
+#
+# **But 0.5.12 already names their tree**, and this one is a strict superset of
+# it — it contains their twelve-fix line plus this branch's six. Two trees
+# answering to 0.5.12 is precisely NW-020, which this branch opened, so counting
+# to twelve here would have meant filing a fault against myself within the hour.
+# Stepped over, on the 0.2.38/0.2.39 precedent.
+#
+# **This one is the clean case and theirs was not.** Their 0.5.11 and 0.5.12 sit
+# above this branch's 0.5.10 without containing it — a higher number that is not
+# a superset, which they named as a wart and took deliberately over a duplicate.
+# Here the higher number *is* a superset: everything 0.5.12 names is in this
+# tree, and six more things besides. That is the ordering working rather than
+# being worked around.
+VERSION := 0.5.13
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

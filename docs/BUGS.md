@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-20, and each entry says why. They are listed because a register that only
+19, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -213,7 +213,6 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **NW-004** — Network cards are bound from a file called storage.c, once per architecture
 - **NW-005** — A PCI device without MSI-X cannot be given an interrupt at all, and falls back to polling silently
 - **NW-013** — A BIOS boot carries no kernel command line, so every switch is a UEFI switch
-- **NW-019** — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
 - **NW-020** — Five branches, three of them printing the same version for different kernels
 - **KF-249** — Plug in a USB keyboard and the machine can never idle again
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
@@ -658,56 +657,6 @@ turned out to be true.
 
   That is not an argument for doing anything differently here. It is an argument
   for not reading a corrected entry as a corrected project.
-
-### NW-019 — A command line longer than the buffer is cut in silence, and the switch past the cut never happens
-
-[#549](https://github.com/neogentrics/ReconOS/issues/549)
-
-- **Found in** `boot/src/main.c`, on 21 September 2026, by the network session,
-  while answering the kernel session's question about how the **BIOS** loader
-  should report a cmdline file it cannot fully use — which sent me to look at
-  how the UEFI loader does it, and it does not.
-- **Was** `read_cmdline` declares `cmdline_buf[128]` and asks EFI for
-  `sizeof(cmdline_buf) - 1` = **127 bytes**. `EFI_FILE_PROTOCOL.Read` fills the
-  buffer and returns `EFI_SUCCESS`: a file longer than that is not an error, it
-  is a short read that is indistinguishable from a complete one. The handoff
-  field is `char cmdline[128]` too, so there is no headroom further down.
-- **Measured, with a control, rather than argued from the source.** One medium,
-  two UEFI boots, differing only in the length of `\reconos\cmdline`:
-
-  | the file | what the report said | log port |
-  |---|---|---|
-  | `logport` (7 bytes) | `command line : logport` | **listening** |
-  | 130 bytes of padding, then ` logport` (138) | `command line : xxxxxxxx...` | **absent** |
-
-  Nothing anywhere said the line had been cut. The control is what makes this a
-  result: without it, "no log port" is equally well explained by a medium that
-  was never built right.
-- **This is NW-013's failure mode one level in, and it fails the same way.**
-  `boot_cmdline_has` matches whole tokens — it requires the match to end at a
-  space or a NUL — so a `logport` cut to `logpo` matches nothing and the switch
-  simply does not happen. **Fails closed, which is the safe direction, and in
-  silence, which is the direction that costs an evening.**
-- **There is partial visibility and it is worse than none in the ordinary case.**
-  The boot does print `command line : <the truncated text>`, so somebody reading
-  carefully can see the tail is missing. But the line that would make it obvious
-  — 130 identical padding characters — is an artefact of this test. A real
-  overlong cmdline is a list of plausible switches with one missing off the end,
-  which reads as correct.
-- **Why 127 bytes is reachable at all**, since the obvious objection is that
-  nobody writes a command line that long. `recovery logport verbose noinit` is
-  31. The file is edited by hand on another machine, by somebody who cannot see
-  the failure, and the documented way to use it is to add words to it. It is a
-  buffer that a person fills by typing.
-- **Not fixed here.** `boot/` is the boot track's, the kernel session is inside
-  that file this week writing NW-013's fix, and two sessions editing one loader
-  is how a loader stops booting. Reported with the measurement instead.
-- **The reason it is urgent rather than merely true:** the BIOS loader is being
-  written now, against the UEFI one as its reference. `put_str` in
-  `stage2.c` truncates silently too — it copies at most `max - 1` and
-  zero-fills, which is memory-safe and says nothing — so a BIOS implementation
-  that mirrors UEFI inherits this rather than avoiding it. The size is already
-  in hand from `dir_find`, so the check is a comparison and not a second read.
 
 ### NW-018 — The Open list was checked entry by entry and the number introducing it was not
 
@@ -8939,6 +8888,107 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-262 — A command line longer than the buffer was cut in half and reported as read
+
+- **Found:** 20 September 2026, by the **network session**, while answering a
+  design question I had asked them about the *other* loader. I asked what a
+  BIOS loader should say when `\reconos\cmdline` is absent. Their answer was
+  that it is four states rather than two — and that the fourth one, truncation,
+  is a state the **UEFI** loader was already getting wrong.
+
+- **Was:** `read_cmdline` in `boot/src/main.c` asked for `sizeof(cmdline_buf)
+  - 1` bytes and checked only `EFI_ERROR(s)`.
+
+  ```c
+  UINTN size = sizeof(cmdline_buf) - 1;      /* 127 */
+  s = file->Read(file, &size, cmdline_buf);
+  if (EFI_ERROR(s)) { ... }
+  cmdline_buf[size] = '\0';
+  ```
+
+  **`EFI_FILE_PROTOCOL.Read` fills the buffer and returns `EFI_SUCCESS` when
+  the file is longer than the buffer.** A short read is not an error and is
+  indistinguishable from a complete one unless the size is checked separately.
+  So any command line past 127 bytes arrived silently cut.
+
+- **Why the cut is silent all the way down, which is the part that matters.**
+  `boot_cmdline_has` matches **whole tokens** — `(*q == '\0' || *q == ' ')` —
+  so a `logport` cut to `logpo` matches nothing at all. The switch simply does
+  not happen.
+
+  **It fails closed, which is the safe direction, and it fails silently, which
+  is the direction that costs a day.** The boot then prints
+
+  ```
+  command line : recovery verbose ... logpo
+  ```
+
+  which looks like a machine that was asked for something and did it. Nothing
+  anywhere says a word was lost.
+
+- **The rule was already written down in the same file, seventy lines away.**
+  `read_initrd` does it correctly and always has: `GetInfo` for the real size,
+  read, then `want != size` and *"the initrd would not read whole"* — under a
+  comment stating the principle in as many words:
+
+  > *An initrd that was present and could not be loaded is a different fact
+  > from one that was not there, and the kernel would otherwise boot looking
+  > identical to a machine that never had one.*
+
+  Two file readers, one file, one author, seventy lines apart, and only one of
+  them applies the rule the other spells out. **Same shape as KF-261**, where
+  the comment describing the fault sat directly above the line committing it,
+  and KF-200 before that.
+
+- **Cost:** no machine is known to have hit it, because no `\reconos\cmdline`
+  in this tree has ever been near 127 bytes. It is recorded at full weight
+  anyway: the cost of a fault is not how often it has fired, and this one is
+  arriving exactly as the project starts putting real switches on real
+  machines' command lines.
+
+- **Fixed in** kernel 0.5.12. Both loaders now handle the same four states, and
+  deliberately the same, because **two loaders that disagree about one medium
+  send the next person to whichever one is quiet**:
+
+  | the file is | what happens |
+  |---|---|
+  | absent | silent. The normal case — `make-medium.sh` omits it on purpose so an `install-onto=` cannot ride in on a stick |
+  | read whole | silent **here**. The kernel prints `command line : ...` itself, and that is the better report: it says what the kernel *received* rather than what the loader believed it sent. Two announcements of one fact is how they come to disagree |
+  | too long | **loud, and nothing is passed** |
+  | short read | **loud, and nothing is passed** |
+
+- **The version skips from 0.5.4 to 0.5.11, and the gap is deliberate.** The
+  network branch published **0.5.6** at `1a6a9c4` while this branch was about to
+  publish its own. A number that names two different trees is broken in a way a
+  register cannot paper over: the *binary* prints `ReconOS kernel 0.5.6`, and two
+  machines printing the same string would be running different kernels. A branch
+  qualifier in an entry fixes the register and not the machine.
+
+  So the two sequences are **laid end to end**, which is the precedent this
+  project already set when the desktop and kernel tracks had reached different
+  numbers independently. NW-013 takes **0.5.11** and this takes **0.5.12**,
+  above the network branch's 0.5.10. 0.5.5 to 0.5.10 are never used here and are
+  named by nothing. Found by the network session before either entry was
+  published, which is the only reason it cost a rename rather than a retraction.
+
+  **Nothing rather than a prefix.** Half of `recovery logport` is a different
+  instruction from either word, and a command line the person did not write is
+  worse than no command line. The size is compared against the *directory
+  entry* rather than against what was read, because what was read is the number
+  the fault used to hide behind.
+
+- **Checked by** `scripts/cmdline-test.sh`, which asserts all four states on
+  **both** loaders against one medium — and the over-long case asserts on the
+  kernel's line being **absent**, not merely on the loader complaining, because
+  a loader that truncated instead of refusing would still pass `logport` and
+  still print a warning.
+
+- **Note:** the phrase that keeps the fourth state from being forgotten is the
+  network session's: *the loader is loud when the file exists and did not
+  entirely take effect.* "Unreadable" on its own does not obviously include
+  "read fine, just not all of it", and the first version of this fix would have
+  covered only the first.
 
 ### KF-261 — The register page summarised 337 of 356 entries, and the comment explaining why sat directly above the line doing it
 

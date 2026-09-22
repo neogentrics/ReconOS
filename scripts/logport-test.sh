@@ -33,8 +33,14 @@ KERNEL=kernel/build/$ARCH/reconos-kernel.elf
 #
 # It was a fixed 14919. Two of these at once -- two worktrees, or this wired
 # into a run that something else is already running -- both bind the same host
-# port, and the second one fails in a way that reads like the kernel did not
-# listen. Nothing about that failure would point at the port.
+# port, and **the second one fails in a way that reads like the kernel did not
+# listen**: "the guest never printed a log port line", with QEMU's "could not
+# set up host forwarding rule" one line lower and nothing connecting them.
+#
+# Taken from the network session, who hit it and fixed it there first. It
+# reached this branch on 21 September, in the minutes before a matrix that
+# would have raced another session's -- their warning arrived while that run
+# was eight lines in, and it was stopped to take this rather than to find out.
 #
 # Overridable, because a fixed port is what you want when debugging by hand and
 # a free one is what you want when something else chose the moment to run.

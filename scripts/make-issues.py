@@ -224,6 +224,8 @@ AREA = {
     'KF-259': 'build',
     'KF-260': 'build',
     'KF-261': 'build',
+    # A bootloader fault, like KF-215, KF-216, KF-230 and KF-233.
+    'KF-262': 'startup',
     # The other two tracks' registers, which arrived with their branches and
     # had no line here at all. Read off their own titles, 20 September 2026.
     #
