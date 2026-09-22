@@ -297,6 +297,44 @@ def main():
         print()
         print("%d fault(s) across %d files." % (found, looked))
         return 1
+
+    #
+    # Zero is an unread tree, not a clean one.
+    #
+    # The denominator beside this number says how much was looked at, and a
+    # denominator only helps a reader who brings an expectation. This needs
+    # nobody: it encodes a fact about the repository that cannot quietly stop
+    # being true. See `check-site-init.py` for where this started, and the
+    # network session's check_citations for the case that makes it urgent --
+    # the environment that produces zero there is the one the matrix runs in,
+    # so the check most likely to meet the conditions that break it was the one
+    # that passed under them.
+    #
+    if not looked:
+        print("read no C files at all.")
+        print("This repository is written in C. The check did not read the")
+        print("tree -- it has not passed, it has failed to run.")
+        return 1
+
+
+    #
+    # Zero is an unread tree, not a clean one.
+    #
+    # The denominator beside this number says how much was looked at, and a
+    # denominator only helps a reader who brings an expectation. This needs
+    # nobody: it encodes a fact about the repository that cannot quietly stop
+    # being true. See `check-site-init.py` for where this started, and the
+    # network session's check_citations for the case that makes it urgent --
+    # the environment that produces zero there is the one the matrix runs in,
+    # so the check most likely to meet the conditions that break it was the one
+    # that passed under them.
+    #
+    if not looked:
+        print("read no C files at all.")
+        print("This repository is written in C. The check did not read the")
+        print("tree -- it has not passed, it has failed to run.")
+        return 1
+
     print("literals: %d files, none left open and no stray bytes" % looked)
     return 0
 

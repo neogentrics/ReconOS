@@ -109,6 +109,44 @@ def main():
         print("%d status(es) sent without a phrase." % len(missing))
         return 1
 
+
+    #
+    # Zero is an unread tree, not a clean one.
+    #
+    # The denominator beside this number says how much was looked at, and a
+    # denominator only helps a reader who brings an expectation. This needs
+    # nobody: it encodes a fact about the repository that cannot quietly stop
+    # being true. See `check-site-init.py` for where this started, and the
+    # network session's check_citations for the case that makes it urgent --
+    # the environment that produces zero there is the one the matrix runs in,
+    # so the check most likely to meet the conditions that break it was the one
+    # that passed under them.
+    #
+    if not used:
+        print("found no status literals anywhere in the source.")
+        print("This server sends statuses on every request. The check did not")
+        print("read the tree -- it has not passed, it has failed to run.")
+        return 1
+
+
+    #
+    # Zero is an unread tree, not a clean one.
+    #
+    # The denominator beside this number says how much was looked at, and a
+    # denominator only helps a reader who brings an expectation. This needs
+    # nobody: it encodes a fact about the repository that cannot quietly stop
+    # being true. See `check-site-init.py` for where this started, and the
+    # network session's check_citations for the case that makes it urgent --
+    # the environment that produces zero there is the one the matrix runs in,
+    # so the check most likely to meet the conditions that break it was the one
+    # that passed under them.
+    #
+    if not used:
+        print("found no status literals anywhere in the source.")
+        print("This server sends statuses on every request. The check did not")
+        print("read the tree -- it has not passed, it has failed to run.")
+        return 1
+
     print("statuses: %d sent, all of them in the table" % len(used))
     return 0
 

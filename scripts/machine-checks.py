@@ -644,6 +644,12 @@ def a_range_is_never_compressed():
     """
     status, lines, whole = parts(get("/console.css"))
     if status.startswith("HTTP/1.1 404"):
+        # Printed rather than returned in silence. This asserts nothing when
+        # there is no volume, which is right -- and a check that skips itself
+        # without saying so is indistinguishable from one that passed, which
+        # is the fault `check-site-init.py` carried until somebody looked.
+        print("  note  no volume attached; the range-compression check is "
+              "skipped")
         return
 
     status, lines, body = parts(get("/console.css",
