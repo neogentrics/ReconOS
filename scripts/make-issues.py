@@ -600,15 +600,36 @@ def check_citations(text):
         return 0
 
     missing = {}
+    read = 0
+    looked = 0
+
     for ref in out.stdout.split():
         if ref.endswith('HEAD'):
             continue
         for doc in ('docs/KERNEL-WANTS.md', 'docs/SIGNALS.md', 'docs/BUGS.md'):
+            looked += 1
             got = subprocess.run(['git', 'show', ref + ':' + doc],
                                  capture_output=True, encoding='utf-8',
                                  errors='replace')
+
+            '''
+            A document a branch does not have is not a fault -- not every
+            branch keeps a KERNEL-WANTS. But **skipping it silently is**, and
+            this counted nothing until the server session's rule was pointed at
+            it: a branch whose documents all failed to read produced the same
+            clean sentence as one read end to end, and every branch failing
+            produced it too.
+
+            So the denominator is reported. The count is the check's own
+            traversal, which by that rule cannot detect a traversal that
+            skipped things -- but a reader comparing "12 of 18" against the
+            number of branches they know exist has an expectation the check did
+            not supply.
+            '''
             if got.returncode != 0:
                 continue
+
+            read += 1
             for cited in set(re.findall(r'\bNW-\d+\b', got.stdout)):
                 if cited not in mine:
                     missing.setdefault(cited, []).append(ref + ':' + doc)
@@ -618,7 +639,9 @@ def check_citations(text):
               % (num, ', '.join(sorted(missing[num]))))
 
     if not missing:
-        print('  every NW- number cited on another branch has an entry here')
+        print('  every NW- number cited on another branch has an entry here '
+              '(%d of %d documents read across %d branches)'
+              % (read, looked, looked // 3))
     return 1 if missing else 0
 
 
