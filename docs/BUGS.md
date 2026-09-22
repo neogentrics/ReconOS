@@ -8704,10 +8704,64 @@ boot log.
   return and a gate inside the report holds. Nothing observed so far separates
   them.
 
-- **What would settle it**, and it is cheap: one boot of each arm with a print
-  at the top of `timer_sleep_probe_report`, before the gates. If the unfixed
-  arm prints it, the machine is awake and the gate is wrong; if it does not,
-  the machine has stopped. Not done yet — the box was measuring.
+- **The experiment as first written would not have separated the two**, and the
+  network session caught it before the boot was spent. A print above the
+  report's gates is *also* after the halt, so on the first candidate it stays
+  silent and says nothing a missing call would not also explain. **Two prints:**
+  one above `power_idle_wait`'s halt, one above the report's gates.
+
+- **Run 22 September 2026. Neither candidate survived it, and the reason is
+  better than either.** With the two prints in, the unfixed kernel's probe
+  *ran to completion and reported*:
+
+  ```
+  KF263-A: idle wait entered, #5 at 3434 ms
+  KF263-B: report reached, #5 at 4435 ms, armed=3434 finished=0 reported=0
+  KF263-B: report reached, #6 at 4978 ms, armed=3434 finished=1 reported=0
+  Sleep probe (KF-258)
+  ```
+
+  Two things had been changed at once — the diagnostic prints and the KF-269
+  work — so the run was repeated with one variable:
+
+  | build | diagnostic prints | probe report |
+  |---|---|---|
+  | `7f85c94` before arm | none | **silent** |
+  | 0.5.22 before arm | none | **silent** |
+  | 0.5.22 before arm | two `kprintf`s | **reports, `finished=1`** |
+
+  **The instrument makes the fault go away.** Same kernel, same one-line diff;
+  the only difference is two prints in the idle path, and with them the probe
+  gets scheduled. The print does the job the missing `sched_yield()` would have
+  done.
+
+- **`kernel/core/power.c` asserts this cannot happen, and the assertion is now
+  falsified by measurement.** Beside the backstop call:
+
+  > *The report prints once, seconds after the fault it describes, so it cannot
+  > be the kprintf that makes KF-258 go away: that one ran on every pass.*
+
+  The reasoning is that a print running on every pass cannot be what rescues a
+  particular pass. The measurement says otherwise. **It is a claim that was
+  reasoned rather than tested, in the same file as the fault, which is this
+  register's most repeated shape** — and this time it was load-bearing: it is
+  the sentence that would have talked the next person out of suspecting their
+  own instrument.
+
+- **So this cannot be diagnosed by printing, and the next instrument is already
+  in the tree.** `power_idle_tickless()` is exported from `power.c` and counts
+  idle entries **without printing anything**. Read out after the window — from
+  an end-of-boot summary rather than from inside the idle loop — it says
+  whether the processor idled at all on the unfixed arm, at no risk of
+  perturbing what it measures.
+
+  Not done in this pass, deliberately: it is a kernel change and there are
+  seven commits waiting on a matrix, so it goes after the push rather than
+  riding on it.
+
+- **Status:** open. What is established is that the backstop has never fired on
+  an unfixed kernel, and that every attempt to watch it from inside the idle
+  path prevents the thing being watched.
 
 - **Why this is recorded at full weight although a debugging probe is not
   shipped code.** The probe exists to diagnose KF-258's family of faults, and
