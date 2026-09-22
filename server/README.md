@@ -32,7 +32,7 @@ covers the operating system.
 | **Version** | 0.38.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 21 September 2026 |
-| **Checks** | 1519 across twenty-four suites, by `scripts/server-tests.sh`,
+| **Checks** | 1558 across twenty-five suites, by `scripts/server-tests.sh`,
 98 more on a booted machine by `scripts/machine-tests.sh`, and 19 across two
 boots by `scripts/config-round-trip.sh` |
 | **Kernel** | 0.5.14, merged from `origin/kernel` — **plus one fix that is not in their tree**, see below |
@@ -253,6 +253,7 @@ project builds with, and following them left two suites unbuildable.
 | `server_http_serve` | 108 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 49 | streaming, and the promise that must not be broken |
+| `server_proxy` | 39 | passing a request on, and the headers that must not go with it |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
 | `server_http_cache` | 46 | validators, and the two headers that read them opposite ways |
 | `server_service` | 37 | services, their states, and the restart that has to stop |

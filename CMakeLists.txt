@@ -956,6 +956,26 @@ add_executable(recon_server_stream_tests
 
 add_test(NAME server_http_stream COMMAND recon_server_stream_tests)
 
+# Passing a request on, and the headers that must not go with it.
+#
+# Three parties: a fake upstream that records what it received, the real
+# `serve.c` with a proxying route, and the test as client. The recording is the
+# point -- asserting on what this server MEANT to send would be asserting on
+# its own opinion of itself, and the faults worth catching are the ones where a
+# client reaches past this server into a connection it cannot see.
+add_executable(recon_server_proxy_tests
+    server/http/request.c
+    server/http/serve.c
+    server/http/chunked.c
+    server/http/accept.c
+    server/http/deflate.c
+    server/http/cache.c
+    server/http/proxy.c
+    server/dial.c
+    server/tests/test_proxy.c)
+
+add_test(NAME server_proxy COMMAND recon_server_proxy_tests)
+
 # Decoding a form, and the field that has two values.
 #
 # Pure -- every case is a string literal, no sockets and no files, which is the

@@ -100,6 +100,17 @@
  */
 #define HTTP_EINTERNAL    (-11)	/* the server's own answer failed; 500 */
 
+/*
+ * Two that are somebody else's fault, and are deliberately not 500.
+ *
+ * A proxy whose upstream is unreachable has not failed -- it has correctly
+ * reported that a machine it depends on is not answering, which is a different
+ * thing for whoever reads the log and a different thing for whoever is paged.
+ * 500 would say this server is broken. It is not.
+ */
+#define HTTP_EUPSTREAM    (-12)	/* could not reach it, or it spoke nonsense; 502 */
+#define HTTP_EUPSTREAM_SLOW (-13) /* it accepted and did not answer in time; 504 */
+
 struct http_header {
 	char name[HTTP_NAME_MAX];	/* lower-cased; field names are
 					 * case-insensitive and storing them

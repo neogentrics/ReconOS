@@ -125,11 +125,24 @@ struct http_response {
  * fields are the server's and a handler should touch none of them. `written`
  * is readable and is occasionally the honest thing to log.
  */
-/* How many headers a handler may add beyond the ones the server writes. Four
- * covers a validator, a cache directive, a location and one spare; a handler
- * needing more is a handler that wants a general header list, which
- * `docs/WEB.md` specifies and nothing yet needs. */
-#define HTTP_SINK_EXTRA_MAX 4
+/*
+ * How many headers a handler may add beyond the ones the server writes.
+ *
+ * Four covered a validator, a cache directive, a location and one spare, and
+ * the comment here said that a handler needing more wanted a general header
+ * list which nothing yet needed. **The proxy needs it**: it forwards the
+ * upstream's response headers, which it does not choose and cannot summarise,
+ * and four would mean silently dropping most of them.
+ *
+ * Sixteen, because `HTTP_HEADERS_MAX` is 32 on the way in and half of those
+ * are hop-by-hop or the server's own to write. The cost is 16 pointer pairs on
+ * a sink, and a sink is on the stack of one connection at a time.
+ *
+ * **A proxy that has more than this to forward refuses rather than truncates.**
+ * A response missing headers nobody chose to drop is a wrong answer that looks
+ * like a right one.
+ */
+#define HTTP_SINK_EXTRA_MAX 16
 
 struct http_sink {
 	int  fd;

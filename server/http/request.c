@@ -748,6 +748,9 @@ int http_status_for(int verdict)
 	 * this is the one verdict that is not the client's fault, and the
 	 * default would have said it was. */
 	case HTTP_EINTERNAL:    return 500;
+	/* Not the client's fault and not this server's either. See `http.h`. */
+	case HTTP_EUPSTREAM:      return 502;
+	case HTTP_EUPSTREAM_SLOW: return 504;
 	case HTTP_EMALFORMED:
 	case HTTP_ESMUGGLE:
 	case HTTP_ETRAVERSAL:
