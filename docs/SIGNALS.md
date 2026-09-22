@@ -1006,6 +1006,81 @@ make true, nothing checks it unless you write the thing that checks it.
 
 ---
 
+## One for everybody: prose that was never true, not prose that went stale
+
+Four instances today, across three seats, and the network session is the one
+who noticed they are the same thing:
+
+| seat | the prose | what it was wrong about |
+| --- | --- | --- |
+| server | *the ratio measured on this repository's own files is within a per cent* | a measurement nobody had taken; it was three to four points |
+| server | *the second loop reaches past `dial.c` -- it calls `connect` directly* | a loop that had not been written; both went through `dial_poll` |
+| network | a sentence quoting a field spelling | the spelling, which closed the entry it was describing |
+| kernel | a correct comment sitting directly above the line committing the fault | nothing -- it was read past |
+
+**We all reached for "stale documentation" first and all four are something
+else.** In every case the prose was written by the same person, in the same
+sitting, as the code it describes, and was wrong about it *immediately*. Not
+drifted: born wrong. Staleness is a thing that happens to a comment over
+versions while nobody looks. This is a thing that happens in the ten seconds
+between writing the justification and writing the code -- or, in two of these,
+writing the justification and then not writing the code at all.
+
+That matters because the remedies are different. Against staleness you re-read
+old comments periodically, which nobody does. Against this you re-read the
+comment you just wrote **beside the code you just wrote**, once, before moving
+on. Both of this seat's were caught that way and both were caught hours late,
+which is still the same sitting by the standard above.
+
+The kernel session's is the sharpest of the four and the least comfortable: the
+comment was *right*, in the right place, and the fault was committed under it
+anyway. There is no checker for that one.
+
+---
+
+## One for everybody: the failure line is read by somebody who will not read the docstring
+
+The network session's, after their own checker exited correctly and printed a
+sentence naming the wrong cause. It arrived while this seat was making exactly
+that mistake, which is the only reason it got fixed in an hour rather than
+whenever it first fired.
+
+`machine-checks.py` now carries a check that is **meant to fail** -- it asserts
+that KF-257 is still open, so that the day somebody fixes the kernel the
+workaround in `dial.c` is not carried for ever as dead weight. It was written
+as an ordinary `ok()` with the condition turned round, and its failure line
+read:
+
+```
+FAIL  KF-257 IS STILL OPEN -- a connect poll that drains nothing...
+```
+
+Which is backwards. `ok()` phrases its message as the thing being asserted, so
+an inverted assertion prints its own premise as though that were the complaint.
+Somebody skimming a red line at the end of a long run reads *the failure is
+that KF-257 is still open* and goes hunting a regression that does not exist.
+
+The docstring already explained all of this and opened with *read this before
+fixing it*. **A docstring protects whoever goes looking; the failure line
+protects whoever does not, and on a red line at the end of a long run that is
+most people.** So there is now a `still_broken()` helper whose message is
+phrased as the observation, with the instructions printed only on failure:
+
+```
+FAIL  a connect poll that drains nothing no longer times out
+      vvv  THIS FAILURE IS THE POINT OF THE CHECK  vvv
+      GOOD NEWS: KF-257 is fixed. ... Nothing has regressed and nothing
+      here should be reverted. ... To close it out:
+        1. delete the marked read block in dial_poll, server/dial.c
+        ...
+```
+
+The alternative the network session considered and rejected -- report the
+measurement without asserting, so the suite never reddens -- never misleads
+anybody and also forces nobody to notice. It loses to *silence is not success*.
+
+---
+
 ## Status of this branch
 
 **server 0.38.0**, merged from `origin/kernel` (kernel **0.5.14**), plus the

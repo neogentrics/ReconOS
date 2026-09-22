@@ -63,6 +63,50 @@ def ok(cond, what, detail=""):
             print("        %s" % detail)
 
 
+def still_broken(cond, what, then, detail=""):
+    """
+    Assert that a known fault is **still present**, and say so when it is not.
+
+    There is one of these and there should almost never be more. It exists
+    because `server/dial.c` carries a workaround for somebody else's open bug,
+    and a workaround makes everything pass -- including the day the bug is
+    fixed and the workaround becomes dead weight nobody removes.
+
+    --- Why this is not `ok()` with the condition turned round ---
+
+    It was, for about an hour, and the failure line read:
+
+        FAIL  KF-257 IS STILL OPEN -- a connect poll that drains nothing...
+
+    which is exactly backwards. `ok()` phrases `what` as the thing being
+    asserted, so an inverted assertion prints its own premise as though that
+    were the complaint. Somebody skimming a red line at the end of a long run
+    reads *the failure is that KF-257 is still open* and goes looking for a
+    regression that is not there.
+
+    The network session made the general point after their own checker exited
+    correctly and printed a sentence naming the wrong cause: **the person who
+    sees this go red is reading a matrix log, not a docstring.** A docstring
+    protects whoever goes looking. The failure line protects whoever does not,
+    and on a red line at the end of a long run that is most people.
+
+    So `what` is phrased as the *observation* rather than the assertion, and
+    `then` is the instructions, printed only on failure, where they will be
+    read.
+    """
+    global CHECKS, FAILURES
+
+    CHECKS += 1
+    if not cond:
+        FAILURES += 1
+        print("  FAIL  %s" % what)
+        print("        vvv  THIS FAILURE IS THE POINT OF THE CHECK  vvv")
+        for step in then:
+            print("        %s" % step)
+        if detail:
+            print("        observed: %s" % detail)
+
+
 def raw(request, timeout=10, port=None):
     """Send bytes, read everything until the machine closes."""
     s = socket.create_connection(("127.0.0.1", port or PORT), timeout)
@@ -679,12 +723,24 @@ def the_canary_for_kf257():
     ok("a real listener=ready" in line,
        "and a real listener off this machine is reached", line.strip())
 
-    # The inverted one.
-    ok("undrained=still waiting" in line,
-       "KF-257 IS STILL OPEN -- a connect poll that drains nothing still "
-       "times out. If this line failed, the kernel was fixed: see this "
-       "check's docstring, delete the workaround in dial.c, and delete this",
-       line.strip())
+    # The inverted one. See `still_broken` for why it is not an `ok`.
+    still_broken(
+        "undrained=still waiting" in line,
+        "a connect poll that drains nothing no longer times out",
+        [
+            "GOOD NEWS: KF-257 is fixed. socket_connect_progress now",
+            "services the device. Nothing has regressed and nothing here",
+            "should be reverted. This check exists to tell you that day",
+            "has come. To close it out:",
+            "  1. delete the marked read block in dial_poll, server/dial.c",
+            "  2. delete the_canary_for_kf257 in scripts/machine-checks.py",
+            "  3. delete the third loop in measure_the_client_side,",
+            "     server/init/server_init.c",
+            "  4. strike {#kw-connect-handshake} in docs/KERNEL-WANTS.md",
+            "See VF-045 for how the bug was found and why the workaround",
+            "was written in userland rather than waited for.",
+        ],
+        line.strip())
 
 
 def files_off_the_volume():
