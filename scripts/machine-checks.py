@@ -41,6 +41,8 @@ twice to find out what went wrong.
 
 import gzip
 import os
+import socketserver
+import threading
 import json
 import socket
 import sys
@@ -666,61 +668,89 @@ def a_range_is_never_compressed():
        "%d bytes" % len(body))
 
 
+class _OnePage(socketserver.BaseRequestHandler):
+    """Answers one tiny HTTP response and closes. See `bytes_move_outbound`."""
+
+    def handle(self):
+        try:
+            self.request.settimeout(5)
+            self.request.recv(4096)
+            self.request.sendall(b"HTTP/1.0 200 OK\r\n"
+                                 b"Content-Type: text/plain\r\n"
+                                 b"Content-Length: 6\r\n"
+                                 b"\r\nproof\n")
+        except OSError:
+            pass
+
+
 def bytes_move_outbound():
     """
     Not *can it connect* -- **can it carry anything**.
 
     VF-045 ended with an outbound handshake completing in 1 ms, and that is a
     weaker claim than it sounds. `dial` reporting ready means the three-way
-    handshake finished. It does not mean a byte ever crossed, and on this
-    machine there is a specific way to be fooled: QEMU's forwarded ports accept
-    on the *host* side before anything in the guest is reached, so a connection
-    to a forwarded port reports ready whether or not the far end exists.
+    handshake finished; it does not mean a byte crossed. On this machine there
+    is a specific way to be fooled: QEMU's forwarded ports accept on the *host*
+    side before anything in the guest is reached, so a connection to a
+    forwarded port reports ready whether or not the far end exists.
 
-    So this asks the machine to reach back through the gateway to its own
-    forwarded port -- guest -> host:PORT -> guest:80 -- and checks that an HTTP
-    status line came back. That round trip cannot be faked by the forwarder:
-    the bytes have to leave, be forwarded, be accepted by this server's own
-    listener, be answered, and come back.
+    --- Why this listens rather than pointing the machine at itself ---
 
-    **It could not have been done at boot**, which is why it is here and not in
-    `server_init.c`: `measure_the_client_side` runs after the listener is
-    created and before the accept loop starts, so nothing would have answered.
-    A probe placed there would have proved the handshake and reported no bytes,
-    and somebody would have read that as the network being broken.
+    The first version asked the machine to reach **its own** forwarded port,
+    so the round trip would be guest -> host -> guest:80. That deadlocked, and
+    the failure is a property of the server rather than of the network:
+    `/api/reach` blocks inside its handler while it dials, and this server
+    answers one request at a time, so the connection coming back could not be
+    accepted until the request that caused it had finished. It reported
+    `verdict=ready, sent=24, received=0` -- the handshake completed, because
+    QEMU's forwarder accepted it, and nothing was ever going to answer.
+
+    A check whose target is the thing performing the check cannot work on a
+    single-request server, and that is worth writing down rather than quietly
+    re-pointing: it is the same shape as a control that cannot succeed.
+
+    So the harness listens instead. The guest reaches out through the gateway
+    to a listener on the host, which is a real peer somewhere else, and the
+    bytes have to leave the machine and come back for this to pass.
     """
-    if not PORT:
-        ok(False, "the harness knows which port the machine is forwarded on")
-        return
-
-    raw = get("/api/reach?host=10.0.2.2&port=%d" % PORT,
-              "Authorization: Bearer %s\r\n" % TOKEN)
-    status, lines, body = parts(raw)
-
-    ok(status.startswith("HTTP/1.1 200"),
-       "the machine will say whether it can reach somewhere", status)
-    if not status.startswith("HTTP/1.1 200"):
-        return
+    server = socketserver.TCPServer(("127.0.0.1", 0), _OnePage,
+                                    bind_and_activate=True)
+    server.allow_reuse_address = True
+    here = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
 
     try:
-        said = json.loads(body.decode("utf-8", "replace"))
-    except ValueError as e:
-        ok(False, "and answers in JSON", str(e))
-        return
+        raw = get("/api/reach?host=10.0.2.2&port=%d" % here,
+                  "Authorization: Bearer %s\r\n" % TOKEN)
+        status, lines, body = parts(raw)
 
-    ok(said.get("verdict") == "ready",
-       "an outbound connection to a real listener is established",
-       json.dumps(said))
-    ok(said.get("sent", 0) > 0,
-       "and this machine wrote a request onto it",
-       "sent=%s" % said.get("sent"))
-    ok(said.get("received", 0) > 0,
-       "and bytes came back -- which a completed handshake does not prove",
-       "received=%s" % said.get("received"))
-    ok(str(said.get("answered", "")).startswith("HTTP/1."),
-       "and they are an HTTP response, so the round trip reached this "
-       "server's own listener and returned",
-       repr(said.get("answered")))
+        ok(status.startswith("HTTP/1.1 200"),
+           "the machine will say whether it can reach somewhere", status)
+        if not status.startswith("HTTP/1.1 200"):
+            return
+
+        try:
+            said = json.loads(body.decode("utf-8", "replace"))
+        except ValueError as e:
+            ok(False, "and answers in JSON", str(e))
+            return
+
+        ok(said.get("verdict") == "ready",
+           "an outbound connection to a real listener is established",
+           json.dumps(said))
+        ok(said.get("sent", 0) > 0,
+           "and this machine wrote a request onto it",
+           "sent=%s" % said.get("sent"))
+        ok(said.get("received", 0) > 0,
+           "and bytes came back -- which a completed handshake does not prove",
+           "received=%s" % said.get("received"))
+        ok(str(said.get("answered", "")).startswith("HTTP/1."),
+           "and they are an HTTP response from a peer off this machine",
+           repr(said.get("answered")))
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def the_guard_covers_reaching_out():
@@ -800,9 +830,21 @@ def the_canary_for_kf257():
        "and a real listener off this machine is reached", line.strip())
 
     # The inverted one. See `still_broken` for why it is not an `ok`.
+    #
+    # **Only a refusal counts.** The boot line now reports the errno, because
+    # the first version of this collapsed every failure into "refused" and
+    # fired on its first real run against a full connection table -- announcing
+    # that KF-257 was fixed when nothing had changed. A refusal means a RST was
+    # collected without anything draining the ring, which is what KF-257 says
+    # cannot happen. Any other error means the attempt never reached the wire.
+    #
+    if "undrained=error" in line or "undrained=no socket" in line:
+        print("  note  the undrained dial failed before reaching the wire, so "
+              "it says nothing about KF-257 this run: %s" % line.strip())
     still_broken(
-        "undrained=still waiting" in line,
-        "a connect poll that drains nothing no longer times out",
+        "undrained=refused" not in line,
+        "a connect poll that drains nothing was REFUSED -- a RST reached the "
+        "state machine with nothing draining the ring",
         [
             "GOOD NEWS: KF-257 is fixed. socket_connect_progress now",
             "services the device. Nothing has regressed and nothing here",

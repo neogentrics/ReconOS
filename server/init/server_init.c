@@ -3541,13 +3541,39 @@ static void measure_the_client_side(void)
 		dial_close(&open_port);
 
 		/*
-		 * The canary. Same closed port, polled with nothing else in the
-		 * loop, reaching past `dial.c` so no read services the device.
+		 * The canary. A closed port, polled with nothing else in the
+		 * loop, reaching past `dial.c` so that no read services the
+		 * device.
+		 *
+		 * --- Why the errno is reported and not collapsed ------------
+		 *
+		 * The first version of this said `refused` for **any** errno
+		 * that was not EAGAIN, and on its first real run that was a
+		 * false alarm: it printed `refused in 0ms`, the machine check
+		 * fired, and the output announced that KF-257 had been fixed.
+		 * It had not. The connection table holds sixteen and a closed
+		 * one sits in TIME_WAIT for two seconds, so a boot that has
+		 * just dialled twice can fail to open a socket at all -- and
+		 * that is not a refusal, it is not evidence of anything, and it
+		 * certainly is not a kernel fix.
+		 *
+		 * The distinction is the whole point of the check. A **refusal**
+		 * means a RST came back and was collected without anything
+		 * draining the ring, which is exactly what KF-257 says cannot
+		 * happen. Any other error means the attempt never reached the
+		 * wire and the run said nothing.
+		 *
+		 * `dial_verdict` is not used here even though it knows this
+		 * vocabulary, because it deliberately collapses every failure
+		 * into DIAL_REFUSED -- right for a dialler, which moves on
+		 * either way, and wrong for the one caller whose entire
+		 * question is which failure it was.
 		 */
 		{
 			struct sockaddr_in to;
 			int fd = socket(AF_INET, SOCK_STREAM, 0);
 			const char *verdict = "no socket";
+			int why = 0;
 			unsigned long t_raw = 0;
 
 			if (fd >= 0) {
@@ -3571,23 +3597,31 @@ static void measure_the_client_side(void)
 						verdict = "connected";
 						break;
 					}
-					if (errno != EAGAIN) {
-						verdict = "refused";
-						break;
+					/* In flight, in three spellings --
+					 * the same set `dial_verdict` treats
+					 * as pending. */
+					if (errno == EAGAIN
+					    || errno == EINPROGRESS
+					    || errno == EALREADY) {
+						recon_yield();
+						continue;
 					}
-					recon_yield();
+					why = errno;
+					verdict = errno == ECONNREFUSED
+					        ? "refused" : "error";
+					break;
 				}
 				t_raw = clock_ms() - t0;
 				close(fd);
 			}
 
 			snprintf(line, sizeof(line),
-			         "  dialling out: closed port=%s in %lums, a "
-			         "real listener=%s in %lums; undrained=%s in "
+		         "  dialling out: closed port=%s in %lums, a "
+			         "real listener=%s in %lums; undrained=%s(%d) in "
 			         "%lums\n",
 			         dial_says(v_no), t_no,
 			         dial_says(v_yes), t_yes,
-			         verdict, t_raw);
+			         verdict, why, t_raw);
 		}
 		say(line);
 	}

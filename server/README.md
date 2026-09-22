@@ -31,9 +31,9 @@ covers the operating system.
 |---|---|
 | **Version** | 0.38.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
-| **Verified** | on the machine, 21 September 2026 |
+| **Verified** | on the machine, 22 September 2026 |
 | **Checks** | 1558 across twenty-five suites, by `scripts/server-tests.sh`,
-98 more on a booted machine by `scripts/machine-tests.sh`, and 19 across two
+107 more on a booted machine by `scripts/machine-tests.sh`, and 19 across two
 boots by `scripts/config-round-trip.sh` |
 | **Kernel** | 0.5.14, merged from `origin/kernel` — **plus one fix that is not in their tree**, see below |
 
