@@ -2076,6 +2076,81 @@ fi
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."
+	# Which attach paths did no machine in this run reach?
+	#
+	# **"Every path" above means every path this rig boots, and a reader will hear
+	# it as every path there is.** Four driver entry points are wired into the
+	# chain and executed by nothing here, because the rig never creates the
+	# hardware that would call them. A green run should say so in the same breath
+	# as the count, or the count is read as covering them.
+	#
+	# Asked after BT-015, where the bluetooth session found `bt_hci_attach` had
+	# never been called by anything -- seven mutants surviving out of one function,
+	# which is not seven weak tests but no test. That is GX-010 five days earlier
+	# in another track: everything proved about two display backends was proved
+	# about `identify`, and `attach` had never executed. Two tracks, one hole, so
+	# it is worth going and looking rather than treating as coincidence.
+	#
+	# **The mapping is written down; the coverage is derived.** Which QEMU device
+	# would call a given attach is a fact about the driver and cannot be computed,
+	# so it is listed here. Whether this rig creates that device IS computable, and
+	# is read out of the scripts -- so the day somebody adds `-device e1000`, this
+	# line stops naming e1000 without anybody remembering to edit it. A hardcoded
+	# list of "not covered" is a list that goes stale in the flattering direction.
+	#
+	# `r8169_attach` cannot be covered here at all: QEMU emulates no Realtek
+	# gigabit part. Its coverage is fifteen register offsets read off two real
+	# cards over SSH, and `docs/BARE-METAL.md` is explicit that the reset sequence,
+	# the interrupts and a frame on the wire are untouched by them. The two display
+	# backends are the same: no emulated Gen9, no emulated RDNA2.
+	uncovered=""
+	while read -r fn dev; do
+		[ -n "$fn" ] || continue
+		# Is the driver's entry point actually in the tree? A line here for a
+		# function that has been renamed would report a gap that does not exist.
+		grep -rqs "\b$fn\b" kernel/ || continue
+		# Does any script in this rig ask QEMU for that device?
+		#
+		# **Comment lines excluded, and that is not fastidiousness.**
+		# The first version grepped `scripts/` plainly -- and the only
+		# `-device e1000` in the tree was the paragraph above explaining
+		# this check, so it matched its own documentation and reported
+		# e1000 as covered. The sentence promising the line would update
+		# itself is the sentence that made it stop naming e1000.
+		#
+		# Third time in one evening for that shape: a `command line`
+		# pattern satisfied by the loader's own refusal saying nothing
+		# was passed, and a `grep -c error` satisfied by `-Werror` on
+		# every compile line. **A check whose pattern can be matched by
+		# the prose about the check is a check that starts passing when
+		# somebody documents it.**
+		if ! grep -rs -- "-device $dev" scripts/ |
+		     grep -qvE ':[[:space:]]*#'; then
+			uncovered="$uncovered $fn"
+		fi
+	done <<-'PAIRS'
+		r8169_attach		rtl8168
+		e1000_attach		e1000
+		intel_display_attach	intel-gpu
+		amd_display_attach	amd-gpu
+		xhci_attach		qemu-xhci
+		usb_storage_attach	usb-storage
+		virtio_blk_attach	virtio-blk-pci
+		virtio_gpu_attach	virtio-gpu-pci
+		ahci_attach		ahci
+		nvme_attach		nvme
+		sdhci_attach		sdhci-pci
+	PAIRS
+
+	if [ -n "$uncovered" ]; then
+		echo
+		echo "  and these attach paths were reached by no machine in this run:"
+		for fn in $uncovered; do
+			echo "    $fn"
+		done
+		echo "  They are wired into the driver chain and nothing here calls them."
+		echo "  Not a failure -- a statement about what the count above covers."
+	fi
 	exit 0
 fi
 
