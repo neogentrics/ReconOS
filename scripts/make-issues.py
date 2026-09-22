@@ -641,6 +641,19 @@ def check_citations(text):
     if read == 0:
         # Same rule, same reason: these branches keep these documents. Reading
         # none of them is not a clean result, it is an unread one.
+        #
+        # **Correction to why this guard was added.** The commit that added it
+        # said the zero case arrives under WSL, where git cannot follow a
+        # worktree's .git, "which is the environment the matrix runs in". Both
+        # halves are wrong and were checked afterwards rather than before:
+        # `verify-kernel.sh` never invokes this script -- its only mention of
+        # `make-issues` is a comment -- and under WSL `--check` dies earlier
+        # still, in `check_links`, because `gh` is not installed there.
+        #
+        # So the fail-open was real and unreachable, protected by a missing
+        # tool rather than by design. That protection lasts exactly until
+        # somebody installs `gh` in WSL. The guard is right; the story told
+        # about why was flattering and false.
         print('  read 0 of %d documents across %d branches.' % (looked, looked // 3))
         print('  Those branches keep these files. The check did not read them --')
         print('  it has not passed, it has failed to run.')
