@@ -1064,5 +1064,294 @@ bool bt_stack_self_test(void)
 		}
 	}
 
+	/* --- the right message at the wrong moment -----------------------
+	 *
+	 * Every test above drives this machine through the sequence in
+	 * order, which means each guard's two arms are always true together
+	 * and never separately. A mutation run turned seven of those `&&`
+	 * into `||` and one `>` into `>=`, and nothing went red: **the
+	 * question "is this message for the state I am actually in" was
+	 * asked by the code and by no test.**
+	 *
+	 * That is the same rule as BT-004, BT-005 and BT-009 -- an answer
+	 * that does not name what it is answering -- applied to sequencing
+	 * rather than to identifiers. Each case below is a real message in a
+	 * state that must ignore it.
+	 */
+	{
+		static struct bt_stack odd;
+		u8 ev[6];
+		u8 room[64];
+		u32 got;
+
+		/* Command Complete: code, plen, credits, opcode, status. */
+		ev[0] = HCI_EV_COMMAND_COMPLETE;
+		ev[1] = 4;
+		ev[2] = 1;
+		ev[3] = (u8)(HCI_OP_RESET & 0xFFu);
+		ev[4] = (u8)(HCI_OP_RESET >> 8);
+		ev[5] = 0x00;
+
+		/* The reset's own answer, arriving before anything asked for
+		 * a reset. */
+		bt_stack_init(&odd);
+		got = bt_stack_event(&odd, ev, sizeof(ev), room,
+				     sizeof(room));
+
+		if (odd.state != BT_ST_IDLE || got) {
+			kprintf("  btstack: a Command Complete for Reset "
+				"moved an idle stack to state %u and drew %u "
+				"bytes -- nothing had asked it to reset\n",
+				(unsigned)odd.state, got);
+			ok = false;
+		}
+
+		/* And somebody else's answer arriving while the reset is
+		 * outstanding. This is the protocol-level twin of KF-248:
+		 * a completion taken for whatever happens to be waiting. */
+		bt_stack_init(&odd);
+		bt_stack_start(&odd, addr, room, sizeof(room));
+
+		if (odd.state != BT_ST_RESETTING) {
+			kprintf("  btstack: bt_stack_start left the stack in "
+				"state %u, expected RESETTING\n",
+				(unsigned)odd.state);
+			ok = false;
+		}
+
+		ev[3] = (u8)(HCI_OP_READ_BD_ADDR & 0xFFu);
+		ev[4] = (u8)(HCI_OP_READ_BD_ADDR >> 8);
+
+		got = bt_stack_event(&odd, ev, sizeof(ev), room,
+				     sizeof(room));
+
+		if (odd.state != BT_ST_RESETTING || got) {
+			kprintf("  btstack: an answer for opcode %04x "
+				"satisfied a wait for Reset -- state %u, %u "
+				"bytes\n", (unsigned)HCI_OP_READ_BD_ADDR,
+				(unsigned)odd.state, got);
+			ok = false;
+		}
+
+		/* A link that is up, in a state that is not waiting for one.
+		 * Opening the control channel here would open a second one
+		 * over a sequence already past that point. */
+		bt_stack_init(&odd);
+		odd.state = BT_ST_INQUIRING;
+		odd.link.state = BT_LINK_UP;
+
+		ev[0] = 0xFE;			/* an event nothing handles */
+		ev[1] = 0;
+
+		got = bt_stack_event(&odd, ev, 2, room, sizeof(room));
+
+		if (odd.state != BT_ST_INQUIRING || got) {
+			kprintf("  btstack: a link already up opened the "
+				"control channel from state %u, drawing %u "
+				"bytes\n", (unsigned)odd.state, got);
+			ok = false;
+		}
+
+		/* **Connecting, with the link not yet up, is the ordinary
+		 * state between Create Connection and Connection Complete.**
+		 * The teardown above it triggers on a link that has gone
+		 * away, and `state > CONNECTING` is what keeps it from
+		 * firing here. As `>=` it fires on every event during a
+		 * connection, and the teardown reinitialises everything. */
+		bt_stack_init(&odd);
+		bt_link_target(&odd.link, addr);
+		odd.state = BT_ST_CONNECTING;
+		odd.link.state = BT_LINK_CONNECTING;
+
+		got = bt_stack_event(&odd, ev, 2, room, sizeof(room));
+
+		if (odd.state != BT_ST_CONNECTING) {
+			kprintf("  btstack: a stack waiting for its "
+				"Connection Complete was torn down to state "
+				"%u by an unrelated event\n",
+				(unsigned)odd.state);
+			ok = false;
+		}
+
+		if (!odd.link.have_peer) {
+			kputs("  btstack: the device being connected to was "
+			      "forgotten by an unrelated event\n");
+			ok = false;
+		}
+
+		/* And the poll side: waiting for the interrupt channel, with
+		 * the interrupt channel not open. Asking for boot protocol
+		 * now sends it over a channel that does not exist yet. */
+		bt_stack_init(&odd);
+		odd.state = BT_ST_OPENING_INTERRUPT;
+
+		got = bt_stack_poll(&odd, room, sizeof(room));
+
+		if (got || odd.state != BT_ST_OPENING_INTERRUPT) {
+			kprintf("  btstack: SET_PROTOCOL went out over an "
+				"interrupt channel that is not open -- %u "
+				"bytes, state %u\n", got,
+				(unsigned)odd.state);
+			ok = false;
+		}
+
+		/* A handshake on the control channel, in a state that is not
+		 * waiting for one. With `||` this reads any control-channel
+		 * message as the answer to a SET_PROTOCOL nobody sent, and
+		 * starts the mouse. */
+		{
+			u8 hs[5];
+			bool moved = false;
+			struct hid_mouse_state st;
+
+			bt_stack_init(&odd);
+			odd.state = BT_ST_OPENING_CONTROL;
+			odd.link.state = BT_LINK_UP;
+			odd.link.handle = 0x000C;
+
+			l2cap_header_build(hs, BT_CID_CONTROL, 1);
+			hs[4] = bt_hid_header(HIDP_TRANS_HANDSHAKE,
+					      HIDP_HSHK_SUCCESSFUL);
+
+			bt_stack_acl(&odd, 0x000C, 2, hs, sizeof(hs), room,
+				     sizeof(room), &moved, &st);
+
+			if (odd.state != BT_ST_OPENING_CONTROL) {
+				kprintf("  btstack: a control-channel "
+					"handshake moved the stack to state "
+					"%u, though nothing had asked for a "
+					"protocol\n", (unsigned)odd.state);
+				ok = false;
+			}
+		}
+
+		/* --- and the three buffer guards left over ----------------
+		 *
+		 * Same canary as BT-006's: a byte past the end of a
+		 * deliberately short buffer must still hold what was put
+		 * there, because an overrun of a few bytes does not fail
+		 * here -- it fails somewhere unrelated, later.
+		 */
+		{
+			u8 small[13];		/* 12 usable, 1 canary */
+			u32 m;
+			unsigned i;
+
+			/* `bt_stack_start`, which demands eight. */
+			bt_stack_init(&odd);
+			kmemset(small, 0xC7, sizeof(small));
+			m = bt_stack_start(&odd, addr, small, 7);
+
+			if (m || odd.state == BT_ST_RESETTING) {
+				kprintf("  btstack: the reset went into a "
+					"seven-byte buffer (%u bytes, state "
+					"%u)\n", m, (unsigned)odd.state);
+				ok = false;
+			}
+
+			for (i = 0; i < sizeof(small); i++) {
+				if (small[i] != 0xC7) {
+					kprintf("  btstack: byte %u was "
+						"written into a buffer the "
+						"reset had refused\n", i);
+					ok = false;
+					break;
+				}
+			}
+
+			bt_stack_init(&odd);
+			m = bt_stack_start(&odd, addr, small, 8);
+
+			if (!m) {
+				kputs("  btstack: the reset was refused a "
+				      "buffer of exactly the eight bytes it "
+				      "asks for\n");
+				ok = false;
+			}
+
+			/* `open_channel`, which also demands eight -- the
+			 * Connection Request it builds is exactly that. */
+			bt_stack_init(&odd);
+			odd.state = BT_ST_CONNECTING;
+			odd.link.state = BT_LINK_UP;
+
+			ev[0] = 0xFE;
+			ev[1] = 0;
+
+			kmemset(small, 0xC7, sizeof(small));
+			m = bt_stack_event(&odd, ev, 2, small, 7);
+
+			if (m) {
+				kprintf("  btstack: a Connection Request of "
+					"%u bytes went into a seven-byte "
+					"buffer\n", m);
+				ok = false;
+			}
+
+			for (i = 0; i < sizeof(small); i++) {
+				if (small[i] != 0xC7) {
+					kprintf("  btstack: byte %u was "
+						"written past a refused "
+						"Connection Request\n", i);
+					ok = false;
+					break;
+				}
+			}
+
+			bt_stack_init(&odd);
+			odd.state = BT_ST_CONNECTING;
+			odd.link.state = BT_LINK_UP;
+
+			m = bt_stack_event(&odd, ev, 2, small, 8);
+
+			if (m != 8) {
+				kprintf("  btstack: the Connection Request "
+					"drew %u bytes from a buffer of "
+					"exactly the eight it needs\n", m);
+				ok = false;
+			}
+
+			/* `wrap_pdu`, on the SET_PROTOCOL that poll emits:
+			 * four bytes of L2CAP header and one of payload. */
+			bt_stack_init(&odd);
+			odd.state = BT_ST_OPENING_INTERRUPT;
+			odd.interrupt.state = L2CAP_CH_OPEN;
+			odd.control.dcid = 0x0040;
+
+			kmemset(small, 0xC7, sizeof(small));
+			m = bt_stack_poll(&odd, small, 4);
+
+			if (m) {
+				kprintf("  btstack: a five-byte PDU went "
+					"into a four-byte buffer (%u)\n", m);
+				ok = false;
+			}
+
+			for (i = 0; i < sizeof(small); i++) {
+				if (small[i] != 0xC7) {
+					kprintf("  btstack: byte %u was "
+						"written past a refused "
+						"PDU\n", i);
+					ok = false;
+					break;
+				}
+			}
+
+			bt_stack_init(&odd);
+			odd.state = BT_ST_OPENING_INTERRUPT;
+			odd.interrupt.state = L2CAP_CH_OPEN;
+			odd.control.dcid = 0x0040;
+
+			m = bt_stack_poll(&odd, small, 5);
+
+			if (m != 5) {
+				kprintf("  btstack: SET_PROTOCOL drew %u "
+					"bytes from a buffer of exactly the "
+					"five it needs\n", m);
+				ok = false;
+			}
+		}
+	}
+
 	return ok;
 }

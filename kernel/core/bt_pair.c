@@ -739,6 +739,190 @@ bool bt_pairing_self_test(void)
 		}
 	}
 
+	/* --- the buffer each reply needs, and the event each one needs ----
+	 *
+	 * Every case in `bt_pairing_event` opens with the same two-armed
+	 * guard: the event must be long enough to have an address in it, and
+	 * the caller's buffer must be long enough to hold the reply. **Eight
+	 * mutations of those four guards survived a mutation run** -- each
+	 * `||` turned into `&&`, and each `<` into `<=` -- because every
+	 * caller in every test here passes an event well clear of the minimum
+	 * and a buffer well clear of the maximum.
+	 *
+	 * With `&&`, a guard only trips when *both* arms do, so a short
+	 * buffer with an ordinary event goes straight through and the builder
+	 * writes past the end. That is BT-006 exactly, one layer up: a
+	 * builder that takes no size, and a call site that forgot to keep the
+	 * promise. It was found by audit there and it is caught by a canary
+	 * here, because a canary proves a memory write where a missing return
+	 * value only proves a missing return.
+	 *
+	 * With `<=`, the guard refuses a buffer of exactly the right size.
+	 *
+	 * The table is the four cases with the two numbers each one needs.
+	 * `want_out` is what the case demands rather than what the reply
+	 * happens to be: `HCI_EV_LINK_KEY_REQ` insists on room for a key
+	 * reply even when the answer is a nine-byte refusal, which is
+	 * deliberate and is the number the guard is written against.
+	 */
+	{
+		static const u8 key[BT_LINK_KEY_LEN] = {
+			0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+			0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F
+		};
+		struct { u8 code; u32 want_len; u32 want_out; } cases[4];
+		u8 ev[16];
+		u8 room[32];
+		unsigned c, i;
+
+		cases[0].code = HCI_EV_LINK_KEY_REQ;
+		cases[0].want_len = 2 + BT_ADDR_LEN;
+		cases[0].want_out = 3 + BT_ADDR_LEN + BT_LINK_KEY_LEN;
+
+		cases[1].code = HCI_EV_IO_CAP_REQUEST;
+		cases[1].want_len = 2 + BT_ADDR_LEN;
+		cases[1].want_out = 3 + 9;
+
+		cases[2].code = HCI_EV_USER_CONFIRM_REQ;
+		cases[2].want_len = 2 + BT_ADDR_LEN + 4;
+		cases[2].want_out = 3 + BT_ADDR_LEN;
+
+		cases[3].code = HCI_EV_PIN_CODE_REQ;
+		cases[3].want_len = 2 + BT_ADDR_LEN;
+		cases[3].want_out = 3 + BT_ADDR_LEN + 1 + BT_PIN_MAX;
+
+		for (c = 0; c < 4; c++) {
+			bt_pairing_init(&p);
+			bt_pairing_remember(&p, addr, key, 0);
+			bt_pairing_allow(&p, addr);
+
+			kmemset(ev, 0, sizeof(ev));
+			ev[0] = cases[c].code;
+			ev[1] = (u8)(cases[c].want_len - 2);
+			kmemcpy(ev + 2, addr, BT_ADDR_LEN);
+
+			/* Exactly the buffer it asks for, with a byte past
+			 * the end that must survive. */
+			kmemset(room, 0xC7, sizeof(room));
+			n = bt_pairing_event(&p, ev, cases[c].want_len, room,
+					     cases[c].want_out);
+
+			if (!n) {
+				kprintf("  btpair: event %02x refused a "
+					"buffer of exactly the %u bytes it "
+					"asks for\n", cases[c].code,
+					cases[c].want_out);
+				ok = false;
+			}
+
+			for (i = (unsigned)cases[c].want_out;
+			     i < sizeof(room); i++) {
+				if (room[i] != 0xC7) {
+					kprintf("  btpair: event %02x wrote "
+						"past the %u bytes it was "
+						"given, at byte %u\n",
+						cases[c].code,
+						cases[c].want_out, i);
+					ok = false;
+					break;
+				}
+			}
+
+			/* One byte less, and nothing may be written at all --
+			 * not a short reply, not a partial one. */
+			kmemset(room, 0xC7, sizeof(room));
+			n = bt_pairing_event(&p, ev, cases[c].want_len, room,
+					     cases[c].want_out - 1);
+
+			if (n) {
+				kprintf("  btpair: event %02x drew %u bytes "
+					"into a buffer one byte short of the "
+					"%u it needs\n", cases[c].code, n,
+					cases[c].want_out);
+				ok = false;
+			}
+
+			for (i = 0; i < sizeof(room); i++) {
+				if (room[i] != 0xC7) {
+					kprintf("  btpair: event %02x wrote "
+						"byte %u of a buffer it had "
+						"already refused\n",
+						cases[c].code, i);
+					ok = false;
+					break;
+				}
+			}
+
+			/* And the other arm: exactly enough event, then one
+			 * byte too few. */
+			kmemset(room, 0xC7, sizeof(room));
+			n = bt_pairing_event(&p, ev, cases[c].want_len - 1,
+					     room, sizeof(room));
+
+			if (n) {
+				kprintf("  btpair: event %02x was answered "
+					"from %u bytes, one short of the %u "
+					"an address needs\n", cases[c].code,
+					cases[c].want_len - 1,
+					cases[c].want_len);
+				ok = false;
+			}
+		}
+
+		/* The cases above left `p` holding a key and an open window.
+		 * Put it back, because what follows is about the builders
+		 * rather than about the state machine. */
+		bt_pairing_init(&p);
+	}
+
+	/* --- how a pairing is told it failed -----------------------------
+	 *
+	 * `HCI_EV_AUTH_COMPLETE` had no test at all, which a mutation run
+	 * showed by shortening its length guard to `<=` and finding nothing
+	 * that minded. The event is five bytes -- code, length, status and a
+	 * two-byte handle -- so `<=` rejects every one of them.
+	 *
+	 * What that costs is not a wrong answer, it is silence.
+	 * `bt_stack.c` reads `BT_PAIR_FAILED` and turns it into a diagnosis;
+	 * with this event dropped, a pairing the controller has already
+	 * given up on leaves the stack waiting for a device that is not
+	 * coming.
+	 */
+	{
+		u8 done[5];
+
+		done[0] = HCI_EV_AUTH_COMPLETE;
+		done[1] = 3;
+		done[2] = 0x05;			/* Authentication Failure */
+		done[3] = 0x0C;
+		done[4] = 0x00;
+
+		bt_pairing_init(&p);
+		bt_pairing_event(&p, done, sizeof(done), out, sizeof(out));
+
+		if (p.state != BT_PAIR_FAILED || p.failure != 0x05) {
+			kprintf("  btpair: a failed authentication left the "
+				"pairing in state %u with failure %02x, "
+				"expected FAILED and 05 -- and nothing above "
+				"would ever hear about it\n",
+				(unsigned)p.state, p.failure);
+			ok = false;
+		}
+
+		/* A successful one must not fail it, or the status is being
+		 * ignored rather than read. */
+		done[2] = 0x00;
+
+		bt_pairing_init(&p);
+		bt_pairing_event(&p, done, sizeof(done), out, sizeof(out));
+
+		if (p.state == BT_PAIR_FAILED) {
+			kputs("  btpair: a successful authentication was "
+			      "read as a failure\n");
+			ok = false;
+		}
+	}
+
 	/* --- authenticate and encrypt ----------------------------------- */
 	n = hci_auth_requested_build(out, 0xF00C);
 

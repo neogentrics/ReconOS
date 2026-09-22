@@ -1341,5 +1341,174 @@ bool l2cap_self_test(void)
 		ok = false;
 	}
 
+	/* --- the boundaries, which every case above stays clear of -------
+	 *
+	 * A mutation run turned each `<` in this file into `<=` and each `>`
+	 * into `>=` and found that the exact sizes are never tried: the
+	 * refusals are all tested with input well short of the limit and the
+	 * acceptances with input well inside it. What that hides is a guard
+	 * that has moved by one, which refuses a legal message rather than
+	 * accepting an illegal one -- a device that works for everybody
+	 * except when a PDU happens to end flush.
+	 */
+
+	/* A fragment carrying nothing. `l2cap_acl_feed`'s guard against one
+	 * had no test, and reporting a complete PDU here hands the caller
+	 * whatever the last one left in the buffer. */
+	{
+		struct l2cap_reassembly z;
+
+		/* Zeroed, not merely reset: `l2cap_reassembly_reset` clears
+		 * `have` and `want` and deliberately leaves the counters
+		 * alone, because they are cumulative for the boot log. A
+		 * local one starts as whatever was on the stack. */
+		kmemset(&z, 0, sizeof(z));
+		l2cap_reassembly_reset(&z);
+
+		if (l2cap_acl_feed(&z, 0x000C, 2, pdu, 0)) {
+			kputs("  l2cap: a zero-length fragment was reported "
+			      "as a complete PDU\n");
+			ok = false;
+		}
+
+		if (z.have) {
+			kprintf("  l2cap: a zero-length fragment left %u "
+				"bytes in the buffer\n", z.have);
+			ok = false;
+		}
+	}
+
+	/* A signalling command whose header is the whole of it: four bytes,
+	 * declaring no data. `len < L2CAP_SIG_HEADER` as `<=` refuses every
+	 * one of those, and the parser's job is the length rather than the
+	 * meaning -- which command it is does not matter here, so this uses
+	 * one of the codes this file already defines rather than naming a
+	 * code nothing has checked. */
+	{
+		u8 bare[L2CAP_SIG_HEADER];
+
+		bare[0] = L2CAP_SIG_DISCONNECT_RESPONSE;
+		bare[1] = 0x07;
+		bt_put_le16(bare + 2, 0);
+
+		if (!l2cap_signal_parse(bare, sizeof(bare), &sig)) {
+			kputs("  l2cap: a four-byte signalling command was "
+			      "refused, though its header is the whole of "
+			      "it\n");
+			ok = false;
+		} else if (sig.code != L2CAP_SIG_DISCONNECT_RESPONSE ||
+			   sig.id != 7 || sig.length) {
+			kprintf("  l2cap: a bare command read as code %02x "
+				"id %u length %u, expected %02x, 7 and 0\n",
+				sig.code, sig.id, sig.length,
+				(unsigned)L2CAP_SIG_DISCONNECT_RESPONSE);
+			ok = false;
+		}
+	}
+
+	/* A PDU of exactly the advertised MTU, in one fragment that exactly
+	 * fills the buffer. **This is the size this kernel told the peer it
+	 * would accept**, so refusing it makes the Configure Request a lie,
+	 * and it is the one size no other case here comes near. Both the
+	 * fragment guard and the declared-length guard sit on it. */
+	{
+		static u8 full[L2CAP_PDU_MAX];
+		struct l2cap_reassembly z;
+		unsigned i;
+
+		bt_put_le16(full, L2CAP_MTU);
+		bt_put_le16(full + 2, 0x0041);
+
+		for (i = L2CAP_HEADER; i < sizeof(full); i++)
+			full[i] = (u8)i;
+
+		kmemset(&z, 0, sizeof(z));
+		l2cap_reassembly_reset(&z);
+
+		if (!l2cap_acl_feed(&z, 0x000C, 2, full, sizeof(full))) {
+			kprintf("  l2cap: a PDU of exactly the advertised "
+				"%u-byte MTU was refused, though that is the "
+				"number this kernel negotiates\n",
+				(unsigned)L2CAP_MTU);
+			ok = false;
+		} else if (z.want != sizeof(full) || z.oversized) {
+			kprintf("  l2cap: a maximum PDU came back wanting %u "
+				"bytes with %u counted oversized, expected "
+				"%u and 0\n", z.want, (unsigned)z.oversized,
+				(unsigned)sizeof(full));
+			ok = false;
+		}
+
+		/* And one byte more is not merely rejected -- it must be
+		 * counted, or a device ignoring the negotiation is invisible
+		 * in the boot log. */
+		l2cap_reassembly_reset(&z);
+		bt_put_le16(full, L2CAP_MTU + 1);
+
+		if (l2cap_acl_feed(&z, 0x000C, 2, full, sizeof(full))) {
+			kputs("  l2cap: a PDU declaring one byte more than "
+			      "the MTU was accepted\n");
+			ok = false;
+		}
+
+		if (!z.oversized) {
+			kputs("  l2cap: an oversized PDU was refused and not "
+			      "counted\n");
+			ok = false;
+		}
+	}
+
+	/* The restart counter, which is a diagnostic and therefore has to be
+	 * right about *why* it fired. A first PDU is not a restart, and
+	 * neither is one that follows a finished one -- only one that
+	 * abandons bytes still in flight. */
+	{
+		struct l2cap_reassembly z;
+		u8 small[8];
+
+		bt_put_le16(small, 4);			/* four of payload */
+		bt_put_le16(small + 2, 0x0041);
+		small[4] = 0xA1;
+		small[5] = 0x01;
+		small[6] = 0x02;
+		small[7] = 0x03;
+
+		kmemset(&z, 0, sizeof(z));
+		l2cap_reassembly_reset(&z);
+
+		if (!l2cap_acl_feed(&z, 0x000C, 2, small, sizeof(small)) ||
+		    z.restarts) {
+			kprintf("  l2cap: the first PDU on a fresh "
+				"reassembly counted %u restarts\n",
+				(unsigned)z.restarts);
+			ok = false;
+		}
+
+		/* A second, complete, following a complete one. Nothing was
+		 * abandoned, so nothing was restarted. */
+		if (!l2cap_acl_feed(&z, 0x000C, 2, small, sizeof(small)) ||
+		    z.restarts) {
+			kprintf("  l2cap: a PDU after a finished one counted "
+				"%u restarts -- the count is measuring "
+				"something other than lost bytes\n",
+				(unsigned)z.restarts);
+			ok = false;
+		}
+
+		/* And one that genuinely abandons a half-arrived PDU must
+		 * count, or the check above is satisfied by a counter that
+		 * never moves. */
+		l2cap_reassembly_reset(&z);
+		l2cap_acl_feed(&z, 0x000C, 2, small, 6);   /* half of it */
+		l2cap_acl_feed(&z, 0x000C, 2, small, sizeof(small));
+
+		if (z.restarts != 1) {
+			kprintf("  l2cap: abandoning a half-arrived PDU "
+				"counted %u restarts, expected 1\n",
+				(unsigned)z.restarts);
+			ok = false;
+		}
+	}
+
 	return ok;
 }

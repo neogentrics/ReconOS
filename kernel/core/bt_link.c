@@ -571,5 +571,183 @@ bool bt_link_self_test(void)
 		}
 	}
 
+	/* --- four things a mutation run found nothing looking at ---------- */
+
+	/* An event that is not an Inquiry Result, fed to the thing that
+	 * reads Inquiry Results. The guard is `len < 3 || code wrong`, and
+	 * with `&&` it only refuses an event that is *both* short and of the
+	 * wrong type -- so any ordinary event would have been read as a list
+	 * of devices, with an address taken out of whatever it holds. */
+	{
+		struct bt_inquiry_result r;
+		u8 ev[20];
+
+		kmemset(ev, 0, sizeof(ev));
+		ev[0] = HCI_EV_CONN_COMPLETE;	/* not an inquiry result */
+		ev[1] = 11;
+		ev[2] = 1;			/* would read as one device */
+
+		if (hci_inquiry_result_parse(ev, sizeof(ev), 0, &r)) {
+			kprintf("  btlink: an event of code %02x was read as "
+				"an inquiry result, so a device address came "
+				"out of a connection event\n", ev[0]);
+			ok = false;
+		}
+	}
+
+	/* An Inquiry the controller refused outright.
+	 *
+	 * Create Connection's failing Command Status has a case above; this
+	 * one had none, and without it an inquiry that the controller says no
+	 * to leaves the link in INQUIRING with nothing ever arriving. The
+	 * difference between a wait and a diagnosis. */
+	{
+		u8 ev[6];
+
+		/* code, plen, status, credits, opcode low, opcode high. */
+		ev[0] = HCI_EV_COMMAND_STATUS;
+		ev[1] = 4;
+		ev[2] = 0x0C;			/* Command Disallowed */
+		ev[3] = 1;
+		ev[4] = (u8)(HCI_OP_INQUIRY & 0xFFu);
+		ev[5] = (u8)(HCI_OP_INQUIRY >> 8);
+
+		bt_link_init(&l);
+		l.state = BT_LINK_INQUIRING;
+		bt_link_event(&l, ev, sizeof(ev), out, sizeof(out));
+
+		if (l.state != BT_LINK_FAILED || l.failure != 0x0C) {
+			kprintf("  btlink: a refused Inquiry left the link in "
+				"state %u with failure %02x, expected FAILED "
+				"and 0c -- the alternative is waiting for "
+				"results the controller will never send\n",
+				(unsigned)l.state, l.failure);
+			ok = false;
+		}
+
+		/* And a *successful* Command Status for the same command must
+		 * not fail the link, or the check is matching on the opcode
+		 * alone. */
+		ev[2] = 0x00;
+
+		bt_link_init(&l);
+		l.state = BT_LINK_INQUIRING;
+		bt_link_event(&l, ev, sizeof(ev), out, sizeof(out));
+
+		if (l.state != BT_LINK_INQUIRING) {
+			kprintf("  btlink: an accepted Inquiry moved the link "
+				"to state %u\n", (unsigned)l.state);
+			ok = false;
+		}
+	}
+
+	/* A Disconnection Complete naming a handle this link does not hold.
+	 *
+	 * Same rule as everywhere else on this branch, and the one place left
+	 * where nothing checked it was checked: with `||` in place of `&&`, a
+	 * link that is up is torn down by *any* disconnection, including
+	 * another link's. Handles are reused, which is BT-009; this is the
+	 * same fact one layer down. */
+	{
+		u8 ev[7];
+
+		ev[0] = HCI_EV_DISCONN_COMPLETE;
+		ev[1] = 4;
+		ev[2] = 0x00;			/* the disconnect succeeded */
+		ev[3] = 0x99;			/* handle 0x0099 */
+		ev[4] = 0x00;
+		ev[5] = 0x13;			/* reason */
+		ev[6] = 0x00;
+
+		bt_link_init(&l);
+		l.state = BT_LINK_UP;
+		l.handle = 0x000C;
+
+		bt_link_event(&l, ev, sizeof(ev), out, sizeof(out));
+
+		if (l.state != BT_LINK_UP || l.handle != 0x000C) {
+			kputs("  btlink: a disconnection for another link's "
+			      "handle tore this one down\n");
+			ok = false;
+		}
+
+		/* And this link's own handle must still work, or the check
+		 * has been turned into a refusal of everything. */
+		ev[3] = 0x0C;
+		bt_link_event(&l, ev, sizeof(ev), out, sizeof(out));
+
+		if (l.state != BT_LINK_IDLE || l.handle) {
+			kprintf("  btlink: a disconnection for this link's "
+				"own handle left it in state %u holding "
+				"%04x\n", (unsigned)l.state, l.handle);
+			ok = false;
+		}
+	}
+
+	/* And the buffer Create Connection needs, exactly and one short.
+	 * Same shape as the four in `bt_pair.c`: every caller in these tests
+	 * passes a 32-byte buffer, so the guard had never been near its
+	 * boundary and could have been `<=` with nothing saying so. */
+	{
+		u8 ev[3];
+		u8 room[24];
+		unsigned i;
+
+		/* Inquiry Complete: code, plen, status. The command goes out
+		 * here rather than on a result, because a result only
+		 * remembers the device. */
+		ev[0] = HCI_EV_INQUIRY_COMPLETE;
+		ev[1] = 1;
+		ev[2] = 0x00;
+
+		bt_link_init(&l);
+		bt_link_target(&l, addr);
+		l.state = BT_LINK_INQUIRING;
+
+		kmemset(room, 0xB4, sizeof(room));
+		n = bt_link_event(&l, ev, sizeof(ev), room, 3 + 13);
+
+		if (n != 3 + 13) {
+			kprintf("  btlink: Create Connection drew %u bytes "
+				"from a buffer of exactly the %u it needs\n",
+				n, 3u + 13u);
+			ok = false;
+		}
+
+		for (i = 3 + 13; i < sizeof(room); i++) {
+			if (room[i] != 0xB4) {
+				kprintf("  btlink: byte %u past Create "
+					"Connection's %u was overwritten\n",
+					i, 3u + 13u);
+				ok = false;
+				break;
+			}
+		}
+
+		bt_link_init(&l);
+		bt_link_target(&l, addr);
+		l.state = BT_LINK_INQUIRING;
+
+		kmemset(room, 0xB4, sizeof(room));
+		n = bt_link_event(&l, ev, sizeof(ev), room, 3 + 12);
+
+		if (n) {
+			kprintf("  btlink: Create Connection drew %u bytes "
+				"into a buffer one short of the %u it "
+				"needs\n", n, 3u + 13u);
+			ok = false;
+		}
+
+		for (i = 0; i < sizeof(room); i++) {
+			if (room[i] != 0xB4) {
+				kprintf("  btlink: byte %u of a buffer Create "
+					"Connection had refused was "
+					"written\n", i);
+				ok = false;
+				break;
+			}
+		}
+	}
+
 	return ok;
 }
