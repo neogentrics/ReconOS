@@ -8759,9 +8759,68 @@ boot log.
   seven commits waiting on a matrix, so it goes after the push rather than
   riding on it.
 
+- **A candidate mechanism, from the network session, read off the source rather
+  than run — and it says exactly why the comment's reasoning fails.**
+
+  `arch_console_putc` spins on the UART with interrupts **enabled**, right
+  before the halt:
+
+  ```c
+  /* kernel/arch/x86_64/arch.c:106 */
+  while (!(inb(COM1 + UART_LINE_STATUS) & UART_LSR_THR_EMPTY))
+          ;
+  outb(COM1 + UART_DATA, (u8)c);
+  ```
+
+  Verified here: no `cli` on that path, divisor 1 for 115200 (`arch.c:32`),
+  8N1 (`arch.c:34`), so ten bits and **86.8 µs a character**; `TIME_TICK_HZ` is
+  100, so a tick is 10 ms. A sixty-character line is about 4 ms of spinning
+  with interrupts on — the FIFO's 14-byte trigger (`arch.c:35`) covers the
+  first fourteen — which is **functionally what the missing `sched_yield()`
+  would have done**: it hands the timer a window it did not otherwise have.
+
+  **Their statement of why the comment is wrong, kept in their words:**
+
+  > *"That one ran on every pass" is true of the backstop's print, which runs
+  > from the far side of the idle path. A print after the halt cannot stop the
+  > halt happening too early. A print before it can. The comment generalises
+  > from one print's presence to all prints, and the variable that matters is
+  > position, not existence.*
+
+- **It predicts something falsifiable before any rig is built.** One 4 ms line
+  against a 10 ms tick is roughly a coin flip; two lines are near-certain. This
+  used two prints and got a deterministic result, **so a single-print variant
+  should be intermittent.** Ten boots of a one-print build settles it, and if
+  it is deterministic either way the elapsed-time story is wrong.
+
+- **The caveat this session adds, and it cuts against the mechanism above.**
+  QEMU's 16550 commonly reports THR empty immediately and hands the byte
+  straight to its backend — it does not necessarily emulate baud timing at all.
+  If it does not, the spin does not spin, the 4 ms is never spent, and what a
+  print costs is two vmexits a character: microseconds.
+
+  Arithmetic that makes this worth settling first: a boot here is 372 lines,
+  roughly 22,000 characters. At a *real* 115200 that is **1.9 seconds of pure
+  serial time in a 3.6-second boot**. So either more than half of every boot in
+  this project is spent spinning on a UART, or QEMU is not throttling. Both are
+  interesting and neither is currently known.
+
+- **The tests, cheapest first, and none of them print:**
+
+  | test | what it settles |
+  |---|---|
+  | measure what one line actually costs | whether there was ever any elapsed time to be the cause |
+  | spin with interrupts on, emit nothing | elapsed time is the mechanism |
+  | `inb`/`outb` a port, emit nothing | the vmexit is the mechanism |
+  | read `power_idle_tickless()` from an end-of-boot summary | whether the processor idled at all |
+
+  The last answers a different half from the others: it says whether the
+  processor idled, not what unstuck it.
+
 - **Status:** open. What is established is that the backstop has never fired on
   an unfixed kernel, and that every attempt to watch it from inside the idle
-  path prevents the thing being watched.
+  path prevents the thing being watched. The mechanism above is a reading and
+  an arithmetic, not a measurement, and is recorded as one.
 
 - **Why this is recorded at full weight although a debugging probe is not
   shipped code.** The probe exists to diagnose KF-258's family of faults, and
