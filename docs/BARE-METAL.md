@@ -160,7 +160,9 @@ Zero writes on the *boot-from-stick* path too, not just the disks-attached one.
 Good for safety and bad for evidence: **there will be no log file
 afterwards.** Whatever is not captured while it is on screen is gone when the
 power goes off. That is the first of the two reasons the serial cable is not
-optional; the second is NW-013, and it is under step 3 of the procedure.
+optional; the second is that the cable reports from the first line of the boot
+while the log port cannot speak until the network is up — and the network is
+what is being tested. Both are under step 3 of the procedure.
 
 ---
 
@@ -239,43 +241,50 @@ real:
    this path, so there is no log file afterwards. Whatever is not captured
    while it is on screen is gone when the power goes off.
 
-   **Reason two, and it is the one that closed the last door: the log port
-   cannot be turned on here.** The kernel session's log port would have been
-   the second evidence channel — the boot log read over TCP, no disk involved,
-   which is exactly what this machine needs. It is switched on by the word
-   `logport` on the kernel command line, and **a BIOS boot carries no command
-   line at all.** `boot/bios/stage2.c` writes an empty string and never reads
-   `\reconos\cmdline`; the UEFI loader does. This machine is legacy BIOS.
+   **Reason two is that the cable reports from the first line, and nothing else
+   does.** The log port — the boot log read over TCP, no disk involved — is a
+   second channel and not a substitute, because it can only speak once the
+   network is up, and **the network is the thing under test.** It cannot report
+   the failure of the card it needs. If the Realtek does not attach, the log
+   port has nothing to say about why, and the cable has everything.
 
-   Measured with a control rather than read off the source — one medium, one
-   cmdline file, booted both ways: under UEFI the report says
-   `command line : logport verbose` and the port listens; under BIOS neither
-   line appears. That is **NW-013**, and it is open.
+   Two independent reasons for one cable. Do not treat this step as a
+   nice-to-have.
 
-   The same gap takes `noinit` with it, which is what makes `xhci.c` print
-   PORTSC for every port as the controller comes up. So the USB diagnostic is
-   unavailable on the machine with the USB fault, which is the same shape as
-   the fault itself.
+   > **Reason two used to be something else, and this is what happened to it.**
+   >
+   > It read: *the log port cannot be turned on here.* `logport` is switched on
+   > by a word on the kernel command line, and a BIOS boot carried **no command
+   > line at all** — `boot/bios/stage2.c` wrote an empty string and never read
+   > `\reconos\cmdline`. This machine is legacy BIOS. That was **NW-013**,
+   > measured here with a UEFI control, and it took `noinit` with it: the
+   > `xhci.c` PORTSC dump, unavailable on the machine with the USB fault.
+   >
+   > **The paragraph was written with a date on it and an expectation that it
+   > would lapse**, because the kernel session was fixing it as it was written,
+   > and a procedure that says *"cannot"* about something somebody is actively
+   > fixing goes wrong without anybody editing it.
+   >
+   > It lapsed the same day. Kept rather than deleted because the dating is the
+   > part worth repeating: **the sentence that expired said so in advance, and
+   > was rewritten by someone who came looking because it had.**
 
-   Two independent reasons for one cable is the strongest form that conclusion
-   can take. Do not treat this step as a nice-to-have.
+   **The log port works on this machine now, verified rather than assumed.**
+   Kernel **0.5.13**, booted BIOS from a stick over EHCI exactly as the server
+   will, with `logport` in `\reconos\cmdline`:
 
-   **Reason two has a date on it, and is expected to expire.** It is true of
-   kernel **0.5.10**, the version this document was last checked against. The
-   kernel session is fixing NW-013 now — both loaders, with the length check
-   from KF-262 folded in — and when it lands, `logport` becomes askable on this
-   machine and the log port becomes a real second channel.
+   ```
+   ReconOS kernel 0.5.13
+     command line : logport
+     log port     : **listening** on 10.0.2.15:4919
+   ```
 
-   **That does not make the cable optional**, because reason one is untouched:
-   nothing is written to the medium, so there is still no log file afterwards.
-   And the log port only helps once the network is up, which on this machine is
-   the thing under test — it cannot report the failure of the card it needs.
-   The cable reports from the first line of the boot.
-
-   This paragraph is dated rather than absolute on purpose. A procedure that
-   says *"cannot"* about something somebody is actively fixing is a document
-   that will be wrong without anybody editing it, which is the failure this
-   branch has now recorded four times under other names.
+   Both loaders carry the command line now, both refuse one too long for the
+   buffer rather than truncating it, and both pass nothing rather than a prefix
+   — 8 of 8 in `scripts/cmdline-test.sh`. So `logport`, `verbose` and `noinit`
+   are all askable here, and `noinit` is the one to remember: it prints PORTSC
+   for every port as the xHCI controller comes up, which is the diagnostic for
+   the USB fault this machine has.
 
 4. **Confirm physical access.** Somebody must be able to reach the machine's
    power button and plug in a keyboard. Without a BMC there is no substitute.
@@ -324,6 +333,13 @@ real:
 10. **Capture it.** The serial log — and photographs of the screen as well,
     not instead, because the two fail in different ways and neither can be
     taken again once the power goes off.
+
+    **And the log port, if a card came up.** `logport` in `\reconos\cmdline`
+    works on this machine as of kernel 0.5.13; connect to port 4919 on whatever
+    address the boot reports and the whole log comes over the wire as text.
+    That is the best copy of the three when it is available and the one least
+    likely to be — it needs the thing under test to have worked. Take it as a
+    bonus, never as the plan.
     The boot summary at the end carries the counters — `N in, N out, N stocked,
     N interrupt(s)` — and those are what say whether the card is interrupting or
     being carried by the poll loop.
