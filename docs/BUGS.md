@@ -4665,6 +4665,63 @@ passed with the bug present, which is not a test at all.
 
 [#389](https://github.com/neogentrics/ReconOS/issues/389)
 
+> ### Measured against KF-258's fix on 20 September 2026, and the measurement failed
+>
+> **Sixty boots a side, interleaved, two kernels differing by twenty-four
+> bytes. Zero stalls on both sides. That is not a pass; it is a run with no
+> power, and the control is how you can tell.**
+>
+> ```
+>   before (pre-KF-258)   0 stalled,  60 finished,  0 neither
+>   after  (post-KF-258)  0 stalled,  60 finished,  0 neither
+> ```
+>
+> **The pre-fix kernel did not stall either**, so this entry's fault was never
+> reproduced and nothing in the run bears on whether KF-258's fix addresses it.
+>
+> The arithmetic says so and is cheap enough that it should have been done
+> *before* the machine time rather than after. At one in sixty, the chance of a
+> clean sweep with the fault entirely present is `(59/60)^N`:
+>
+> ```
+>    60 boots   36.5%      180 boots    4.9%
+>   120 boots   13.3%      240 boots    1.8%
+> ```
+>
+> Sixty a side could never have distinguished anything. **This is KF-208's
+> shape, which this entry already cites** -- *the broken kernel passes twelve
+> boots in a row, so passing is what a fix and a non-fix both produce* -- and it
+> was walked into by the session that wrote the interleaving specifically to
+> avoid a different confound. Controlling for load and forgetting power is one
+> good habit crowding out another.
+>
+> **What the run does establish:** the harness works, both binaries boot, and
+> `scripts/kf150-rate.sh` now exits 2 with the arithmetic printed when the
+> control is clean, rather than presenting `0 vs 0` as a table somebody could
+> quote.
+>
+> **The prediction remains untested and is still worth testing.** This entry
+> names its own discriminator -- *a run that shows* `ready, 0 ticks` *is a
+> machine that never got to it* -- and that is word for word what KF-258 turned
+> out to be. A resemblance that precise deserves a measurement rather than a
+> closure.
+>
+> **This cost 0.5.14, and the check I wrote two hours ago is what noticed.**
+> `scripts/kf150-rate.sh` changed and the version line had not moved, which is
+> KF-200's ruling applied by a script rather than remembered: a script is a
+> thing that runs and can be wrong, and this one ran and produced a misleading
+> table. 0.5.13 is the network branch's, taken for their merge, so this is
+> 0.5.14 -- above their number without containing it, the same wart taken for
+> the same reason as 0.5.11 and 0.5.12.
+>
+> The guard catching its own author within two hours of being written is worth
+> more than the entry it caught.
+>
+> **And if the control is still clean at 180 a side, the conclusion is that the
+> rate is wrong, not that the fix is good.** One in sixty was measured on
+> 10 September against a tree that has moved a long way since.
+
+
 - **Found:** 10 September 2026, as the part of KF-148 that fixing KF-148 did not
   account for.
 - **Cost:** none yet. It is recorded because the alternative is rediscovering it.
@@ -8282,6 +8339,8 @@ reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
 ### KF-262 — A command line longer than the buffer was cut in half and reported as read
+
+[#551](https://github.com/neogentrics/ReconOS/issues/551)
 
 - **Found:** 20 September 2026, by the **network session**, while answering a
   design question I had asked them about the *other* loader. I asked what a
