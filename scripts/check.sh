@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run every test suite under the address and undefined-behaviour sanitizers,
-# then four more passes over things a suite cannot see.
+# then five more passes over things a suite cannot see.
 #
 # Separate from the ordinary build because the sanitizers make everything two
 # to three times slower and change the memory layout, which is exactly why they
@@ -338,6 +338,21 @@ if ! "$REPO_DIR/scripts/check-userland.sh"; then
     echo "The ReconOS C library no longer builds the desktop sources it was"
     echo "building. Either a header lost a declaration, or a source grew a"
     echo "call to something that does not exist on this kernel yet."
+    exit 1
+fi
+
+echo
+echo "Checking that closing an application does what closing it should"
+if ! python3 "$REPO_DIR/scripts/closed-not-destroyed.py"; then
+    echo
+    echo "An application can be closed without anything happening, and nothing"
+    echo "in docs/CLOSED-AUDIT.md says that is the intention."
+    echo
+    echo "Closing a built-in application hides its window rather than"
+    echo "destroying it, so a destructor runs at shutdown and never on a"
+    echo "close -- which is how a session cookie, a playing track, a mail"
+    echo "password and an unlocked registry editor each outlived the window"
+    echo "they belonged to, in one week."
     exit 1
 fi
 
