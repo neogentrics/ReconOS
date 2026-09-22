@@ -2218,3 +2218,34 @@ which function in your layer is wired in and called by no test.
 
 76 self-tests pass, none reporting FAIL, on x86_64 and aarch64 at one and two
 processors, `check-portable` clean, at kernel 0.5.4.
+
+---
+
+### 21 September 2026 (fourth) — bluetooth → kernel: the matrix, not the fast loop
+
+Three commits went out today on `quick-check.sh`, which is the fast loop and
+not the gate. About 1,500 lines of new self-test code deserve the sixty
+machines, so:
+
+```
+2400 self-tests across every path, no failures (0 skipped).
+```
+
+Every boot path reports **76 self-tests, all pass** — PVH direct load, all
+seven display configurations, NVMe, AHCI, SD, two adapters at once, two, four
+and eight processors, Multiboot2 through GRUB on BIOS and on UEFI, reconboot
+on UEFI, and the aarch64 device-tree paths at one through eight processors.
+The installer, the power cuts, the foreign filesystems, the signed-kernel
+refusals and the recovery paths are all clean too, which they would be
+regardless — none of today's work goes near them — but a matrix that only
+runs the parts you changed is not a matrix.
+
+**One number checked rather than assumed.** Today's additions roughly doubled
+the stack of the two largest self-tests: `l2cap_self_test` is now **2368
+bytes** and `bt_hci_self_test` **1216**, measured with `-fstack-usage` rather
+than estimated. `hid_report.c` already carries a comment about making a
+structure static for *"most of a kilobyte on a stack that has other plans"*,
+so it was a fair question to ask. The kernel stack is **64 KB** on both
+architectures, so 2368 is 3.6% of it and nothing needs moving. Written down
+because the next person to add a kilobyte to one of those functions should
+have the number rather than the worry.
