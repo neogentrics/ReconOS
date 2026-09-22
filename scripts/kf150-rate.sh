@@ -63,6 +63,23 @@ trap 'rm -rf "$WORK"' EXIT
 # **They must differ only in the thing being measured.** Two kernels built from
 # trees that differ in anything else make this a comparison of two trees rather
 # than of one change, and the result would not say which.
+#
+# **The check below does not enforce that, and cannot.** It refuses two
+# binaries that are identical, which is the mistake that is cheap to detect.
+# The mistake that is expensive to make is the opposite one -- two binaries
+# that differ by too much -- and *"differ only in X"* is not computable from
+# two ELFs. Nothing here will catch it.
+#
+# It has already happened once, on 21 September, and it cost a whole run: the
+# pre-fix ELF was an older binary that lacked KF-258's sleep probe entirely and
+# carried the pre-`timer_sleep_ns` version of `logport.c` -- which is sleeping
+# behaviour on the boot path, the very thing under measurement. Recorded as a
+# withdrawal in KF-150.
+#
+# So this is the caller's job and the note is here rather than in the entry,
+# because the entry is not what somebody reads before running this. **Build
+# both arms from one tree in one sitting, and be able to name the diff in one
+# line.** If you cannot, you are measuring two trees.
 if cmp -s "$BEFORE_ELF" "$AFTER_ELF"; then
 	echo "those are the same binary; this would measure nothing"
 	exit 2
