@@ -1790,6 +1790,198 @@ static int handle_upload(const struct http_request *r, const char *body,
  * machine. This one makes the machine *act*, on a target the caller chose, and
  * that is the line the guard is drawn on rather than the read/write one.
  */
+/* --- can this machine reach that one? -------------------------------------
+ *
+ * `GET /api/reach?host=10.0.2.2&port=18400`
+ *
+ * The server role has been able to answer *can somebody reach me* since 0.1.0
+ * and has never been able to answer *can I reach anybody*. Outbound TCP only
+ * started working on 21 September (VF-045), and the first thing built on it
+ * should be the thing that tells an administrator whether it still works.
+ *
+ * --- Why it sends a request rather than only connecting ---
+ *
+ * A connect-only probe is the more general primitive and it is not what this
+ * should be, because of what VF-045 was about. `ready` from `dial` means the
+ * handshake completed; it does not mean bytes move. And on this machine there
+ * is a specific way to be fooled: QEMU's forwarded ports accept on the host
+ * side before anything in the guest has been reached, so a connection to a
+ * forwarded port reports ready whether or not the far end exists.
+ *
+ * **A reachability check that cannot tell those apart is a control that cannot
+ * fail**, which is the exact mistake this role made for three versions and is
+ * not going to make again in the tool built to avoid it. So this completes the
+ * connection, sends one minimal HTTP request, and reports what came back.
+ *
+ * --- Why it is guarded ---
+ *
+ * An endpoint that opens a connection to any address a caller names is a
+ * request forgery primitive: it lets somebody outside use this machine's
+ * position inside. It sits behind the boot token with `/api/config` and
+ * `/api/upload`, which is the same trust this role already requires for
+ * anything that acts rather than reports.
+ */
+static int parse_ipv4(const char *text, unsigned int *out)
+{
+	unsigned int addr = 0;
+	int part;
+
+	if (!text)
+		return 0;
+
+	for (part = 0; part < 4; part++) {
+		unsigned int value = 0;
+		int digits = 0;
+
+		while (*text >= '0' && *text <= '9') {
+			value = value * 10 + (unsigned int)(*text - '0');
+			if (value > 255)
+				return 0;	/* 1.2.3.999 is not an address */
+			digits++;
+			text++;
+		}
+		if (!digits || digits > 3)
+			return 0;
+		addr = (addr << 8) | value;
+
+		if (part < 3) {
+			if (*text != '.')
+				return 0;
+			text++;
+		}
+	}
+	if (*text != '\0')
+		return 0;		/* trailing anything is not an address */
+
+	*out = addr;
+	return 1;
+}
+
+static int handle_reach(const struct http_request *r, const char *body,
+                        size_t body_len, struct http_response *out, void *ctx)
+{
+	static char answer[512];
+	static char reply[256];
+	struct http_form q;
+	const char *host, *port_text;
+	unsigned int addr = 0;
+	unsigned long port = 0;
+	struct dial d;
+	int verdict;
+	unsigned long started, took;
+	long sent = 0, got = 0;
+	char status[80];
+	int n, rc;
+
+	(void)body; (void)body_len; (void)ctx;
+
+	rc = http_form_parse(r->query, recon_strlen(r->query), &q);
+	if (rc != HTTP_OK)
+		return rc;
+
+	host = http_form_get(&q, "host");
+	port_text = http_form_get(&q, "port");
+	if (!parse_ipv4(host, &addr)) {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: host=a.b.c.d\n", 30);
+		return HTTP_OK;
+	}
+	if (port_text) {
+		const char *at = port_text;
+
+		while (*at >= '0' && *at <= '9') {
+			port = port * 10 + (unsigned long)(*at - '0');
+			if (port > 65535)
+				break;
+			at++;
+		}
+		if (*at != '\0' || port == 0 || port > 65535)
+			port = 0;
+	}
+	if (port == 0) {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: port=1..65535\n", 31);
+		return HTTP_OK;
+	}
+
+	status[0] = '\0';
+
+	started = clock_ms();
+	verdict = dial_begin(&d, addr, (unsigned short)port, started,
+	                     started + 3000);
+	while (verdict == DIAL_PENDING) {
+		recon_yield();
+		verdict = dial_poll(&d, clock_ms());
+	}
+	took = clock_ms() - started;
+
+	if (verdict == DIAL_READY) {
+		int fd = dial_take(&d);
+
+		if (fd >= 0) {
+			static const char req[] =
+				"GET / HTTP/1.0\r\nHost: reach\r\n"
+				"Connection: close\r\n\r\n";
+			unsigned long until;
+
+			sent = recon_write(fd, req, sizeof(req) - 1);
+
+			/*
+			 * Nothing here blocks, so this asks again until an
+			 * answer arrives or the patience runs out. Two seconds
+			 * is far longer than a machine on the same network
+			 * needs and short enough that a probe cannot hold the
+			 * whole server -- which it would, because this process
+			 * answers one request at a time.
+			 */
+			until = clock_ms() + 2000;
+			while (got <= 0 && clock_ms() < until) {
+				got = recon_read(fd, reply, sizeof(reply) - 1);
+				if (got <= 0)
+					recon_yield();
+			}
+
+			if (got > 0) {
+				int i;
+
+				reply[got] = '\0';
+				for (i = 0; i < (int)sizeof(status) - 1
+				     && i < (int)got
+				     && reply[i] != '\r' && reply[i] != '\n';
+				     i++)
+					status[i] = reply[i];
+				status[i] = '\0';
+			}
+			recon_close(fd);
+		}
+	}
+	dial_close(&d);
+
+	{
+		char status_room[JSON_ROOM(sizeof(status))];
+		const char *escaped = as_json(status, status_room,
+		                              sizeof(status_room));
+
+		if (!escaped)
+			return HTTP_EINTERNAL;
+
+		n = snprintf(answer, sizeof(answer),
+		             "{\"host\":\"%u.%u.%u.%u\",\"port\":%lu,"
+		             "\"verdict\":\"%s\",\"ms\":%lu,"
+		             "\"sent\":%ld,\"received\":%ld,"
+		             "\"answered\":\"%s\"}\n",
+		             (addr >> 24) & 0xFF, (addr >> 16) & 0xFF,
+		             (addr >> 8) & 0xFF, addr & 0xFF, port,
+		             dial_says(verdict), took,
+		             sent, got > 0 ? got : 0, escaped);
+	}
+	if (n < 0 || (size_t)n >= sizeof(answer))
+		return HTTP_EINTERNAL;
+
+	http_response_simple(out, 200, "application/json", answer, (size_t)n);
+	return HTTP_OK;
+}
+
 static int handle_resolve(const struct http_request *r, const char *body,
                           size_t body_len, struct http_response *out, void *ctx)
 {
@@ -2145,6 +2337,8 @@ static const struct http_route ROUTES[] = {
 	  .exact = 1, .handler = handle_upload, .guarded = 1 },
 	{ .method = "GET", .prefix = "/api/resolve",
 	  .exact = 1, .handler = handle_resolve, .ctx = &RESOLVER, .guarded = 1 },
+	{ .method = "GET", .prefix = "/api/reach",
+	  .exact = 1, .handler = handle_reach, .guarded = 1 },
 	/* The archive, guarded. The ring at `/api/log` is a snapshot and stays
 	 * open; these are every path this machine has ever been asked for. See
 	 * the block above `handle_log_segments`. */

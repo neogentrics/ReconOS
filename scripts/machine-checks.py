@@ -660,6 +660,76 @@ def a_range_is_never_compressed():
        "%d bytes" % len(body))
 
 
+def bytes_move_outbound():
+    """
+    Not *can it connect* -- **can it carry anything**.
+
+    VF-045 ended with an outbound handshake completing in 1 ms, and that is a
+    weaker claim than it sounds. `dial` reporting ready means the three-way
+    handshake finished. It does not mean a byte ever crossed, and on this
+    machine there is a specific way to be fooled: QEMU's forwarded ports accept
+    on the *host* side before anything in the guest is reached, so a connection
+    to a forwarded port reports ready whether or not the far end exists.
+
+    So this asks the machine to reach back through the gateway to its own
+    forwarded port -- guest -> host:PORT -> guest:80 -- and checks that an HTTP
+    status line came back. That round trip cannot be faked by the forwarder:
+    the bytes have to leave, be forwarded, be accepted by this server's own
+    listener, be answered, and come back.
+
+    **It could not have been done at boot**, which is why it is here and not in
+    `server_init.c`: `measure_the_client_side` runs after the listener is
+    created and before the accept loop starts, so nothing would have answered.
+    A probe placed there would have proved the handshake and reported no bytes,
+    and somebody would have read that as the network being broken.
+    """
+    if not PORT:
+        ok(False, "the harness knows which port the machine is forwarded on")
+        return
+
+    raw = get("/api/reach?host=10.0.2.2&port=%d" % PORT,
+              "Authorization: Bearer %s\r\n" % TOKEN)
+    status, lines, body = parts(raw)
+
+    ok(status.startswith("HTTP/1.1 200"),
+       "the machine will say whether it can reach somewhere", status)
+    if not status.startswith("HTTP/1.1 200"):
+        return
+
+    try:
+        said = json.loads(body.decode("utf-8", "replace"))
+    except ValueError as e:
+        ok(False, "and answers in JSON", str(e))
+        return
+
+    ok(said.get("verdict") == "ready",
+       "an outbound connection to a real listener is established",
+       json.dumps(said))
+    ok(said.get("sent", 0) > 0,
+       "and this machine wrote a request onto it",
+       "sent=%s" % said.get("sent"))
+    ok(said.get("received", 0) > 0,
+       "and bytes came back -- which a completed handshake does not prove",
+       "received=%s" % said.get("received"))
+    ok(str(said.get("answered", "")).startswith("HTTP/1."),
+       "and they are an HTTP response, so the round trip reached this "
+       "server's own listener and returned",
+       repr(said.get("answered")))
+
+
+def the_guard_covers_reaching_out():
+    """
+    `/api/reach` opens a connection to any address a caller names, which is a
+    request forgery primitive: it lends this machine's position inside the
+    network to somebody outside it. It is guarded for that reason, and the
+    guard is checked here rather than assumed -- `/api/upload` was guarded in
+    source and reachable on the machine once already.
+    """
+    status, lines, body = parts(get("/api/reach?host=10.0.2.2&port=9"))
+    ok(status.startswith("HTTP/1.1 401"),
+       "reaching out without the token is refused", status)
+
+
 def the_canary_for_kf257():
     """
     A check that is meant to FAIL the day somebody fixes the kernel.
@@ -1014,7 +1084,8 @@ def main():
                   a_form_field_past_its_bound, conditional_requests,
                   the_console_itself, the_console_escapes_what_it_shows,
                   the_resolver_and_the_clock, negotiation,
-                  compression, the_canary_for_kf257, compressed_files,
+                  compression, the_canary_for_kf257, bytes_move_outbound,
+                  the_guard_covers_reaching_out, compressed_files,
                   a_range_is_never_compressed,
                   files_off_the_volume, the_status_line,
                   keep_alive, forty_connections):
