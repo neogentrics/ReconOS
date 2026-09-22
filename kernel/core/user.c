@@ -1456,23 +1456,73 @@ struct thread *user_elf_create(const char *name, const void *image, u64 len,
  * test that treats zero as success passes in both of the cases it exists to
  * catch.
  */
+/* How long a self-test waits for a program to reach its exit call.
+ *
+ * **This is also KF-150's threshold, and that is not obvious from either end.**
+ * Five tests wait on their own copy of this number -- user_elf_test,
+ * user_socket_probe_test, user_c_program_test, user_self_test and
+ * user_exec_path_test -- and all five report through say_how_far_it_got, whose
+ * line `user: it is ...` appears exactly once in this file and is what
+ * `scripts/kf150-rate.sh` greps to count a stall.
+ *
+ * So *"about one boot in sixty, a user program does not finish"* is not a
+ * property of one program. It is the **disjunction of five independent
+ * deadlines**, counted through one string that could not say which had fired.
+ * Raise any one of them and the measured rate falls with no fault having
+ * changed, which reads as progress.
+ *
+ * Found 22 September 2026, when the graphics session raised one of the five for
+ * a good and unrelated reason and said so. Neither end could have seen it: they
+ * were changing a patience limit, and this session was quoting a rate.
+ */
+#define WAIT_FOR_EXIT_NS	2000000000ULL
+
+/* The C program draws, and holding the screen long enough to be seen takes
+ * longer than the default allows.
+ *
+ * The graphics session's number and their reasoning. GX-016's fix made
+ * `user/paint.c` hold the screen for 2.5 seconds and this test called that a
+ * hang after 2 -- the kernel reporting a fault about a program working exactly
+ * as written, which is GX-016's own failure mode produced by GX-016's fix.
+ *
+ * **A patience limit rather than a delay:** the loop leaves the moment the
+ * program exits, so a larger number costs nothing except on a run where
+ * something genuinely hangs. The two constants are coupled and nothing in the
+ * build can check the pair, so each names the other: if paint's window grows,
+ * this grows first.
+ */
+#define WAIT_FOR_EXIT_PAINT_NS	8000000000ULL
+
 /* What to say when a program does not finish.
  *
  * "The program never reached its exit call" is true and useless: it is the same
  * sentence whether the program never ran, ran and faulted, ran and stopped, or
  * is still running. Those are four different bugs.
  *
+ * **And this function had the identical defect one level up**, with the
+ * paragraph above it. Its output was the same whether the caller was the ELF
+ * loader, the socket probe, the C program, the self-test or the volume
+ * program, and it never said what budget had been blown. The author saw the
+ * shape, fixed it for the four states of a thread, and did not see it for the
+ * five callers. So it names its test and prints its patience now, and a
+ * threshold that moves is visible in the data instead of silently retuning a
+ * rate. (KF-269)
+ *
  * It cost real time on 10 September. A program was dying at its own entry point
  * and the test reported a timeout -- because `exits` is only incremented by
  * sys_exit, and a program killed by a fault never gets there. The fault line was
  * in the log the whole time and nothing in the message pointed at it. (KF-150)
  */
-static void say_how_far_it_got(const struct thread *t, u64 calls_before,
+static void say_how_far_it_got(const char *test, u64 patience_ns,
+			       const struct thread *t, u64 calls_before,
 			       u64 faults_before)
 {
 	static const char *const state[] = {
 		"ready", "running", "?", "blocked", "?", "finished"
 	};
+
+	kprintf("  user: %s gave up on it after %lu ms\n",
+		test, (unsigned long)(patience_ns / 1000000));
 
 	if (t)
 		kprintf("  user: it is %s, on processor %d, after %lu tick%s\n",
@@ -1517,14 +1567,15 @@ bool user_elf_test(void)
 		return false;
 	}
 
-	deadline = time_monotonic_ns() + 2000000000ULL;
+	deadline = time_monotonic_ns() + WAIT_FOR_EXIT_NS;
 	while (exits == exits_before && time_monotonic_ns() < deadline)
 		sched_yield();
 
 	if (exits == exits_before) {
 		kputs("  user: the loaded program never reached its exit "
 		      "call\n");
-		say_how_far_it_got(t, calls_before, faults_before);
+		say_how_far_it_got("user_elf_test", WAIT_FOR_EXIT_NS,
+				   t, calls_before, faults_before);
 		return false;
 	}
 
@@ -1596,13 +1647,14 @@ bool user_socket_probe_test(void)
 		return false;
 	}
 
-	deadline = time_monotonic_ns() + 2000000000ULL;
+	deadline = time_monotonic_ns() + WAIT_FOR_EXIT_NS;
 	while (exits == exits_before && time_monotonic_ns() < deadline)
 		sched_yield();
 
 	if (exits == exits_before) {
 		kputs("  socket: the probe never reached its exit call\n");
-		say_how_far_it_got(t, calls_before, faults_before);
+		say_how_far_it_got("user_socket_probe_test", WAIT_FOR_EXIT_NS,
+				   t, calls_before, faults_before);
 		return false;
 	}
 
@@ -1780,13 +1832,14 @@ bool user_c_program_test(void)
 		return false;
 	}
 
-	deadline = time_monotonic_ns() + 2000000000ULL;
+	deadline = time_monotonic_ns() + WAIT_FOR_EXIT_PAINT_NS;
 	while (exits == exits_before && time_monotonic_ns() < deadline)
 		sched_yield();
 
 	if (exits == exits_before) {
 		kputs("  a C program: it never reached its exit call\n");
-		say_how_far_it_got(t, calls_before, faults_before);
+		say_how_far_it_got("user_c_program_test", WAIT_FOR_EXIT_PAINT_NS,
+				   t, calls_before, faults_before);
 		return false;
 	}
 
@@ -2136,13 +2189,14 @@ bool user_self_test(void)
 		return false;
 	}
 
-	deadline = time_monotonic_ns() + 2000000000ULL;
+	deadline = time_monotonic_ns() + WAIT_FOR_EXIT_NS;
 	while (exits == exits_before && time_monotonic_ns() < deadline)
 		sched_yield();
 
 	if (exits == exits_before) {
 		kputs("  user: the program never reached its exit call\n");
-		say_how_far_it_got(t, calls_before, faults_before);
+		say_how_far_it_got("user_self_test", WAIT_FOR_EXIT_NS,
+				   t, calls_before, faults_before);
 		return false;
 	}
 
@@ -2365,14 +2419,15 @@ bool user_exec_path_test(void)
 		return false;
 	}
 
-	deadline = time_monotonic_ns() + 2000000000ULL;
+	deadline = time_monotonic_ns() + WAIT_FOR_EXIT_NS;
 	while (exits == exits_before && time_monotonic_ns() < deadline)
 		sched_yield();
 
 	if (exits == exits_before) {
 		kputs("  user: the program from the volume never reached its "
 		      "exit call\n");
-		say_how_far_it_got(t, calls_before, faults_before);
+		say_how_far_it_got("user_exec_path_test", WAIT_FOR_EXIT_NS,
+				   t, calls_before, faults_before);
 		return false;
 	}
 

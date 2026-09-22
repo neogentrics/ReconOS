@@ -4664,6 +4664,26 @@ passed with the bug present, which is not a test at all.
 
 ### KF-150 — About one boot in sixty, a user program does not finish, and nothing says why
 
+- **A run on a tree merged after 22 September is NOT comparable to the 360-boot
+  arms below, and the harness will not tell you.** The rate is counted through
+  one string produced by five independent deadlines (KF-269). Four of those are
+  two seconds and the fifth — `user_c_program_test` — is now eight, because
+  `user/paint.c` holds the screen for 2.5 s and two seconds called that a hang.
+
+  **The threshold moved and nothing about any fault did.** Recorded here at the
+  graphics session's request, so that when somebody finds the discontinuity it
+  arrives with a cause attached rather than as a rate that improved.
+
+  They measured the alternative before taking it: shrinking paint's window to
+  fit two seconds fails, because this deadline starts at the program's start
+  while the window starts at its marker — `paint` fills 2560×1600 and reads
+  four markers back before printing anything, so pre-marker work plus window
+  sits just under two seconds on a quiet machine and over it on a busy one. The
+  symptom of going over is `it never reached its exit call`, intermittently,
+  about a program working correctly. **Their reasoning for choosing as they
+  did, which is worth keeping: a number wrong in a way somebody can see beats a
+  message wrong in a way nobody can.**
+
 - **Measured, 21 September 2026: 180 boots a side, 360 boots, and NOT ONE
   STALL ON EITHER ARM. This is a null result and it is recorded as one.**
 
@@ -8429,6 +8449,103 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-270 — The recovery check named the key when the condition was that the menu was late
+
+- **Found:** 22 September 2026, by the **graphics session**, in a script of this
+  seat's, while their matrix ran beside the network session's. They changed
+  nothing and handed it over, which is why it is recorded rather than patched
+  quietly.
+
+- **Was:** `scripts/boot-menu-test.sh` sends the digit `3` forty-eight times a
+  quarter-second apart, then stops. On failure it said:
+
+  ```
+  and choosing it reaches recovery    FAILED -- the key was pressed and recovery did not start
+  ```
+
+  The four checks around it passed — the menu drew, recovery was listed, and
+  listed last. It passes alone, 7 of 7.
+
+- **The mechanism is visible in the script and the message does not mention
+  it.** Forty-eight presses at 0.25s is a **twelve-second window**, and the
+  countdown is six. A boot slow enough to reach the menu after the keys have
+  stopped takes the default — and the message names *the key*, when the
+  condition was that the menu was not ready inside a budget it never mentions.
+
+- **Twelve seconds was never decided by anybody.** It is 48 × 0.25: two numbers
+  chosen for a keypress stream, with a deadline falling out of them. Nothing
+  says it anywhere, so finding it is archaeology.
+
+- **Fixed in** kernel 0.5.22. The window is derived from the two numbers rather
+  than implied by them, and **printed when the check fails**. The failure now
+  asks the one question that separates the two cases — was `menu : waiting`
+  ever seen? — and says which it is, because that fact was in the log the whole
+  time and was simply never asked for.
+
+- **Exactly what their re-run proves, in their words and kept in them:** that on
+  a quieter machine this boot reached the menu inside twelve seconds. **Not**
+  that twelve is enough in general, and not that nothing else is wrong. It makes
+  contention the best-supported explanation, which is not the same as the
+  confirmed one.
+
+### KF-269 — Five tests, five deadlines, one sentence, and it was also KF-150's threshold
+
+- **Found:** 22 September 2026, through the graphics session raising one of the
+  five for a good and unrelated reason and saying so. **Neither end could have
+  seen it alone** — they were changing a patience limit, and this seat was
+  quoting a rate.
+
+- **Was:** five self-tests in `kernel/core/user.c` each wait on their own copy
+  of a two-second deadline — `user_elf_test`, `user_socket_probe_test`,
+  `user_c_program_test`, `user_self_test`, `user_exec_path_test` — and all five
+  report through `say_how_far_it_got`, whose line `user: it is ...` **appears
+  exactly once in the file** and is what `scripts/kf150-rate.sh` greps to count
+  a stall.
+
+  So *"about one boot in sixty, a user program does not finish"* was never a
+  property of one program. **It is the disjunction of five independent
+  deadlines**, counted through one string that could not say which had fired.
+  Raise any one of them and the measured rate falls with no fault having
+  changed, which reads as progress.
+
+- **The function's own comment describes the fault it commits**, which makes
+  this KF-261's shape for the fourth time:
+
+  > *"The program never reached its exit call" is true and useless: it is the
+  > same sentence whether the program never ran, ran and faulted, ran and
+  > stopped, or is still running. Those are four different bugs.*
+
+  Correct — and the function underneath it produced **the same output for all
+  five of its callers**, and never said what budget had been blown. The author
+  saw the shape, fixed it for the four states of a thread, and did not see it
+  one level up.
+
+- **Fixed in** kernel 0.5.22. The report names its test and prints its
+  patience, so a threshold that moves shows up in the data instead of retuning
+  a rate in silence. The two budgets are named constants rather than ten
+  literals, and the graphics session's eight seconds for the C program is
+  folded in here with their reasoning — so their one-line change can be dropped
+  on merge rather than conflicting.
+
+- **Break-tested.** With the patience forced to zero, four of the five report
+  by name where they had previously been indistinguishable:
+
+  ```
+  user: user_self_test gave up on it after 0 ms
+  user: user_elf_test gave up on it after 0 ms
+  user: user_c_program_test gave up on it after 0 ms
+  user: user_socket_probe_test gave up on it after 0 ms
+  ```
+
+  The fifth, `user_exec_path_test`, does not fire on a machine with no volume,
+  which is this rig.
+
+- **Noted while break-testing, and not chased:** at one millisecond of patience
+  nothing stalls at all. A single `sched_yield()` is enough for these programs
+  to run to completion, so the deadline is nearly irrelevant on a healthy
+  machine — which is consistent with KF-258 being about the yield not happening
+  rather than about timing. Consistent with, not evidence for.
 
 ### KF-268 — A script edited while it was running destroyed the report of the run, and kept the run
 

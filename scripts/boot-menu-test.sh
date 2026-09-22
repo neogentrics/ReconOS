@@ -148,8 +148,26 @@ fi
 # nothing yet to read it. Any key stops the countdown and a digit chooses, so a
 # stream arrives whenever the menu is ready for it; the extra digits afterwards
 # land in a kernel that is not reading the keyboard.
+# **The stream lasts as long as it lasts, and that is a deadline nobody chose.**
+#
+# Found by the graphics session, 22 September 2026: 48 presses a quarter-second
+# apart is a **twelve-second window**, and a boot slow enough to reach the menu
+# after it gets the countdown's default instead. The failure said *"the key was
+# pressed and recovery did not start"* -- naming the key, when the condition was
+# that the menu was not ready inside a budget the message never mentioned. It
+# failed once beside another session's matrix and passes alone, 7 of 7.
+#
+# Twelve seconds was never decided. It is 48 times 0.25, two numbers picked for
+# a keypress stream with a deadline falling out of them, and it would have taken
+# archaeology to find. So the window is derived from the two numbers and
+# **printed when the check fails**, which is the difference between a constant
+# that can be audited and one that has to be excavated. (KF-270)
+KEY_PRESSES=48
+KEY_INTERVAL=0.25
+KEY_WINDOW=$(awk "BEGIN { printf \"%.1f\", $KEY_PRESSES * $KEY_INTERVAL }")
+
 say "and choosing it reaches recovery"
-rec=$( (i=0; while [ $i -lt 48 ]; do printf '3'; sleep 0.25; i=$((i + 1)); done) |
+rec=$( (i=0; while [ $i -lt "$KEY_PRESSES" ]; do printf '3'; sleep "$KEY_INTERVAL"; i=$((i + 1)); done) |
 	timeout 60 qemu-system-x86_64 -bios "$OVMF" -m 512M -nographic \
 		-drive "file=$W/medium.img,format=raw,if=none,id=m0" \
 		-device nvme,serial=m,drive=m0 \
@@ -160,7 +178,24 @@ if echo "$rec" | grep -q '=== ReconOS recovery ==='; then
 	echo "$(echo "$rec" | grep -cE '^ +nvme[0-9]') volumes looked at"
 	pass=$((pass + 1))
 else
-	echo "FAILED -- the key was pressed and recovery did not start"
+	# **Two failures wearing one sentence, separated.** Whether the menu
+	# was ever drawn is the fact that decides which of them this is, and it
+	# is in the log already -- it was simply never asked for.
+	if echo "$rec" | grep -q 'menu *: waiting'; then
+		echo "FAILED -- the menu was drawn and the keystroke did not take"
+		echo "      The keys ran for ${KEY_WINDOW}s and the menu was up"
+		echo "      inside that, so this is about the keystroke rather"
+		echo "      than about a slow boot."
+	else
+		echo "FAILED -- the menu was never drawn, so no key could reach it"
+		echo "      The keys ran for ${KEY_WINDOW}s (${KEY_PRESSES} x"
+		echo "      ${KEY_INTERVAL}s) and nothing printed 'menu: waiting'"
+		echo "      in that time. A boot reaching the menu afterwards"
+		echo "      takes the countdown's default and looks identical to"
+		echo "      a key that was ignored. **This is most likely a slow"
+		echo "      boot rather than a broken keystroke** -- check what"
+		echo "      else was running on this machine before believing it."
+	fi
 	echo "$rec" | sed -n '/On this machine/,$p' | head -12 | sed 's/^/      /'
 	fail=$((fail + 1))
 fi

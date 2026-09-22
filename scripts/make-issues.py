@@ -234,6 +234,10 @@ AREA = {
     'KF-264': 'build',
     # Also the rig: a script edited while bash was still reading it.
     'KF-268': 'build',
+    # The stall report, in kernel/core/user.c.
+    'KF-269': 'kernel',
+    # The boot-menu rig again, like KF-264 and KF-268.
+    'KF-270': 'build',
     # The other two tracks' registers, which arrived with their branches and
     # had no line here at all. Read off their own titles, 20 September 2026.
     #
