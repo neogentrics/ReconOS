@@ -638,6 +638,14 @@ def check_citations(text):
         print('  %s is cited by %s and has no entry here'
               % (num, ', '.join(sorted(missing[num]))))
 
+    if read == 0:
+        # Same rule, same reason: these branches keep these documents. Reading
+        # none of them is not a clean result, it is an unread one.
+        print('  read 0 of %d documents across %d branches.' % (looked, looked // 3))
+        print('  Those branches keep these files. The check did not read them --')
+        print('  it has not passed, it has failed to run.')
+        return 1
+
     if not missing:
         print('  every NW- number cited on another branch has an entry here '
               '(%d of %d documents read across %d branches)'
@@ -696,9 +704,24 @@ def check_versions(text):
     skipped = total - len(re.findall(r'\*\*Fixed in\*\* kernel \d+\.\d+\.\d+', text))
 
     if not named:
-        print('  no entry names a kernel version, out of %d that say Fixed in'
-              % total)
-        return 0
+        '''
+        **Zero is an error here, not a clean register.**
+
+        The server session's form of the rule, and the strongest one either of
+        us has: the expectation comes from knowing what is in the repository
+        rather than from the traversal. This register names kernel versions --
+        it has for months. A run that finds none has failed to read it.
+
+        Returning 0 here would be the fail-open case with all the check's own
+        numbers consistent and all of them wrong, which is precisely what a
+        denominator cannot catch.
+        '''
+        print('  found no entry naming a kernel version, out of %d that say '
+              'Fixed in.' % total)
+        print('  This register has named them since 0.2.x. The check did not '
+              'read it --')
+        print('  it has not passed, it has failed to run.')
+        return 1
 
     """`--diff-merges` is not optional here -- NW-017.
 
