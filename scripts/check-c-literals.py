@@ -304,30 +304,24 @@ def main():
     # The denominator beside this number says how much was looked at, and a
     # denominator only helps a reader who brings an expectation. This needs
     # nobody: it encodes a fact about the repository that cannot quietly stop
-    # being true. See `check-site-init.py` for where this started, and the
-    # network session's check_citations for the case that makes it urgent --
-    # the environment that produces zero there is the one the matrix runs in,
-    # so the check most likely to meet the conditions that break it was the one
-    # that passed under them.
+    # being true. See `check-site-init.py`, which printed nothing at all on
+    # success, so a run that read every file and a run that read none produced
+    # identical output.
     #
-    if not looked:
-        print("read no C files at all.")
-        print("This repository is written in C. The check did not read the")
-        print("tree -- it has not passed, it has failed to run.")
-        return 1
-
-
+    # **A reason that was in this comment and was false.** It said the case
+    # that made this urgent was the network session's `check_citations`, which
+    # fails open under WSL -- *the environment the matrix runs in*, so the check
+    # most likely to meet the conditions that break it was the one that passed
+    # under them. That is a good sentence and both halves of it are untrue:
+    # their matrix never invokes that checker, and under WSL it dies earlier on
+    # a missing `gh` before reaching the code in question. They checked and told
+    # me; it is corrected here rather than only in a commit message, because the
+    # next person to read this should not inherit a wrong reason for a right
+    # change.
     #
-    # Zero is an unread tree, not a clean one.
-    #
-    # The denominator beside this number says how much was looked at, and a
-    # denominator only helps a reader who brings an expectation. This needs
-    # nobody: it encodes a fact about the repository that cannot quietly stop
-    # being true. See `check-site-init.py` for where this started, and the
-    # network session's check_citations for the case that makes it urgent --
-    # the environment that produces zero there is the one the matrix runs in,
-    # so the check most likely to meet the conditions that break it was the one
-    # that passed under them.
+    # The guard does not need that story. A check that cannot fail is
+    # indistinguishable from a check that passed, and that is sufficient on its
+    # own.
     #
     if not looked:
         print("read no C files at all.")
