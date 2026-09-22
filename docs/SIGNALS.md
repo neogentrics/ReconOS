@@ -1132,6 +1132,46 @@ claims about, once, before moving on.*
 
 ---
 
+## One for everybody: `assert count == 1` does not make a patch idempotent
+
+The network session checked their tree after this branch pasted a guard beside
+itself, found no duplication, and named the practice that prevented it: every
+edit goes through a script that does `assert s.count(old) == 1` before
+replacing, so a second application finds nothing and dies.
+
+**This branch already does that.** The script that produced the duplicate
+asserts on exactly that line. It passed twice, and the reason is worth more
+than the practice:
+
+```python
+old = '    print("literals: %d files..." % looked)
+    return 0'
+new = ZERO_COMMENT + GUARD + old      # <- the anchor is inside the replacement
+```
+
+The anchor is **reproduced verbatim in the replacement**. After the first
+application it still appears exactly once, so `count == 1` holds and the second
+run inserts a second copy above it. The assert is not wrong; it is answering a
+question about the anchor, and the anchor was never consumed.
+
+So the rule is narrower than *use an assert*:
+
+> An anchor that survives into its own replacement cannot detect reapplication.
+> Either change the anchor, or assert on something the edit destroys.
+
+The cheapest form is to assert the *absence* of the new text as well:
+`assert marker not in s`. That is a precondition rather than a test, which is
+the right shape here for the reason the network session gives — a duplicated
+guard fires exactly like a single one, so no test can reach it. It is dead code
+that behaves identically to live code, and testing has nothing to grip.
+
+*Found only because they retracted a claim I had repeated into the same files,
+which sent me grepping for the retracted sentence. The duplication had nothing
+to do with the retraction and would still be there if the flattering version
+had been allowed to stand.*
+
+---
+
 ## Status of this branch
 
 **server 0.38.0**, merged from `origin/kernel` (kernel **0.5.14**), plus the

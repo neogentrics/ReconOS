@@ -46,26 +46,35 @@ fail.
 
 ### What kernel this branch actually runs
 
-**0.5.14 from `origin/kernel`, plus `tcp_tick()` in `socket_accept`.** That
-line is the difference between a server that answers twelve requests and one
-that keeps going (VF-034). It has been offered to the kernel session three
-times and is not on their branch yet, so it is carried here.
+**A version names a tree. It cannot name a tree plus a local change.**
 
-Which means a machine built from this branch **prints `ReconOS kernel 0.5.14`
-and does not behave like their 0.5.14.** That is worth stating in the place a
-person reads, because the version string is the only thing you can read off a
-running kernel — and the network session raised exactly this as NW-020, where
-three branches were answering to one number with three different trees.
+That is the rule, and it is written first because it outlives whatever instance
+is below it. Any branch carrying a kernel fix the kernel session has not taken
+yet builds a machine that **prints their version and does not behave like it**
+— and the version string is the only thing you can read off a running kernel,
+so the machine cannot tell you. Only this section can. The network session
+raised the general form as NW-020, having found three branches answering to one
+number with three different trees.
 
-The number is deliberately **not** changed here. Renumbering the kernel belongs
-to the kernel session, who own it at merge time; a seat that renumbers
-unilaterally is how one number comes to mean four things. So this branch says
-what it has instead of claiming a number for it.
+Renumbering is deliberately **not** the answer here. The kernel's version
+belongs to the kernel session, who own it at merge time; a seat that renumbers
+unilaterally is how one number comes to mean four things instead of three. So a
+branch in this position says what it has rather than claiming a number for it,
+and says it where a person will read it.
+
+**The instance, as of 22 September 2026:** 0.5.14 from `origin/kernel`, plus
+`tcp_tick()` in `socket_accept` — the line between a server that answers twelve
+requests and one that keeps going (VF-034). The kernel session has since
+numbered it **KF-267** and will land it with KF-265 and KF-266; when that
+arrives this branch drops its copy and the paragraph goes with it. *The two
+paragraphs above stay.*
 
 `kernel/Makefile` also differs, and that one is not a behaviour change: it is
 the `ROLE=server` build, written as an override with a default so that
 `make ARCH=x86_64` with nothing else said produces exactly the bytes it
-produced before this branch existed.
+produced before this branch existed. It is the reason a tree diff will always
+show this branch's `kernel/` as changed, and the reason that is not the same
+claim as the paragraph above.
 
 
 

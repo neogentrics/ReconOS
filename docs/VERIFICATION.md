@@ -1876,6 +1876,25 @@ gateway:18400 (open)  polled with a read in the loop   ready,     1 ms
   original probe has printed `closed port=timed out` since 0.31.0 and now
   prints `closed port=refused`. It had been answering the wrong question
   correctly.
+- **Two sharper statements of it, from the seats that read it back.** Neither
+  is this seat's and both are better than what is above.
+
+  The kernel session, on what kind of fault a bad control is: *dialling
+  10.0.2.15 throughout means a working connection and a broken poll produced
+  identical output.* So it is **a control that agrees with every hypothesis** —
+  and that is the one kind running it more carefully cannot catch. Care makes a
+  noisy control quieter; it does nothing to a control that was never going to
+  disagree with anything. It belongs beside the entries about checks that cannot
+  fail, because it is the same fault wearing a control's clothes instead of an
+  assertion's.
+
+  And on how it was escaped, which is the part worth copying: **pick the case
+  where the mechanism guarantees an event, not the case you want to work.**
+  Nothing listens on gateway:9, so a RST definitely comes back and a segment
+  definitely changes state. The case this seat *wanted* — its own web server,
+  certain to be there — guaranteed nothing, because the wire had no reason to
+  carry it. A control is not chosen for being obviously correct. It is chosen
+  for being unable to stay silent.
 
 ---
 
