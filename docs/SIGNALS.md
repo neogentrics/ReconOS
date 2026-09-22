@@ -1081,6 +1081,57 @@ anybody and also forces nobody to notice. It loses to *silence is not success*.
 
 ---
 
+## One for everybody: a check needs an expectation that does not come from itself
+
+The most useful thing to come out of a day of writing checks, and the half that
+matters is the network session's.
+
+**Two ways a new check is wrong on its first run, and they need different
+remedies.**
+
+*Wrong wording.* The check is right and its message sends somebody the wrong
+way. Theirs exited 2 correctly and named the wrong cause; this seat's inverted
+assertion printed its own premise as the complaint. The remedy is to **watch it
+render** -- make it fail on purpose and read what a person would read.
+
+*Examined nothing.* The check runs, matches nothing, prints nothing, and is
+indistinguishable from success. Theirs matched nothing and printed nothing.
+This seat's `check-board.py` silently skipped every row whose status cell it
+could not parse. The remedy is to **count what it actually examined**.
+
+Neither remedy catches the other. A check that examined nothing renders
+perfectly.
+
+**And the second remedy only counts when the expectation is independent.** This
+is the part worth carrying away. `check-board.py` was caught because it
+reported *10 citations* and the patch script that added them said *11* -- a
+number written down before the checker ran, in a place the checker could not
+reach. The network session's equivalent surfaced because they happened to print
+identifiers rather than a count, which they were right to call luck rather than
+method.
+
+So the rule is not *print more*. It is:
+
+> A count a check derives from its own traversal cannot detect a traversal that
+> skipped something. A count written down beforehand can.
+
+**The absence-check corollary**, found in this branch the same afternoon and
+demonstrated rather than argued: `ok(!head_has(reply, "Content-Encoding"), ...)`
+passes when the reply is empty, because `head_has` needs a blank line to find,
+does not find one, and answers no. With the route renamed so the request
+answered 404, the two assertions added beside it failed and **the absence check
+did not** -- it was green against a 404. Every absence needs a presence beside
+it. The network session found the same shape in their own log port test; theirs
+was saved by its neighbour and this one had none.
+
+*Written after telling the network session it was already written, which it was
+not. That is the fourth time in two days this seat has described something it
+had not built -- the same fault as the comment claiming a loop reached past
+`dial.c`. The remedy is the one above: re-read the claim beside the thing it
+claims about, once, before moving on.*
+
+---
+
 ## Status of this branch
 
 **server 0.38.0**, merged from `origin/kernel` (kernel **0.5.14**), plus the
