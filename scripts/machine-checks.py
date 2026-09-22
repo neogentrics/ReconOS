@@ -40,6 +40,7 @@ twice to find out what went wrong.
 """
 
 import gzip
+import os
 import json
 import socket
 import sys
@@ -615,6 +616,77 @@ def a_range_is_never_compressed():
        "%d bytes" % len(body))
 
 
+def the_canary_for_kf257():
+    """
+    A check that is meant to FAIL the day somebody fixes the kernel.
+
+    Read this before "fixing" it.
+
+    `server/dial.c` carries a workaround: one read per poll, which reads
+    nothing and exists so that `recvfrom` will service the device. It is there
+    because `socket_connect_progress` does not, so a program polling `connect`
+    and doing nothing else never causes the reply to be taken off the receive
+    ring. KF-257, diagnosed by the network session, confirmed here in VF-045.
+
+    **The problem with a workaround is that everything then passes.** The dial
+    probe reports 1 ms with the workaround and would report 1 ms without the
+    bug, so it can never tell anybody that the workaround has become
+    unnecessary. This branch would have carried a redundant read in its client
+    for ever and nothing would have said so. That gap was the network session's
+    to spot; their own outbound tests have the same shape and they said so.
+
+    So `server_init.c` runs a third loop that reaches past `dial.c` and polls
+    `connect` directly, with nothing draining the ring. **While the kernel is
+    unfixed that loop must time out**, and this asserts it.
+
+    When the kernel session lands `netdev_service()` in
+    `socket_connect_progress`, this check goes red. That is not a regression and
+    it is not this check being wrong. It is the signal to:
+
+      1. delete the read in `dial_poll` (it is one block, marked),
+      2. delete this check,
+      3. strike the entry in `docs/KERNEL-WANTS.md`.
+
+    A test that fails now and passes after is the only kind that proves a fix
+    landed. This is that test with its sign flipped -- it passes now and fails
+    after -- because the fix is not this seat's to make and the thing worth
+    detecting is somebody else's line arriving.
+    """
+    # Read from the boot log rather than over HTTP, because this is something
+    # the machine said at boot and never says again. `machine-tests.sh` writes
+    # it, and by the time these checks run those lines are long past.
+    here = os.path.dirname(os.path.abspath(__file__))
+    log = os.path.join(os.path.dirname(here), "kernel", "build",
+                       "machine-tests.log")
+    line = ""
+    try:
+        with open(log, "rb") as f:
+            for raw in f.read().decode("utf-8", "replace").split(chr(10)):
+                if "dialling out" in raw:
+                    line = raw
+                    break
+    except OSError:
+        pass
+
+    if not line:
+        ok(False, "the boot log reports what dialling out did",
+           "no 'dialling out' line in the machine's output")
+        return
+
+    ok("closed port=refused" in line,
+       "a closed port is refused rather than waited on, now that dial.c "
+       "drains the ring", line.strip())
+    ok("a real listener=ready" in line,
+       "and a real listener off this machine is reached", line.strip())
+
+    # The inverted one.
+    ok("undrained=still waiting" in line,
+       "KF-257 IS STILL OPEN -- a connect poll that drains nothing still "
+       "times out. If this line failed, the kernel was fixed: see this "
+       "check's docstring, delete the workaround in dial.c, and delete this",
+       line.strip())
+
+
 def files_off_the_volume():
     status, lines, body = parts(get("/console.css"))
     if status.startswith("HTTP/1.1 404"):
@@ -886,7 +958,7 @@ def main():
                   a_form_field_past_its_bound, conditional_requests,
                   the_console_itself, the_console_escapes_what_it_shows,
                   the_resolver_and_the_clock, negotiation,
-                  compression, compressed_files,
+                  compression, the_canary_for_kf257, compressed_files,
                   a_range_is_never_compressed,
                   files_off_the_volume, the_status_line,
                   keep_alive, forty_connections):

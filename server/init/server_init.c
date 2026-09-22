@@ -38,6 +38,8 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <sys/stat.h>
 #include <errno.h>
 
@@ -3290,11 +3292,28 @@ static void measure_the_client_side(void)
 	 *     gateway:9  polled with a read   refused,  0 ms
 	 *     gateway:9  polled without one   timed out, 3000 ms
 	 *
-	 * `dial.c` now does that read itself, so the plain loop below is the
-	 * one that works. The second loop reaches past it on purpose -- it
-	 * calls `connect` directly rather than through `dial` -- because a
-	 * measurement that went through the fixed code would only ever show the
-	 * fix working and could never show it being needed again.
+	 * `dial.c` now does that read itself, so the two loops below work.
+	 *
+	 * --- And the third loop, which is a canary ---
+	 *
+	 * It reaches past `dial.c` on purpose and calls `connect` directly, so
+	 * that nothing drains the ring between attempts. **A probe that only
+	 * ever exercises the workaround cannot see the day the workaround stops
+	 * being needed**, and this branch would have carried a redundant read
+	 * in `dial_poll` indefinitely without noticing.
+	 *
+	 * So: while KF-257 is open this must time out, and the line above
+	 * saying the read is required stays true. **When the kernel session
+	 * lands `netdev_service()` in `socket_connect_progress`, this starts
+	 * answering `refused` -- and that is the signal to take the read out of
+	 * `dial.c`.**
+	 *
+	 * The gap was the network session's to spot, not this seat's: they
+	 * pointed out that the dial probe passes with the workaround in place
+	 * and would report 1 ms either way, so it could never notice the fix.
+	 * This paragraph existed before the loop did, which is its own small
+	 * instance of the fault -- a comment describing something the code did
+	 * not do.
 	 */
 	{
 		struct dial closed_port, open_port;
@@ -3327,10 +3346,55 @@ static void measure_the_client_side(void)
 		t_yes = clock_ms() - t0;
 		dial_close(&open_port);
 
-		snprintf(line, sizeof(line),
-		         "  dialling out: closed port=%s in %lums, a real "
-		         "listener=%s in %lums\n",
-		         dial_says(v_no), t_no, dial_says(v_yes), t_yes);
+		/*
+		 * The canary. Same closed port, polled with nothing else in the
+		 * loop, reaching past `dial.c` so no read services the device.
+		 */
+		{
+			struct sockaddr_in to;
+			int fd = socket(AF_INET, SOCK_STREAM, 0);
+			const char *verdict = "no socket";
+			unsigned long t_raw = 0;
+
+			if (fd >= 0) {
+				memset(&to, 0, sizeof(to));
+				to.sin_family = AF_INET;
+				/* 9, and 10.0.2.2, both in network order. */
+				to.sin_port = (unsigned short)((9 >> 8)
+				                               | (9 << 8));
+				to.sin_addr.s_addr = 0x0202000Au;
+
+				t0 = clock_ms();
+				verdict = "still waiting";
+				while (clock_ms() - t0 < 1500) {
+					int rc;
+
+					errno = 0;
+					rc = connect(fd,
+					             (struct sockaddr *)&to,
+					             sizeof(to));
+					if (rc == 0) {
+						verdict = "connected";
+						break;
+					}
+					if (errno != EAGAIN) {
+						verdict = "refused";
+						break;
+					}
+					recon_yield();
+				}
+				t_raw = clock_ms() - t0;
+				close(fd);
+			}
+
+			snprintf(line, sizeof(line),
+			         "  dialling out: closed port=%s in %lums, a "
+			         "real listener=%s in %lums; undrained=%s in "
+			         "%lums\n",
+			         dial_says(v_no), t_no,
+			         dial_says(v_yes), t_yes,
+			         verdict, t_raw);
+		}
 		say(line);
 	}
 }
