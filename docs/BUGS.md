@@ -269,6 +269,8 @@ checks the number now too.*
 
 ### BT-018 — Every refusal in the SDP parser, and none of them ever executed
 
+[#552](https://github.com/neogentrics/ReconOS/issues/552)
+
 - **Found in** `bluetooth` on 21 September 2026 by
   `scripts/mutate-bluetooth.py`, which turned each of the eighteen
   `return false` paths in `sdp.c` into `return true` and found that **not one
@@ -308,6 +310,8 @@ checks the number now too.*
   should already have caught it.
 
 ### BT-019 — Two array bounds one step from writing past the end, and an overflow that forged the evidence
+
+[#553](https://github.com/neogentrics/ReconOS/issues/553)
 
 - **Found in** `bluetooth` on 21 September 2026 by
   `scripts/mutate-bluetooth.py`, moving each of `hid_report.c`'s two capacity
@@ -355,6 +359,8 @@ checks the number now too.*
 
 ### BT-015 — The one function whose output is another bug's evidence had never been called
 
+[#554](https://github.com/neogentrics/ReconOS/issues/554)
+
 - **Found in** `bluetooth` at `61747d6`, 21 September 2026, by
   `scripts/mutate-bluetooth.py`: **every mutation of `bt_hci_attach`
   survived** — all three comparisons inverted, all four refusals turned into
@@ -393,6 +399,8 @@ checks the number now too.*
 
 ### BT-016 — The only test that reached the big-endian read used a value that is the same backwards
 
+[#555](https://github.com/neogentrics/ReconOS/issues/555)
+
 - **Found in** `bluetooth` at `61747d6`, 21 September 2026, by
   `scripts/mutate-bluetooth.py`, which turned `case 4:`'s `return true` in
   `sdp_uint` into `return false` and changed no result anywhere — the
@@ -419,6 +427,8 @@ checks the number now too.*
   day, in two files, found by two different means.
 
 ### BT-017 — Both sides of a boundary were tested, and never the boundary
+
+[#556](https://github.com/neogentrics/ReconOS/issues/556)
 
 - **Found in** `bluetooth` on 21 September 2026 by
   `scripts/mutate-bluetooth.py`, written for this. It replaces every
@@ -497,6 +507,8 @@ number in the hundreds and could not have reached them.
 
 ### BT-001 — The HIDP report type is two bits, not four, so a compliant report with a reserved bit set was thrown away
 
+[#557](https://github.com/neogentrics/ReconOS/issues/557)
+
 - **Found in** `bluetooth` at `66424cb`, 17 September 2026, by reading the
   Linux kernel's `net/bluetooth/hidp/hidp.h` — the file an earlier commit had
   said could not be checked, because no available package ships it. It is
@@ -527,6 +539,8 @@ number in the hundreds and could not have reached them.
 
 ### BT-002 — A device with report ids got a layout claiming zero bytes, which turned off the check that would have caught it
 
+[#558](https://github.com/neogentrics/ReconOS/issues/558)
+
 - **Found in** `bluetooth` at `f2d5306`, 17 September 2026, by writing
   `bt_mouse.c` — the file that joins the layers. Every layer under it had
   passed alone.
@@ -551,6 +565,8 @@ number in the hundreds and could not have reached them.
 
 ### BT-003 — The next step of the sequence sat after a `return` that almost always ran
 
+[#559](https://github.com/neogentrics/ReconOS/issues/559)
+
 - **Found in** `bluetooth` at `37d6ae1`, 18 September 2026, by running the
   whole sequence for the first time. Every state machine under it passed
   alone.
@@ -567,6 +583,8 @@ number in the hundreds and could not have reached them.
   than only in answer to something.
 
 ### BT-004 — A Configure Request was acted on without checking which channel it named
+
+[#560](https://github.com/neogentrics/ReconOS/issues/560)
 
 - **Found in** `bluetooth` at `37d6ae1`, 18 September 2026, by the same first
   run of the whole sequence, and it is the first time the branch had two
@@ -589,6 +607,8 @@ number in the hundreds and could not have reached them.
 - **Fixed in** `bluetooth` at `37d6ae1`, with a two-channel case in `l2cap.c`.
 
 ### BT-005 — A Disconnection Request tore down whichever channel read it first
+
+[#561](https://github.com/neogentrics/ReconOS/issues/561)
 
 - **Found in** `bluetooth` at `a083da4`, 18 September 2026, **by audit rather
   than by testing.** BT-004 had shown that the file's own tests could not
@@ -620,6 +640,8 @@ number in the hundreds and could not have reached them.
 
 ### BT-006 — A command builder wrote eight bytes into a buffer whose size it was never told
 
+[#562](https://github.com/neogentrics/ReconOS/issues/562)
+
 - **Found in** `bluetooth` at `802258e`, 18 September 2026, by the second audit
   of the same kind: list every place a caller's buffer is written. Eleven
   builders, eleven call sites, one wrong.
@@ -639,6 +661,8 @@ number in the hundreds and could not have reached them.
   proves a real memory write rather than a missing return.
 
 ### BT-007 — A PIN length bounded only by convention, and it takes the return address
+
+[#563](https://github.com/neogentrics/ReconOS/issues/563)
 
 - **Found in** `bluetooth` at `237a233`, 18 September 2026, by the third audit
   of the same kind: list every `kmemcpy` with a variable length and check what
@@ -662,6 +686,8 @@ number in the hundreds and could not have reached them.
   73)` and by never reaching `Idling.` See BT-014.
 
 ### BT-008 — One reassembly buffer with two writers, and a PDU acted on before it had arrived
+
+[#564](https://github.com/neogentrics/ReconOS/issues/564)
 
 - **Found in** `bluetooth` at `5749ed3`, 18 September 2026, by the fourth audit
   of the same kind: where does one buffer have more than one writer?
@@ -695,6 +721,8 @@ number in the hundreds and could not have reached them.
 
 ### BT-009 — A lost link left everything above it running on a handle the controller reuses
 
+[#565](https://github.com/neogentrics/ReconOS/issues/565)
+
 - **Found in** `bluetooth` at `682ddf4`, 18 September 2026, by the fifth audit
   of the same kind, and the question is one sentence long: **what happens the
   second time?** Every test on the branch had run the sequence once.
@@ -712,6 +740,8 @@ number in the hundreds and could not have reached them.
   pair again on every disconnection. Only the window is shut.
 
 ### BT-010 — A guard that no test on the branch could reach, in the one path that needed it
+
+[#566](https://github.com/neogentrics/ReconOS/issues/566)
 
 - **Found in** `bluetooth` at `0d2f29b`, 20 September 2026, by fetching a
   **real** SDP record — 701 bytes, a DualShock 4's, out of the Windows
@@ -742,6 +772,8 @@ number in the hundreds and could not have reached them.
 
 ### BT-011 — Four bounds checks that overflow, and one of them is reachable from the wire
 
+[#567](https://github.com/neogentrics/ReconOS/issues/567)
+
 - **Found in** `bluetooth` at `e6951b8`, 20 September 2026, by the sixth audit
   of the same kind: a check written `a + b > limit` is not a check when `a + b`
   can wrap. Eight additive bounds checks on this branch, four of which could.
@@ -770,6 +802,8 @@ number in the hundreds and could not have reached them.
 
 ### BT-012 — A self-test block that read a fixture an unrelated block had written 175 lines earlier
 
+[#568](https://github.com/neogentrics/ReconOS/issues/568)
+
 - **Found in** `bluetooth` at `f28b1c7`, 20 September 2026, by audit, after two
   additions in one morning broke their neighbours through exactly this
   coupling. The visible direction — a later block failing — is the harmless
@@ -795,6 +829,8 @@ number in the hundreds and could not have reached them.
   BT-014. Test code is code, and nothing was testing it.
 
 ### BT-013 — An address comparison that could have stopped after one byte, and every test on the branch passed
+
+[#569](https://github.com/neogentrics/ReconOS/issues/569)
 
 - **Found in** `bluetooth` at `61747d6`, 21 September 2026, by unifying six
   duplicated helpers and then break-testing the single copy. With one copy, one
@@ -826,6 +862,8 @@ number in the hundreds and could not have reached them.
   which is the unification demonstrating its own point.
 
 ### BT-014 — The branch's verification harness called three different non-results green
+
+[#570](https://github.com/neogentrics/ReconOS/issues/570)
 
 - **Found in** `bluetooth` on 17, 18 and 20 September 2026, three times, each
   time by the harness being wrong about a run whose real state was known from
