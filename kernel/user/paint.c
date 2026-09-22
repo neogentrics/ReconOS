@@ -290,6 +290,55 @@ int main(void)
 	}
 
 	recon_say(1, "paint: a C program drew on the screen and presented it\n");
+
+	/*
+	 * --- And hold it, because letting go is what destroyed the evidence ---
+	 *
+	 * This used to close here. Closing releases the panel claim, and from
+	 * that instant the console owns the screen again and keeps printing --
+	 * the rest of the boot report goes out after this program ends. On
+	 * virtio-gpu the console's text only reaches the host when something
+	 * flushes, so for a long time the screendump still found this program's
+	 * frame and the check passed.
+	 *
+	 * **It was passing because the console had not been scheduled yet.**
+	 * KF-258 made the idle loop offer the processor before halting, the
+	 * flush started happening promptly, and the check went red saying "what
+	 * was drawn through the mapping did not reach the display" -- about a
+	 * mapping that had worked perfectly and a program that had already
+	 * exited.
+	 *
+	 * So the precondition is made to hold rather than hoped for: the
+	 * program keeps the screen for a bounded window and says when it gives
+	 * it back. `recon_yield` rather than a spin, because a program holding
+	 * a screen is not a reason to deny everything else a processor.
+	 *
+	 * **The window is short on purpose.** This program runs on nearly every
+	 * boot in the matrix and every one of them pays for it, so the cost is
+	 * a couple of seconds a boot rather than the ten that would make the
+	 * margin generous. A window that is too short does not produce a wrong
+	 * answer -- the harness says the window closed first, which is a
+	 * different sentence from a pixel count and is the whole point.
+	 */
+	{
+		/* **Bounded by the kernel's patience, not only by the
+		 * harness's.** `user_elf_test` in core/user.c waits for this
+		 * program to exit and calls it a failure if it does not; that
+		 * wait is eight seconds and this window must stay well under
+		 * it. The two numbers are coupled and each comment names the
+		 * other, because nothing in the build can check the pair. */
+		const i64 window = (i64)2500 * 1000 * 1000;  /* 2.5 seconds */
+		i64 until = recon_time() + window;
+
+		while (recon_time() < until)
+			recon_yield();
+	}
+
+	/* **Said before the close, and the close is what actually hands it
+	 * back.** A harness that sees this line knows the window is over; one
+	 * that does not see it knows the screen it dumped was still this
+	 * program's. */
+	recon_say(1, "paint: the screen is handed back\n");
 	recon_close((int)fd);
 	return OK;
 }

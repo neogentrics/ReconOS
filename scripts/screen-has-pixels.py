@@ -93,7 +93,7 @@ def parse_ppm(path):
     return width, height, nonblack, len(counts), counts
 
 
-def run(qemu_cmd, marker, timeout, settle):
+def run(qemu_cmd, marker, timeout, settle, held_until=None):
     work = tempfile.mkdtemp(prefix="recon-screen-")
     mon = os.path.join(work, "mon.sock")
     serial = os.path.join(work, "serial.log")
@@ -156,9 +156,24 @@ def run(qemu_cmd, marker, timeout, settle):
 
         if not os.path.exists(shot):
             print("QEMU's monitor produced no screendump")
-            return None, serial
+            return None, serial, False
 
-        return shot, serial
+        # **Did the program still own the screen when this was taken?**
+        #
+        # Read after the dump rather than before, because what matters is
+        # whether the window had closed by the moment the picture was taken.
+        # A harness that cannot answer this reports "the pixels are not there"
+        # when the truth is "the program had already exited", which is the
+        # same misattribution the kernel's own tests exist to refuse.
+        closed = False
+        if held_until:
+            try:
+                with open(serial, "rb") as f:
+                    closed = held_until in f.read().decode("utf-8", "replace")
+            except OSError:
+                pass
+
+        return shot, serial, closed
     finally:
         proc.kill()
         proc.wait()
@@ -177,6 +192,12 @@ def main():
                          "and how many pixels of it at least")
     ap.add_argument("--timeout", type=float, default=120.0)
     ap.add_argument("--settle", type=float, default=1.5)
+
+    # The marker a program prints when it gives the screen back. With it, a
+    # missing colour can be reported as "the window closed first" rather than
+    # as "the mapping did not work" -- two failures that look identical in a
+    # pixel count and want completely different things done about them.
+    ap.add_argument("--held-until", default=None)
     ap.add_argument("qemu", nargs=argparse.REMAINDER)
     args = ap.parse_args()
 
@@ -187,7 +208,8 @@ def main():
         print("no QEMU command given")
         return 2
 
-    shot, serial = run(qemu, args.marker, args.timeout, args.settle)
+    shot, serial, window_closed = run(qemu, args.marker, args.timeout,
+                                      args.settle, args.held_until)
     if shot is None:
         print("  serial log: %s" % serial)
         return 2
@@ -230,6 +252,22 @@ def main():
         want = bytes.fromhex(spec[0])
         need = int(spec[1]) if len(spec) > 1 else 1
         got = counts.get(want, 0)
+
+        if got < need and window_closed:
+            # **Not a statement about pixels.** The program handed the screen
+            # back before the picture was taken, so the console had it and
+            # what the dump shows is the console's. Re-runnable, and says so.
+            print("the program printed %r before the screendump, so it had "
+                  "already handed the screen back and what was captured is "
+                  "the console's -- this says nothing about whether the "
+                  "mapping works. The hold window was too short for this "
+                  "machine, or the harness was too slow to reach the monitor."
+                  % args.held_until)
+            print("  #%s was on %d pixel(s); the check wanted %d"
+                  % (want.hex(), got, need))
+            print("  screendump: %s" % shot)
+            print("  serial log: %s" % serial)
+            return 1
 
         if got < need:
             print("#%s is on %d pixel(s) and this asks for at least %d -- what "

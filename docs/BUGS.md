@@ -395,6 +395,163 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ---
 
+### GX-016 — A screen check that was passing because the console had not been scheduled yet
+
+- **Found in** kernel 0.5.4, on 21 September 2026, by merging the `kernel`
+  branch and watching a green path go red — and then by refusing to believe
+  either of the two easy explanations for it.
+
+- **Was** `PVH, a program presents what it mapped`, which asserts that the
+  colour `#2b3342` — the ground the `paint` program fills its screen with — is
+  on at least 100,000 pixels of a screendump taken from outside the machine.
+  That check exists because of GX-003: every display self-test in this kernel
+  once passed against a completely black screen, so the evidence has to come
+  from the host's view of the glass and not from a counter the driver keeps
+  about itself.
+
+  **The program had already exited when the picture was taken.** `paint`
+  presents, prints its marker, closes `/dev/fb0` and returns. Closing releases
+  the panel claim, and from that instant the console owns the screen again and
+  goes on printing the rest of the boot report over it.
+
+  So the check was asserting that a program's pixels are still on the glass
+  **after the program has handed the screen back**, which was never guaranteed
+  by anything.
+
+- **Why it passed for six days.** On virtio-gpu the console's text does not
+  reach the host when it is drawn; it reaches the host when something flushes.
+  Nothing was flushing promptly, so the host went on holding the frame this
+  program had presented, and the screendump found it.
+
+  Then the `kernel` session fixed KF-258 — the idle loop now offers the
+  processor to the scheduler before halting, instead of halting and waiting for
+  a preemption that never comes on the boot processor. The flush started
+  happening on time. The check went red.
+
+  **It had been measuring "the console has not been scheduled yet" alongside
+  the thing it meant to measure**, and one of those two stopped being true.
+
+- **What it said when it failed**, which is the part worth keeping:
+
+  ```
+  #2b3342 is on 0 pixel(s) and this asks for at least 100000 --
+  what was drawn through the mapping did not reach the display
+  ```
+
+  Every word of which is false about the run it describes. The mapping worked,
+  the fill worked, the present reached the host, and the program exited
+  cleanly. **A check that fails for a reason it cannot name accuses whatever is
+  nearest**, and what was nearest was the `SYS_PRESENT` path and the display
+  driver — neither of which had anything wrong with them.
+
+- **Cost** about an hour, most of it spent on the two wrong attributions the
+  failure invited. First: contention, since another session was running a
+  matrix — ruled out by reproducing it alone, and at `--min-pixels 1`, where it
+  was still zero. Second: the `kernel` session's change, since bisecting by
+  removing it made the check pass — which is true and is not the same as it
+  being the fault. Their change is correct; it removed the luck this check was
+  running on.
+
+  A third wrong attribution nearly went into the register: this session told
+  the `kernel` session that both files involved were theirs. **They are not.**
+  `check_screen_colour`, the `--require-colour` flag and this test line are all
+  `graphics` work and exist on no other branch — which is also why their matrix
+  was green while mine was red, and why "it passes over there" was evidence
+  about coverage rather than about the kernel.
+
+- **Fixed in** kernel 0.5.15 on `graphics`, by making the precondition hold
+  instead of hoping for it. `paint` keeps the screen for a bounded window after
+  presenting, yielding rather than spinning, and then says it is giving it
+  back:
+
+  ```c
+  const i64 window = (i64)2500 * 1000 * 1000;  /* 2.5 seconds */
+  i64 until = recon_time() + window;
+
+  while (recon_time() < until)
+          recon_yield();
+
+  recon_say(1, "paint: the screen is handed back\n");
+  ```
+
+  **The window is deliberately short.** This program runs on nearly every boot
+  in the matrix and every one of them pays for it, so two and a half seconds
+  rather than the ten that would make the margin comfortable.
+
+- **And the harness can now tell the two failures apart**, which matters more
+  than the window does. `--held-until` names the line the program prints when
+  it lets go; the screendump is followed by a look at the serial log, and if
+  that line is already there the check says so instead of reporting a colour:
+
+  ```
+  the program printed 'the screen is handed back' before the screendump, so it
+  had already handed the screen back and what was captured is the console's --
+  this says nothing about whether the mapping works.
+  ```
+
+  Verified by forcing it: `--settle 5` against a 2.5-second window produces
+  exactly that message and exits 1. A bounded window is still a margin rather
+  than a proof — but a margin that reports when it has been exceeded is a
+  different object from one that reports black.
+
+- **The rule it belongs to.** A check whose subject must be in a particular
+  state has to put it in that state. Every version of this that relies on
+  timing — a shorter settle, a faster monitor, a slower console — is the same
+  check with a different amount of luck in it.
+
+- **And the fix moved a measurement that had nothing to do with it.**
+
+  Raising `user_elf_test`'s patience from two seconds to eight was necessary —
+  the hold outlasted it and the kernel reported `it never reached its exit call`
+  about a program working as written, on every PVH path. The `kernel` session
+  found what else that constant is, and it is worth recording because neither
+  end could see it alone.
+
+  **It is one of KF-150's five stall detectors.** `kernel/core/user.c` has five
+  independent two-second deadlines — the ELF loader's program, the socket probe,
+  this C program, the framebuffer test, the volume program — and all five end in
+  `say_how_far_it_got`, which prints one string. `scripts/kf150-rate.sh` counts
+  stalls by grepping for that string.
+
+  So "about one boot in sixty, a user program does not finish" is not a property
+  of a program. It is the **disjunction of five deadlines, counted through one
+  string that cannot say which fired**. Raise one of them to eight seconds and
+  that path can essentially never contribute again: the rate drops, no fault has
+  changed, and it reads as progress.
+
+  Their 360-boot result is unaffected — both arms were built before this change,
+  with all five at two seconds — but a later run on a merged tree would measure
+  something different while looking identical.
+
+- **Why the deadline moved anyway, rather than the window shrinking to fit it.**
+
+  The alternative was a hold under two seconds, leaving all five deadlines
+  untouched. It was measured and rejected. The screendump lands about **0.8
+  seconds** after the marker in the quiet case — 0.25 for the marker poll, 0.25
+  settle, 0.3 for the monitor — so a window of 1.5 to 1.8 seconds would fit.
+
+  But **the kernel's deadline runs from the program's start, not from its
+  marker**, and this program fills 2560x1600 and reads four markers back before
+  it prints anything. Its pre-marker work plus the window would then sit just
+  under two seconds on a quiet machine and over it on a busy one — and the
+  symptom of going over is `it never reached its exit call`, which is the
+  misleading sentence this entry exists about.
+
+  So the choice was between a retuned stall rate on one of five paths, which is
+  visible to anyone who looks at the constant, and a check that intermittently
+  produces a confidently wrong message about a working program. **A number that
+  is wrong in a way somebody can see beats a message that is wrong in a way
+  nobody can.**
+
+  The `kernel` session's fix is better than either and is theirs: make
+  `say_how_far_it_got` name the test and print the budget it blew, so a changed
+  deadline shows up in the data instead of silently retuning a rate. Its own
+  header already says `"the program never reached its exit call" is true and
+  useless` for the four states of a thread — and the function under that comment
+  has the same defect one level up, across its five callers.
+
+---
+
 ### GX-015 — `intel_reg` says nothing and exits 0 for a register it does not know, and the script rendered twenty-two failures as a heading
 
 - **Found in** kernel 0.4.0, on 18 September 2026, by finally getting onto the

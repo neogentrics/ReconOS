@@ -316,13 +316,21 @@ check_screen_without() {
 	fi
 }
 
+# `$HELD_UNTIL` and `$SETTLE`, when set, are passed through. A check whose
+# subject holds the screen for a bounded window wants a short settle -- the
+# point of the window is that the dump happens inside it -- and wants the
+# harness to be able to say the window closed rather than reporting black.
 check_screen_colour() {
 	local name=$1 marker=$2 colour=$3; shift 3
 	local log="$WORK/$(echo "$name" | tr ' /' '__').screen.log"
 
 	printf '%-46s' "$name"
 
-	if python3 "$ROOT/scripts/screen-has-pixels.py" --marker "$marker" 			--min-pixels 1000 --require-colour "$colour" 			-- "$@" >"$log" 2>&1; then
+	local extra=()
+	[ -n "${HELD_UNTIL:-}" ] && extra+=(--held-until "$HELD_UNTIL")
+	[ -n "${SETTLE:-}" ] && extra+=(--settle "$SETTLE")
+
+	if python3 "$ROOT/scripts/screen-has-pixels.py" --marker "$marker" 			--min-pixels 1000 --require-colour "$colour" 			"${extra[@]}" -- "$@" >"$log" 2>&1; then
 		echo "ok -- $(tail -n 1 "$log")"
 	else
 		echo "FAILED -- $log"
@@ -1091,6 +1099,7 @@ check_screen_without "  PVH, the console leaves a program alone" \
 	qemu-system-x86_64 -m 1024M -device VGA,vgamem_mb=256 \
 		-kernel "$X64_ELF"
 
+HELD_UNTIL="the screen is handed back" SETTLE=0.25 \
 check_screen_colour "  PVH, a program presents what it mapped" \
 	"drew on the screen and presented it" 2b3342:100000 \
 	qemu-system-x86_64 -m 1024M -vga none \

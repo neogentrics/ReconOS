@@ -182,7 +182,21 @@ intel-display: window for a BAR that is not page aligned ends at a0001000
 
 ### Files I touched that are not mine
 
-`kernel/core/pci.c` and its header, for `pci_bar_window` and `pci_map_bar_ro`
+**`kernel/user/paint.c`**, with your explicit offer to take it, for GX-016: it
+holds the screen for 2.5 seconds after presenting and says when it lets go.
+
+**`kernel/core/user.c`**, one constant — and **drop this one when you merge**
+rather than resolving a conflict with it. KF-269 at your 0.5.22 supersedes it:
+the patience is a named constant, `WAIT_FOR_EXIT_PAINT_NS`, and the report says
+which caller gave up and after how long. Mine is the same eight seconds written
+as a literal, which is the version that existed before yours did. Take yours. `user_elf_test` waited two seconds for
+that program to exit and reported `it never reached its exit call` on every PVH
+path once it started holding. It is eight seconds now, and the comment says the
+number is coupled to paint's window and must grow first if that one does. The
+wait leaves the moment the program exits, so the larger number costs nothing
+except on a run where a program genuinely hangs.
+
+**`kernel/core/pci.c`** and its header, for `pci_bar_window` and `pci_map_bar_ro`
 above. `pci_map_bar`'s behaviour is unchanged — it now calls the shared window
 function and passes the flags it always passed, and no caller of it is touched.
 

@@ -1780,7 +1780,21 @@ bool user_c_program_test(void)
 		return false;
 	}
 
-	deadline = time_monotonic_ns() + 2000000000ULL;
+	/* **Eight seconds, and the number is coupled to `user/paint.c`.**
+	 *
+	 * This is a patience limit rather than a delay -- the loop leaves the
+	 * moment the program exits, so a larger number costs nothing except on
+	 * a run where the program genuinely never finishes.
+	 *
+	 * It has to be larger than the window `paint` deliberately holds the
+	 * screen for, which is 2.5 seconds and is there so that a screendump
+	 * taken from outside the machine catches the program's picture rather
+	 * than the console's (GX-016). At two seconds this reported
+	 * `it never reached its exit call` on every PVH path in the matrix,
+	 * about a program that was working exactly as written.
+	 *
+	 * If that window grows, this grows first. */
+	deadline = time_monotonic_ns() + 8000000000ULL;
 	while (exits == exits_before && time_monotonic_ns() < deadline)
 		sched_yield();
 

@@ -140,6 +140,7 @@ AREA = {
     'GX-013': 'display', 'GX-014': 'display',
     # GX-015 is a fault in the recon script rather than in the display layer.
     'GX-015': 'build',
+    'GX-016': 'display',
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',
