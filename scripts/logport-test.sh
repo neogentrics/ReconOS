@@ -175,6 +175,24 @@ sleep 2
 # with the port wide open exactly as readily.
 #
 # What must be true is that nothing comes back, because nothing is listening.
+#
+# **This assertion only tests the first half of that sentence, and on its own it
+# is not enough.** It passes when no bytes arrive. It cannot tell "the guest
+# refused because nothing is listening" from "QEMU's forwarder accepted on the
+# host side and the guest had nothing to say" -- a forwarded port accepts before
+# anything in the guest is reached, so a connection succeeding proves nothing
+# about the guest at all. The server session found that while building a
+# reachability endpoint, where it would have been the whole bug.
+#
+# **The assertion below it is what makes the pair sound**, and the pairing is
+# deliberate rather than lucky: it greps the kernel's own boot report and
+# requires no log port line anywhere in it. That is the guest's own output and
+# the forwarder cannot fabricate it.
+#
+# Kept as a pair rather than replaced by the strong one alone, because "no bytes
+# came back" is the property a reader actually cares about and "the kernel never
+# said it was listening" is the reason to believe it. Recorded here so the next
+# person to tighten this does not delete the half that is load-bearing.
 timeout 8 bash -c "exec 3<>/dev/tcp/127.0.0.1/$HOSTPORT 2>/dev/null; \
 	timeout 5 cat <&3" > "$WORK/closed.txt" 2>/dev/null
 
