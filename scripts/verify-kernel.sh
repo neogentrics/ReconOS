@@ -992,6 +992,35 @@ check_for virtio0 "  PVH, -cpu max" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -cpu max -kernel "$X64_ELF" \
 		"${X64_DISK[@]}"
 
+# A card that is not virtio, because until today no machine here ever made one.
+#
+# **`e1000_attach` was wired into `arch/x86_64/storage.c` and executed by
+# nothing in this suite.** The bluetooth session asked which functions are
+# registered and never called; the kernel session measured it and found four,
+# two of them this branch's drivers. Every `-device` this rig creates was
+# virtio, ahci, nvme, sdhci, xhci or a display -- no Intel card, so the Intel
+# driver's attach path had never run in a green matrix.
+#
+# `nic_test.c` says as much in its own opening paragraph and has since it was
+# written: *the drivers themselves are proved by booting with the card
+# attached, and that is a different run from this one.* That was true, stated,
+# and acted on by nobody, which is the more interesting half -- the gap was
+# never hidden, it was simply nobody's line to add.
+#
+# The expected string is the card identifying itself out of its own registers:
+# `8254x 100E` is read from the device, not printed from a constant, so a
+# match means the driver reached the hardware rather than merely compiled.
+#
+# **The Realtek cannot be covered this way and that is not a thing to fix
+# here.** QEMU emulates no Realtek gigabit part, so `r8169_attach` has no
+# machine in any rig to call it. Its coverage is the fifteen register offsets
+# read off the real cards over SSH, recorded in `docs/BARE-METAL.md`, and that
+# section is explicit about what it does not close: the reset sequence, the
+# interrupts, and a frame reaching the wire.
+check_for "8254x 100E" "  PVH, an Intel card that is not virtio" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
+		-netdev user,id=n0 -device e1000,netdev=n0 "${X64_DISK[@]}"
+
 check "  PVH, no disk attached" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
 
