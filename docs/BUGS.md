@@ -8370,6 +8370,25 @@ boot log.
   entry* rather than against what was read, because what was read is the number
   the fault used to hide behind.
 
+- **Measured, by the network session, after this was written.** The entry above
+  said no machine is known to have hit it. That is true and it is weaker than
+  two boots differing only in the length of one file:
+
+  | `\reconos\cmdline` | what the kernel reported | the log port |
+  |---|---|---|
+  | `logport`, 7 bytes | `command line : logport` | **listening** |
+  | 130 pad + ` logport`, 138 bytes | `command line : xxxxxxxx...` | **absent** |
+
+  Nothing anywhere said the line had been cut.
+
+- **And there is partial visibility, which in the ordinary case is worse than
+  none.** The boot echoes the truncated text, so 130 identical padding
+  characters are obviously wrong — but those were an artefact of the test rather
+  than the finding. **A real over-long command line echoes as a list of
+  plausible switches with one missing off the end, and that reads as correct.**
+  In the network session's words: *a truncation you can see and misread is
+  worse than one you cannot see at all.*
+
 - **Checked by** `scripts/cmdline-test.sh`, which asserts all four states on
   **both** loaders against one medium — and the over-long case asserts on the
   kernel's line being **absent**, not merely on the loader complaining, because
