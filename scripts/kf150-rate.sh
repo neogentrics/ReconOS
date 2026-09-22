@@ -76,9 +76,51 @@ fi
 # only by say_how_far_it_got, which runs only when a program missed its
 # deadline.
 one_boot() {
-	local elf=$1 log=$2
+	local elf=$1 log=$2 waited=0
+
+	# **Ended when the machine is finished, not when the clock runs out.**
+	#
+	# This used to be a bare `timeout 60`, and a boot does all of its work in
+	# about three and a half seconds -- so every sample spent fifty-six
+	# seconds watching a kernel that had nothing left to do. At a hundred and
+	# eighty a side that is three hundred and sixty boots, twenty-two minutes
+	# of measurement inside six hours of waiting, and the reason a run that
+	# should fit in a coffee break did not fit in a night.
+	#
+	# The marker is the last line the init program prints. Two things make it
+	# safe to stop there, and both were read out of the source rather than
+	# assumed:
+	#
+	#   - `the heap: ` comes from userland/init/recon_init.c, which runs at
+	#     the very end of the boot;
+	#   - `user: it is ` comes from say_how_far_it_got in kernel/core/user.c,
+	#     which runs with the kernel self-tests, well before init.
+	#
+	# The stall diagnostic therefore cannot be cut off by stopping at the
+	# finish marker -- it is already in the log by then, or it is not coming.
+	# A boot that stalls and never reaches init simply never matches, waits
+	# out the full timeout, and is classified exactly as it was before. That
+	# is the rare case and it is the one we are counting, so it is the right
+	# one to leave slow.
 	timeout 60 qemu-system-x86_64 -m 512M -nographic -no-reboot \
-		-kernel "$elf" >"$log" 2>&1
+		-kernel "$elf" >"$log" 2>&1 &
+	local qpid=$!
+
+	while kill -0 "$qpid" 2>/dev/null; do
+		if grep -qa "the heap: " "$log" 2>/dev/null; then
+			# A breath for any trailing line to land before the
+			# machine goes away. Cheap, and it is the difference
+			# between reading a log and racing one.
+			sleep 0.3
+			kill "$qpid" 2>/dev/null
+			pkill -f -- "-kernel $elf" 2>/dev/null
+			break
+		fi
+		sleep 0.1
+		waited=$((waited + 1))
+	done
+	wait "$qpid" 2>/dev/null
+
 	if grep -qa "user: it is " "$log"; then
 		echo stall
 	elif grep -qa "self-test" "$log"; then

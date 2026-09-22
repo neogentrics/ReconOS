@@ -195,7 +195,7 @@ yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
 
 ## Open
 
-17, and each entry says why. They are listed because a register that only
+18, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -217,6 +217,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
 - **KF-257** — The handshake completes on the wire and `connect` never hears about it
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
+- **KF-263** — The reporter written for the case where the probe never runs is the one that has never run
 
 ---
 
@@ -4663,6 +4664,43 @@ passed with the bug present, which is not a test at all.
 
 ### KF-150 — About one boot in sixty, a user program does not finish, and nothing says why
 
+- **Correction, 21 September 2026 — the first attempt at a rate measurement
+  compared two trees, not one change, and is withdrawn.**
+  `scripts/kf150-rate.sh` says in its own comment that the two kernels *"must
+  differ only in the thing being measured"*, and the pair handed to it did not:
+  the pre-fix ELF was an older binary that lacked the KF-258 sleep probe
+  entirely **and** carried the pre-`timer_sleep_ns` version of `logport.c`,
+  which changes sleeping behaviour on the boot path — the very thing under
+  measurement. The script's `cmp -s` guard catches two binaries that are
+  identical; nothing catches two that differ by too much, because *"differ only
+  in X"* is not computable from two ELFs. **The guard that exists is for the
+  error that is cheap to detect, not the one that is expensive to make.**
+
+  Rebuilt from `7f85c94`: the after arm is the tree as it stands, the before
+  arm is the tree with one line removed — the `sched_yield()` in the boot
+  processor's idle loop at `kernel/core/main.c:774`. `smp.c` is deliberately
+  left alone: in an infinite loop `A;B;` and `B;A;` differ only on the first
+  iteration, so its version of the fault is bounded at one ceiling rather than
+  unbounded, and the measurement boots a single processor anyway.
+
+- **Contamination of the run of 21 September, and the direction it can and
+  cannot push.** The box was not quiet: the graphics session was running its
+  aarch64 matrix throughout, and an earlier attempt overlapped a server-session
+  boot. The design answers this by interleaving — whatever the conditions were,
+  both arms had them — but the two candidates in this entry are **not equally
+  affected by that**, and saying so in one sentence would be wrong.
+
+  For the **host-time deadline** candidate, contention can only add stalls: a
+  loaded machine misses a wall-clock deadline more often, never less. For the
+  **scheduler** candidate the direction is **unknown** — load changes which
+  thread is runnable when, and that can suppress as easily as it can provoke.
+  The network session's arithmetic is why this is not hypothetical: at
+  `TIME_TICK_HZ 100` against a 2 s deadline, KF-258's four measured pre-fix
+  delays were 301, 305, 299 and **100** ticks — so three would stall and the
+  fourth would not. **The harmless outcome is already one of four behaviours
+  this mechanism has been observed to have**, not a possibility raised in the
+  abstract.
+
 [#389](https://github.com/neogentrics/ReconOS/issues/389)
 
 > ### Measured against KF-258's fix on 20 September 2026, and the measurement failed
@@ -8350,6 +8388,112 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-264 — Every boot in the rate harness waited out a timeout it had finished with in three seconds
+
+- **Found:** 21 September 2026, here, restarting the KF-150 measurement at a
+  hundred and eighty boots a side. It had reached **18 of 180 after
+  thirty-five minutes**, which puts the end of a run asked for in the evening
+  at half past five the next morning.
+
+- **Was:** `one_boot` in `scripts/kf150-rate.sh` ran the guest under `timeout
+  60` and waited for it to return. **Nothing in this kernel exits QEMU**, so
+  every boot ran the full sixty seconds no matter when it had finished.
+
+  Measured rather than estimated: the last line a boot prints arrives **3.6
+  seconds** in. So each sample spent 3.6 seconds measuring and 56.4 seconds
+  watching a machine with nothing left to do — **94% waste**, and across 360
+  boots the difference between twenty-eight minutes and just under six hours.
+
+- **Why it survived being looked at.** A slow harness returns correct answers.
+  Nothing goes red, no assertion fails, and the only symptom is a number on a
+  clock that nobody is comparing against anything. Every other script in
+  `scripts/` boots the same way; this is simply the first place the boot count
+  got large enough for the constant to dominate.
+
+  It is the week's shape once more, from the other side: **the faults that hide
+  are the ones whose symptom is not a failure.** KF-261 hid behind a correct
+  summary, KF-262 behind a successful read, and this behind a passing run.
+
+- **Fixed in** kernel 0.5.18. The boot is stopped when the machine is finished
+  with it. `one_boot` backgrounds the guest and polls its log for `the heap: `,
+  the last line the init program prints, then gives it 0.3 s for anything
+  trailing and takes it away.
+
+- **Why stopping there cannot lose a stall, read out of the source rather than
+  assumed.** `the heap: ` is printed by `userland/init/recon_init.c:514`, which
+  runs at the very end of a boot — line 372 of 373 in a real log. The stall
+  diagnostic `user: it is ` is printed by `say_how_far_it_got` in
+  `kernel/core/user.c`, which runs with the kernel self-tests, finished by line
+  366. **The diagnostic is therefore already in the log by the time the finish
+  marker appears, or it is not coming.** A boot that stalls before init simply
+  never matches, waits out the full timeout and is classified exactly as
+  before — the rare case, and the right one to leave slow.
+
+- **Cost:** one measurement abandoned at 18 of 180, and — worse than the time —
+  the *reason* it was abandoned was not this. See the correction in KF-150.
+
+### KF-263 — The reporter written for the case where the probe never runs is the one that has never run
+
+- **Found:** 21 September 2026, here, building the instrument the **network
+  session** asked for: run KF-258's sleep probe on *both* arms of the KF-150
+  rate measurement, so the pre-fix arm yields a distribution of delays rather
+  than a count of stalls, and the post-fix arm doubles as a check that the two
+  arms really are two different kernels. The second half works. The first half
+  produces nothing at all.
+
+- **Observed, on two kernels built from `7f85c94` differing by exactly the one
+  line of KF-258's fix:**
+
+  | | `-append sleepprobe` | probe output |
+  |---|---|---|
+  | with the fix | `command line : sleepprobe` | full report, `started : tick 323, first ran on tick 323` |
+  | without it | `command line : sleepprobe` | **nothing, in a full 60 s boot** |
+
+  The pre-fix ELF is not missing the probe: `nm` finds `probe_entry`,
+  `probe_armed_at`, `probe_first_ran_tick` and the rest in it. The switch is
+  parsed. The two logs are **identical for all 372 lines**, and the fixed one
+  then appends thirteen more.
+
+- **Why that is a fault and not just an unfinished probe.**
+  `timer_sleep_probe_report` has a deliberate timeout path — after
+  `PROBE_REPORT_AFTER_NS` (6 s) it reports whether or not the probe finished,
+  and prints `IT NEVER RAN AT ALL` in as many words. It is called from
+  `probe_entry` on completion **and from both branches of `power_idle_wait`**,
+  and the comment on the second says exactly why:
+
+  > *The probe reports its own success, because the other reporter runs from
+  > the idle path — and a machine whose user program never blocks never reaches
+  > it.*
+
+  On a fixed kernel the probe always finishes, so the self-report always fires
+  first and **the backstop is never exercised**. On an unfixed kernel the
+  backstop is the only reporter there is, and it prints nothing. So the
+  backstop has never once done its job, and a green run looks identical either
+  way.
+
+- **The leading candidate, and it is NOT confirmed.** After init finishes, the
+  single processor halts in `power_idle_wait` with no timer filed and — this is
+  KF-258's own mechanism — `arch_wait_tickless` masking the only line that
+  could preempt it. If it never returns, the reporter on the far side of it
+  never runs. **That would mean the backstop lives on the code path the fault
+  disables**, which is a tidy story and is exactly the kind of tidy story worth
+  distrusting until it is measured.
+
+  A competing candidate that fits the same evidence: `power_idle_wait` does
+  return and a gate inside the report holds. Nothing observed so far separates
+  them.
+
+- **What would settle it**, and it is cheap: one boot of each arm with a print
+  at the top of `timer_sleep_probe_report`, before the gates. If the unfixed
+  arm prints it, the machine is awake and the gate is wrong; if it does not,
+  the machine has stopped. Not done yet — the box was measuring.
+
+- **Why this is recorded at full weight although a debugging probe is not
+  shipped code.** The probe exists to diagnose KF-258's family of faults, and
+  it is unavailable **on precisely the kernels that have one**. An instrument
+  that works only where there is nothing to measure is the thing this register
+  keeps rediscovering under different names.
+
 ### KF-262 — A command line longer than the buffer was cut in half and reported as read
 
 [#551](https://github.com/neogentrics/ReconOS/issues/551)
@@ -8998,8 +9142,70 @@ boot log.
   was. Something is delivering inbound segments late or not at all, and the
   state machine is downstream of that.
 
-- **Status:** open, and it blocks the server branch's entire client half.
-  `server/dial.c` is written and waiting with 38 checks.
+- **Cause confirmed, 21 September 2026 — it is the servicing path, and the
+  six-second gap above was the clue that said so.** The three waiting paths in
+  `kernel/core/socket.c` do not do the same thing:
+
+  ```
+  line 211  socket_accept             netdev_service(); ip_flush_pending();
+  line 416  socket_recvfrom           netdev_service(); ip_flush_pending(); tcp_tick();
+  line 319  socket_connect_progress      -- nothing at all
+  ```
+
+  A program waiting in `recvfrom` services the device on every call. A program
+  waiting in `connect_progress` services nothing, so an arriving SYN+ACK sits
+  uncollected until some other thread happens to call a path that drains it —
+  which is why the *second*, identical segment succeeded where the first did
+  not. **A state machine that has lost a transition does not recover six
+  seconds later on the same packet.**
+
+  Measured by the server session as VF-045, same closed port, same loop, one
+  line different:
+
+  ```
+  gateway:9     (closed)  polled with a read in the loop   refused,   0 ms
+  gateway:9     (closed)  polled without one               timed out, 3000 ms
+  gateway:18400 (open)    polled with a read in the loop   ready,     1 ms
+  ```
+
+  Run again with the first two swapped in case the earlier had warmed
+  something. Identical both ways.
+
+- **The ruled-out list above is withdrawn, and the reason is worth more than
+  the entry it corrects.** *"The resolver polls in exactly the same shape"* was
+  the control, and the resolver waits in `recvfrom` — so the control and the
+  subject differed in precisely the mechanism at issue, which is what made them
+  look identical from the program's side.
+
+  **Underneath it was a second and worse one.** Every attempt at a connection
+  that *should* succeed dialled `10.0.2.15`, the machine's own address, which
+  cannot come back through QEMU user networking whatever the stack does. **A
+  working connection and a broken poll therefore produced identical output**,
+  and the first run of the discriminator appeared to refute the hypothesis
+  because both loops were dialling themselves. The closed port is what rescued
+  it: a RST definitely arrives, so a segment definitely changes state.
+
+  A control that agrees with every hypothesis is the one kind that running it
+  more carefully cannot catch. It is recorded here because this register has
+  three other entries about checks that could not fail, and this is the same
+  fault wearing the clothes of a control rather than of an assertion.
+
+- **The fix**, ruled a repair rather than a contract change: `netdev_service()`
+  beside `ip_flush_pending()` in `socket_connect_progress`, so that path
+  behaves like the two next to it. `net.h:585-595` is bare declarations, so
+  nothing's expectations are being changed.
+
+- **Status:** open, and no longer blocking. `server/dial.c` carries a marked
+  one-read-per-poll workaround naming this fix, and outbound TCP works from
+  userland today — an outbound connection to a real listener measures 1 ms.
+
+  **Not landed yet, and deliberately.** The server session's suite contains a
+  canary that asserts KF-257 is open and is built to go red, with the good news
+  printed in its own failure line. They have never watched that assertion run
+  inside the suite, so a kernel fixed first would take them from never-green
+  straight to red with no way to tell a working canary from a broken one.
+  **One boot of their suite first, then this lands** — their order, not a
+  preference of this seat's.
 
 ### KF-256 — One failed transfer wedges the endpoint for the rest of the boot
 

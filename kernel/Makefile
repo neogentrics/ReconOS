@@ -266,7 +266,7 @@
 #
 # Neither could have been seen with one driver behind the interface, which is
 # the point the whole branch has been making.
-VERSION := 0.5.17
+VERSION := 0.5.18
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

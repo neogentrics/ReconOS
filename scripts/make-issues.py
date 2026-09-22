@@ -226,6 +226,12 @@ AREA = {
     'KF-261': 'build',
     # A bootloader fault, like KF-215, KF-216, KF-230 and KF-233.
     'KF-262': 'startup',
+    # The sleep probe's reporter lives in kernel/core/timer.c and is called
+    # from kernel/core/power.c, so it is the kernel's rather than the rig's --
+    # even though only the rig has ever asked it for anything.
+    'KF-263': 'kernel',
+    # The measuring rig, like KF-261: scripts/ rather than anything that boots.
+    'KF-264': 'build',
     # The other two tracks' registers, which arrived with their branches and
     # had no line here at all. Read off their own titles, 20 September 2026.
     #
