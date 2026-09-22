@@ -564,6 +564,64 @@ def link_into_register(bg, number):
     return True
 
 
+def check_citations(text):
+    """Every `NW-` number another branch cites must exist in this register.
+
+    **The allocation is this branch's, so the obligation is too.** The server
+    session needed to credit a diagnosis, found the next number apparently
+    free, and wrote NW-021 into their KERNEL-WANTS before this register had an
+    entry behind it. They owned it and wrote the remedy: describe the finding,
+    ask the owner for a number, cite what comes back.
+
+    Their sharper point is why this exists. **It was luck that 021 was free.** A
+    number already taken would have pointed their documents at an unrelated
+    finding, and *a wrong reference that resolves is worse than one that
+    dangles* -- because it resolves, and nobody re-checks a reference that
+    resolves.
+
+    This catches only the dangling half and says so rather than implying it
+    covers both. Whether a citation *means* the entry it names is a question
+    about prose that no script here can ask.
+
+    Degrades to a note when git cannot reach the other branches. Under WSL on
+    this rig a worktree's .git cannot be followed, and "every citation is fine"
+    is the one answer that must not come out of a check that read nothing.
+    """
+    mine = set(re.findall(r'^### (NW-\d+)', text, re.M))
+    if not mine:
+        return 0
+
+    out = subprocess.run(['git', 'for-each-ref', '--format=%(refname:short)',
+                          'refs/remotes/origin'],
+                         capture_output=True, encoding='utf-8', errors='replace')
+    if out.returncode != 0 or not out.stdout.strip():
+        print('  note: could not read the other branches, so citations of '
+              'NW- numbers were not checked')
+        return 0
+
+    missing = {}
+    for ref in out.stdout.split():
+        if ref.endswith('HEAD'):
+            continue
+        for doc in ('docs/KERNEL-WANTS.md', 'docs/SIGNALS.md', 'docs/BUGS.md'):
+            got = subprocess.run(['git', 'show', ref + ':' + doc],
+                                 capture_output=True, encoding='utf-8',
+                                 errors='replace')
+            if got.returncode != 0:
+                continue
+            for cited in set(re.findall(r'\bNW-\d+\b', got.stdout)):
+                if cited not in mine:
+                    missing.setdefault(cited, []).append(ref + ':' + doc)
+
+    for num in sorted(missing):
+        print('  %s is cited by %s and has no entry here'
+              % (num, ', '.join(sorted(missing[num]))))
+
+    if not missing:
+        print('  every NW- number cited on another branch has an entry here')
+    return 1 if missing else 0
+
+
 def check_versions(text):
     """Every version an entry names must be one that was actually released.
 
@@ -798,7 +856,8 @@ def main():
     dry = '--dry-run' in sys.argv
     if '--check' in sys.argv:
         text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')
-        sys.exit(check_links() | check_open(text) | check_versions(text))
+        sys.exit(check_links() | check_open(text) | check_versions(text)
+                 | check_citations(text))
 
     entries = parse('docs/BUGS.md')
     have = existing_titles()
