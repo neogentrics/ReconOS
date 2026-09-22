@@ -145,6 +145,7 @@ AREA = {
     'BT-010': 'kernel', 'BT-011': 'kernel', 'BT-012': 'kernel',
     'BT-013': 'kernel', 'BT-014': 'build',
     'BT-015': 'kernel', 'BT-016': 'kernel', 'BT-017': 'kernel',
+    'BT-018': 'kernel', 'BT-019': 'kernel',
 
     'KF-206': 'kernel',
     'KF-207': 'build',

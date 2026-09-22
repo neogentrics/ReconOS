@@ -936,5 +936,305 @@ bool sdp_self_test(void)
 		}
 	}
 
+	/* --- every way this parser says no ------------------------------
+	 *
+	 * A mutation run turned each of the eighteen `return false` paths in
+	 * this file into `return true` and found that **not one of them was
+	 * reached by any test.** Every fixture here is a well-formed record,
+	 * so the whole of the refusal half of the parser was unexecuted.
+	 *
+	 * That matters more in this file than in most. A service record is
+	 * the **first thing a device sends that this kernel walks**, and it
+	 * arrives before any pairing decision has been made -- so every one
+	 * of these paths is reachable from a corrupt or hostile record by an
+	 * unpaired device in range. BT-011 was an integer overflow on that
+	 * same journey.
+	 *
+	 * Each case below is malformed in exactly one way, so the refusal
+	 * that fires is the one being tested rather than whichever comes
+	 * first.
+	 */
+	{
+		struct sdp_element e;
+		const u8 *desc;
+		u32 desc_len;
+		bool boot;
+
+		/* Nothing at all. */
+		if (sdp_element_parse(real_record, 0, &e)) {
+			kputs("  sdp: an element was parsed out of zero "
+			      "bytes\n");
+			ok = false;
+		}
+
+		/* An eight-byte unsigned. Refused rather than truncated: the
+		 * low half of a 64-bit value is a number, and returning it
+		 * would be an answer rather than a refusal. */
+		{
+			static const u8 big[9] = {
+				0x0B,		/* UINT, size index 3: 8 bytes */
+				0, 0, 0, 1, 0, 0, 0, 2
+			};
+			u32 v = 0xDEAD;
+
+			if (!sdp_element_parse(big, sizeof(big), &e)) {
+				kputs("  sdp: an eight-byte UINT element did "
+				      "not parse\n");
+				ok = false;
+			} else if (sdp_uint(&e, &v)) {
+				kprintf("  sdp: an eight-byte UINT came back "
+					"as %08x, and half of a number is not "
+					"the number\n", v);
+				ok = false;
+			}
+		}
+
+		/* A record that is not a sequence. Both readers go through
+		 * `record_contents`, so both must refuse it. */
+		{
+			static const u8 not_a_record[] = { 0x09, 0x00, 0x01 };
+
+			if (sdp_hid_report_descriptor(not_a_record,
+						      sizeof(not_a_record),
+						      &desc, &desc_len)) {
+				kputs("  sdp: a bare integer was read as a "
+				      "service record\n");
+				ok = false;
+			}
+
+			if (sdp_hid_boot_device(not_a_record,
+						sizeof(not_a_record),
+						&boot)) {
+				kputs("  sdp: a bare integer answered the "
+				      "boot-device question\n");
+				ok = false;
+			}
+		}
+
+		/* A well-formed record that simply does not carry either
+		 * attribute. Not an error in the record -- an error to answer
+		 * anyway. */
+		{
+			static const u8 other[] = {
+				0x35, 0x05,
+				0x09, 0x01, 0x00,	/* attribute 0x0100 */
+				0x08, 0x2A		/* a one-byte value */
+			};
+
+			if (sdp_hid_report_descriptor(other, sizeof(other),
+						      &desc, &desc_len)) {
+				kputs("  sdp: a record with no descriptor "
+				      "list produced one\n");
+				ok = false;
+			}
+
+			if (sdp_hid_boot_device(other, sizeof(other),
+						&boot)) {
+				kputs("  sdp: a record with no boot-device "
+				      "attribute answered the question\n");
+				ok = false;
+			}
+		}
+
+		/* The attribute present and the wrong shape: a descriptor
+		 * list that is not a sequence, and a boot-device flag that is
+		 * not a boolean.
+		 *
+		 * The second is the discriminating case for
+		 * `e.type != SDP_DE_BOOL || e.data_len != 1`: a one-byte
+		 * integer has the right length and the wrong type, so with
+		 * `&&` in place of `||` it is accepted and a device's boot
+		 * support is read out of whatever that byte happens to be. */
+		{
+			static const u8 not_a_seq[] = {
+				0x35, 0x05,
+				0x09, 0x02, 0x06,
+				0x08, 0x01
+			};
+			static const u8 not_a_bool[] = {
+				0x35, 0x05,
+				0x09, 0x02, 0x0E,
+				0x08, 0x01
+			};
+
+			if (sdp_hid_report_descriptor(not_a_seq,
+						      sizeof(not_a_seq),
+						      &desc, &desc_len)) {
+				kputs("  sdp: a descriptor list that is an "
+				      "integer produced a descriptor\n");
+				ok = false;
+			}
+
+			boot = false;
+
+			if (sdp_hid_boot_device(not_a_bool,
+						sizeof(not_a_bool), &boot)) {
+				kputs("  sdp: a one-byte integer was read as "
+				      "the boot-device boolean\n");
+				ok = false;
+			}
+		}
+
+		/* Four ways an attribute list can be malformed, one each. */
+		{
+			static const u8 id_not_uint[] = {
+				0x35, 0x05,
+				0x19, 0x02, 0x06,	/* a UUID, not a UINT */
+				0x08, 0x01
+			};
+			static const u8 id_alone[] = {
+				0x35, 0x03,
+				0x09, 0x02, 0x06	/* and no value */
+			};
+			static const u8 id_cut[] = {
+				0x35, 0x01,
+				0x09			/* declares two, has none */
+			};
+			static const u8 value_cut[] = {
+				0x35, 0x04,
+				0x09, 0x02, 0x06,
+				0x09			/* declares two, has none */
+			};
+
+			const u8 *bad[4];
+			u32 badlen[4];
+			const char *why[4];
+			unsigned i;
+
+			bad[0] = id_not_uint; badlen[0] = sizeof(id_not_uint);
+			why[0] = "an identifier that is not an integer";
+			bad[1] = id_alone;    badlen[1] = sizeof(id_alone);
+			why[1] = "an identifier with no value after it";
+			bad[2] = id_cut;      badlen[2] = sizeof(id_cut);
+			why[2] = "an identifier cut short";
+			bad[3] = value_cut;   badlen[3] = sizeof(value_cut);
+			why[3] = "a value cut short";
+
+			for (i = 0; i < 4; i++) {
+				if (sdp_find_attribute(bad[i] + 2,
+						       badlen[i] - 2,
+						       0x0206, &e)) {
+					kprintf("  sdp: %s was walked past "
+						"rather than refused\n",
+						why[i]);
+					ok = false;
+				}
+			}
+
+			/* **And the same list searched for attribute zero.**
+			 *
+			 * `sdp_uint` refuses a non-integer without writing
+			 * its output, so a caller that ignored the refusal
+			 * would be left with whatever it had -- and
+			 * `sdp_find_attribute` initialises that to nought.
+			 * Searching for 0x0206 therefore cannot tell the
+			 * refusal from a mismatch, which is why the case
+			 * above passed against a `sdp_uint` that accepted
+			 * everything. Searching for **zero** can: the
+			 * accepted-everything version reports that a UUID is
+			 * attribute 0 and hands back the element after it. */
+			if (sdp_find_attribute(id_not_uint + 2,
+					       sizeof(id_not_uint) - 2,
+					       0x0000, &e)) {
+				kputs("  sdp: a UUID standing where an "
+				      "identifier belongs was read as "
+				      "attribute zero\n");
+				ok = false;
+			}
+		}
+
+		/* --- a descriptor list that yields nothing -----------------
+		 *
+		 * Both of these return false, and both had been reached by
+		 * nothing. Returning true instead hands the caller a `desc`
+		 * pointer that was never assigned -- an uninitialised pointer
+		 * into a HID parser, from a record an unpaired device sent.
+		 */
+		{
+			static const u8 entry_cut[] = {
+				0x35, 0x06,
+				0x09, 0x02, 0x06,
+				0x35, 0x01,		/* a list of one byte */
+				0x35			/* which is half an element */
+			};
+			static const u8 no_report[] = {
+				0x35, 0x0D,
+				0x09, 0x02, 0x06,
+				0x35, 0x08,		/* the list */
+				  0x35, 0x06,		/* one entry */
+				    0x08, 0x23,		/* not the report type */
+				    0x25, 0x02, 0xA1, 0xA2
+			};
+
+			desc = 0;
+			desc_len = 0;
+
+			if (sdp_hid_report_descriptor(entry_cut,
+						      sizeof(entry_cut),
+						      &desc, &desc_len)) {
+				kputs("  sdp: a descriptor list holding half "
+				      "an element produced a descriptor\n");
+				ok = false;
+			}
+
+			if (sdp_hid_report_descriptor(no_report,
+						      sizeof(no_report),
+						      &desc, &desc_len)) {
+				kputs("  sdp: a list with no report "
+				      "descriptor in it produced one\n");
+				ok = false;
+			}
+
+			if (desc || desc_len) {
+				kputs("  sdp: a refused descriptor list left "
+				      "a pointer behind for the caller to "
+				      "follow\n");
+				ok = false;
+			}
+		}
+
+		/* A descriptor list whose **first** entry is not a report
+		 * descriptor.
+		 *
+		 * More than one entry is legal -- a device may publish a
+		 * physical descriptor too -- so the type is checked rather
+		 * than the first entry taken. With `&&` in place of `||` in
+		 * that check, the type is never compared at all and the first
+		 * entry wins, whatever it is.
+		 */
+		{
+			static const u8 two_kinds[] = {
+				0x35, 0x15,		/* record: 21 bytes */
+				0x09, 0x02, 0x06,	/* attribute 0x0206 */
+				0x35, 0x10,		/* the list: 16 bytes */
+				  0x35, 0x06,		/* entry: 6 bytes */
+				    0x08, 0x23,		/* not the report type */
+				    0x25, 0x02, 0xA1, 0xA2,
+				  0x35, 0x06,
+				    0x08, 0x22,		/* the report type */
+				    0x25, 0x02, 0xB1, 0xB2
+			};
+
+			desc = 0;
+			desc_len = 0;
+
+			if (!sdp_hid_report_descriptor(two_kinds,
+						       sizeof(two_kinds),
+						       &desc, &desc_len)) {
+				kputs("  sdp: a list whose second entry is "
+				      "the report descriptor produced "
+				      "none\n");
+				ok = false;
+			} else if (desc_len != 2 || desc[0] != 0xB1) {
+				kprintf("  sdp: the descriptor came back %u "
+					"bytes starting %02x, expected 2 "
+					"starting b1 -- a1 is the entry that "
+					"is not a report descriptor\n",
+					desc_len, desc[0]);
+				ok = false;
+			}
+		}
+	}
+
 	return ok;
 }

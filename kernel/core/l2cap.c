@@ -1456,6 +1456,86 @@ bool l2cap_self_test(void)
 			      "counted\n");
 			ok = false;
 		}
+
+		/* And a fragment carrying **more** than the PDU it declares.
+		 *
+		 * Two L2CAP PDUs genuinely may share one ACL fragment, so
+		 * this is not malformed in the way the case above is -- but
+		 * splitting here would hand the caller one and drop the
+		 * other, so both are refused. Nothing had fed one, and
+		 * reporting it complete hands the caller a buffer holding a
+		 * PDU and a bit of the next. */
+		{
+			u8 two[12];
+
+			bt_put_le16(two, 4);		/* declares four */
+			bt_put_le16(two + 2, 0x0041);
+			for (i = L2CAP_HEADER; i < sizeof(two); i++)
+				two[i] = (u8)i;		/* and carries eight */
+
+			kmemset(&z, 0, sizeof(z));
+			l2cap_reassembly_reset(&z);
+
+			if (l2cap_acl_feed(&z, 0x000C, 2, two, sizeof(two))) {
+				kputs("  l2cap: a fragment carrying more "
+				      "than its PDU declared was reported "
+				      "complete\n");
+				ok = false;
+			}
+
+			if (!z.oversized) {
+				kputs("  l2cap: a fragment longer than its "
+				      "own PDU was refused and not "
+				      "counted\n");
+				ok = false;
+			}
+		}
+
+		/* A continuation arriving after a PDU that is already whole.
+		 *
+		 * The finished PDU is cleared at the top of `l2cap_acl_feed`
+		 * rather than by the caller, so by the time the continuation
+		 * is looked at there is nothing to continue and it is an
+		 * orphan. Without that clearing it would be **appended to the
+		 * completed PDU**, and the two are told apart only by which
+		 * counter moves -- both refuse, so a test on the return value
+		 * alone cannot see the difference. */
+		{
+			u8 whole[8];
+
+			bt_put_le16(whole, 4);
+			bt_put_le16(whole + 2, 0x0041);
+			for (i = L2CAP_HEADER; i < sizeof(whole); i++)
+				whole[i] = (u8)i;
+
+			kmemset(&z, 0, sizeof(z));
+			l2cap_reassembly_reset(&z);
+
+			if (!l2cap_acl_feed(&z, 0x000C, 2, whole,
+					    sizeof(whole))) {
+				kputs("  l2cap: a whole PDU was not "
+				      "completed\n");
+				ok = false;
+			}
+
+			if (l2cap_acl_feed(&z, 0x000C, ACL_PB_CONTINUATION,
+					   whole, sizeof(whole))) {
+				kputs("  l2cap: a continuation after a "
+				      "finished PDU was reported complete\n");
+				ok = false;
+			}
+
+			if (z.orphans != 1 || z.oversized) {
+				kprintf("  l2cap: a continuation after a "
+					"finished PDU counted %u orphans and "
+					"%u oversized, expected 1 and 0 -- "
+					"oversized means it was appended to "
+					"the PDU that had already finished\n",
+					(unsigned)z.orphans,
+					(unsigned)z.oversized);
+				ok = false;
+			}
+		}
 	}
 
 	/* The restart counter, which is a diagnostic and therefore has to be
@@ -1507,6 +1587,180 @@ bool l2cap_self_test(void)
 				"counted %u restarts, expected 1\n",
 				(unsigned)z.restarts);
 			ok = false;
+		}
+	}
+
+	/* --- the three replies, and the buffer each one needs ------------
+	 *
+	 * `l2cap_channel_input` builds three different replies and guards
+	 * each with an `outmax` check that every test above passes a 64-byte
+	 * buffer to. Same shape as the four in `bt_pair.c` and the two in
+	 * `bt_stack.c`: with the guard one byte out, either a legal exchange
+	 * is refused or a reply is written past the end of what the caller
+	 * offered.
+	 *
+	 * A fresh channel for each attempt, because the state moves before
+	 * the guard is reached -- which is itself worth knowing and is why
+	 * a refused reply is not a retryable one.
+	 */
+	{
+		struct l2cap_channel ch;
+		u8 msg[32];
+		u8 tight[20];
+		u8 body[8];
+		u32 m;
+		unsigned i;
+		unsigned k;
+
+		/* Their successful Connection Response, which draws a
+		 * twelve-byte Configure Request. */
+		bt_put_le16(body, 0x0041);		/* their CID */
+		bt_put_le16(body + 2, 0x0040);		/* ours, echoed */
+		bt_put_le16(body + 4, L2CAP_CONN_SUCCESS);
+		bt_put_le16(body + 6, 0);
+
+		for (k = 0; k < 2; k++) {
+			u32 room = k ? 12u : 11u;
+
+			l2cap_channel_init(&ch, L2CAP_PSM_HID_CONTROL, 0x0040);
+			l2cap_channel_start(&ch, msg, 0x01);
+
+			m = l2cap_signal_build(msg,
+					       L2CAP_SIG_CONNECT_RESPONSE,
+					       0x01, body, 8);
+
+			kmemset(tight, 0xE1, sizeof(tight));
+			m = l2cap_channel_input(&ch, msg, m, tight, room);
+
+			if (k && m != 12) {
+				kprintf("  l2cap: a Configure Request drew "
+					"%u bytes from a buffer of exactly "
+					"the 12 it needs\n", m);
+				ok = false;
+			}
+
+			if (!k && m) {
+				kprintf("  l2cap: a Configure Request of %u "
+					"bytes went into an eleven-byte "
+					"buffer\n", m);
+				ok = false;
+			}
+
+			for (i = (unsigned)room; i < sizeof(tight); i++) {
+				if (tight[i] != 0xE1) {
+					kprintf("  l2cap: byte %u past a "
+						"%u-byte buffer was "
+						"overwritten\n", i, room);
+					ok = false;
+					break;
+				}
+			}
+		}
+
+		/* Their Configure Request, which draws a ten-byte Configure
+		 * Response. The channel has to be past the connection for it
+		 * to be answered, so each attempt walks that far first. */
+		for (k = 0; k < 2; k++) {
+			u32 room = k ? 10u : 9u;
+
+			l2cap_channel_init(&ch, L2CAP_PSM_HID_CONTROL, 0x0040);
+			l2cap_channel_start(&ch, msg, 0x01);
+
+			bt_put_le16(body, 0x0041);
+			bt_put_le16(body + 2, 0x0040);
+			bt_put_le16(body + 4, L2CAP_CONN_SUCCESS);
+			bt_put_le16(body + 6, 0);
+			m = l2cap_signal_build(msg,
+					       L2CAP_SIG_CONNECT_RESPONSE,
+					       0x01, body, 8);
+			l2cap_channel_input(&ch, msg, m, out, sizeof(out));
+
+			bt_put_le16(body, 0x0040);	/* the CID they mean */
+			bt_put_le16(body + 2, 0);	/* no continuation */
+			body[4] = L2CAP_CONF_OPT_MTU;
+			body[5] = 2;
+			bt_put_le16(body + 6, 512);
+			m = l2cap_signal_build(msg,
+					       L2CAP_SIG_CONFIG_REQUEST,
+					       0x20, body, 8);
+
+			kmemset(tight, 0xE1, sizeof(tight));
+			m = l2cap_channel_input(&ch, msg, m, tight, room);
+
+			if (k && m != 10) {
+				kprintf("  l2cap: a Configure Response drew "
+					"%u bytes from a buffer of exactly "
+					"the 10 it needs\n", m);
+				ok = false;
+			}
+
+			if (!k && m) {
+				kprintf("  l2cap: a Configure Response of %u "
+					"bytes went into a nine-byte "
+					"buffer\n", m);
+				ok = false;
+			}
+
+			for (i = (unsigned)room; i < sizeof(tight); i++) {
+				if (tight[i] != 0xE1) {
+					kprintf("  l2cap: byte %u past a "
+						"%u-byte buffer was "
+						"overwritten\n", i, room);
+					ok = false;
+					break;
+				}
+			}
+		}
+
+		/* And their Disconnection Request, which draws an eight-byte
+		 * Disconnection Response. */
+		for (k = 0; k < 2; k++) {
+			u32 room = k ? 8u : 7u;
+
+			l2cap_channel_init(&ch, L2CAP_PSM_HID_CONTROL, 0x0040);
+			l2cap_channel_start(&ch, msg, 0x01);
+
+			bt_put_le16(body, 0x0041);
+			bt_put_le16(body + 2, 0x0040);
+			bt_put_le16(body + 4, L2CAP_CONN_SUCCESS);
+			bt_put_le16(body + 6, 0);
+			m = l2cap_signal_build(msg,
+					       L2CAP_SIG_CONNECT_RESPONSE,
+					       0x01, body, 8);
+			l2cap_channel_input(&ch, msg, m, out, sizeof(out));
+
+			bt_put_le16(body, 0x0040);	/* ours */
+			bt_put_le16(body + 2, 0x0041);	/* theirs */
+			m = l2cap_signal_build(msg,
+					       L2CAP_SIG_DISCONNECT_REQUEST,
+					       0x30, body, 4);
+
+			kmemset(tight, 0xE1, sizeof(tight));
+			m = l2cap_channel_input(&ch, msg, m, tight, room);
+
+			if (k && m != 8) {
+				kprintf("  l2cap: a Disconnection Response "
+					"drew %u bytes from a buffer of "
+					"exactly the 8 it needs\n", m);
+				ok = false;
+			}
+
+			if (!k && m) {
+				kprintf("  l2cap: a Disconnection Response "
+					"of %u bytes went into a seven-byte "
+					"buffer\n", m);
+				ok = false;
+			}
+
+			for (i = (unsigned)room; i < sizeof(tight); i++) {
+				if (tight[i] != 0xE1) {
+					kprintf("  l2cap: byte %u past a "
+						"%u-byte buffer was "
+						"overwritten\n", i, room);
+					ok = false;
+					break;
+				}
+			}
 		}
 	}
 

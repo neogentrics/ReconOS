@@ -1165,6 +1165,30 @@ bool bt_hci_self_test(void)
 			ok = false;
 		}
 
+		/* **And a budget of none means none.**
+		 *
+		 * `for (tries = 0; tries < budget; tries++)` as `<=` polls
+		 * once when told not to poll at all. Against a silent
+		 * controller that is invisible, which is why the case above
+		 * could not see it -- the answer is *no* either way. With an
+		 * answer waiting, one poll is the difference between a
+		 * caller that asked not to block and a caller that did. */
+		fake_reset(&fake);
+		fake_queue_complete(&fake, HCI_OP_RESET, 0);
+		bt_hci_init(&hci, &t);
+
+		if (bt_hci_command(&hci, HCI_OP_RESET, 0, 0, &st, 0)) {
+			kputs("  bluetooth: a budget of zero polled the "
+			      "controller anyway and took its answer\n");
+			ok = false;
+		}
+
+		if (hci.events_seen) {
+			kprintf("  bluetooth: a budget of zero read %u "
+				"events\n", (unsigned)hci.events_seen);
+			ok = false;
+		}
+
 		if (hci.commands_sent != 1) {
 			kprintf("  bluetooth: %llu commands sent to a silent "
 				"controller, expected 1 -- the command goes "

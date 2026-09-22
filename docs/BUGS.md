@@ -267,6 +267,92 @@ checks the number now too.*
 
 ## Fixed
 
+### BT-018 — Every refusal in the SDP parser, and none of them ever executed
+
+- **Found in** `bluetooth` on 21 September 2026 by
+  `scripts/mutate-bluetooth.py`, which turned each of the eighteen
+  `return false` paths in `sdp.c` into `return true` and found that **not one
+  of them changed any result.** Every fixture in that file was a well-formed
+  record, so the refusal half of the parser had never run.
+- **Why it matters more here than in the other eight files.** A service record
+  is the **first thing a device sends that this kernel walks**, and it arrives
+  before any pairing decision has been made. Every one of those paths is
+  reachable from a corrupt or hostile record by an unpaired device in range.
+  BT-011 was an integer overflow on the same journey.
+- **Two of them hand back a pointer that was never assigned.** A descriptor
+  list holding half an element, and a list with no report descriptor in it,
+  both `return false` without touching `*desc` — so accepting instead gives
+  the caller an uninitialised pointer and a length, straight into
+  `hid_report.c`.
+- **Fixed in** `bluetooth` with eleven cases, each malformed in exactly one
+  way so that the refusal which fires is the one being tested: a record that
+  is not a sequence, an attribute list whose identifier is a UUID, an
+  identifier with no value after it, an identifier cut short, a value cut
+  short, an eight-byte integer, a descriptor list that is an integer, a
+  descriptor list holding half an element, a list with no report descriptor,
+  and a boot-device flag that is a one-byte integer.
+- **That last one is the discriminating case**, and the reason it is written
+  that way: `e.type != SDP_DE_BOOL || e.data_len != 1` refuses on either
+  count, and a one-byte integer has the **right length and the wrong type**.
+  Anything else satisfies the check with `&&` in place of `||`, and a device's
+  boot-protocol support would be read out of whatever that byte holds.
+- **And the first version of the UUID case could not fail.** `sdp_uint`
+  refuses a non-integer *without writing its output*, and
+  `sdp_find_attribute` initialises that output to nought — so a version that
+  accepted everything still reported the identifier as attribute **0**, and a
+  search for `0x0206` got the same answer either way. It searches for
+  attribute **zero** now, which the accepting version matches and the correct
+  one does not.
+
+  Found by applying the mutation by hand after reasoning had said the case
+  should already have caught it.
+
+### BT-019 — Two array bounds one step from writing past the end, and an overflow that forged the evidence
+
+- **Found in** `bluetooth` on 21 September 2026 by
+  `scripts/mutate-bluetooth.py`, moving each of `hid_report.c`'s two capacity
+  checks by one.
+- **Was** `local.usages` and `info.fields` each hold `HID_MAX_FIELDS`
+  entries — 32 — and each is guarded by a single comparison. Moved by one,
+  both write the thirty-third entry past the end of the array. Neither
+  comparison was tested at its boundary, because no descriptor here had more
+  than a handful of usages.
+
+  **A descriptor with more than 32 usages is not exotic.** A keyboard's usage
+  list runs past a hundred.
+
+  The usage array is followed in its structure by the count that bounds it.
+- **And the first test for the field-map bound could not fail**, which is the
+  part worth keeping.
+
+  `info.fields` is followed by `field_count` and `fields_truncated` — the two
+  values that report an overflow. The test used one-bit fields, so the
+  thirty-third field written one past the end had `bit_offset` 32 and
+  `bit_size` 1, which writes `field_count = 32` and `fields_truncated = true`:
+  **the same two answers the correct code gives.** The assertion checked
+  exactly those values and passed against the broken parser.
+
+  *An overflow that reaches the counter can forge the evidence that it did not
+  happen.*
+- **Fixed in** `bluetooth`. The usage case offers 33 usages against one field,
+  so only the usage list can truncate; the field case uses a usage *range* and
+  eight-bit fields, so only the field array can truncate and the clobbered
+  count would be 256 — a number no descriptor in the suite could produce.
+- **Alongside them**, three more in the same file that nothing had reached: a
+  32-bit field, which is the widest `hid_field_extract` returns and was
+  therefore the one nothing tried; a long item ending flush with the
+  descriptor, and one cut off before its own tag byte; and the bit after the
+  last button, because every decode case used a report whose padding was zero,
+  so a loop reading one bit too many would have ORed a padding bit into the
+  button mask with nothing to show for it.
+- **What remains is read rather than counted.** Twenty mutations survive the
+  whole suite, and `docs/audits/bt-mutation-notes.md` gives every one of them
+  a verdict — equivalent, defensive against a caller that cannot exist,
+  unreachable behind a guard above, or, in one case, genuinely undefined and
+  unobservable on this target. One is recorded as real and currently harmless:
+  `hid_report.c:432` reads one entry past the last stored field, and the
+  structure being zeroed is the only reason that costs nothing.
+
 ### BT-015 — The one function whose output is another bug's evidence had never been called
 
 - **Found in** `bluetooth` at `61747d6`, 21 September 2026, by

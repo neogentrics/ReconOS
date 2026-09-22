@@ -2147,3 +2147,74 @@ mechanism. Nothing on this branch is waiting on anything else.
 
 76 self-tests pass, none reporting FAIL, on x86_64 and aarch64 at one and two
 processors, `check-portable` clean, at kernel 0.5.4.
+
+---
+
+### 21 September 2026 (third) — bluetooth → kernel
+
+**The survivor list is read.** Six passes, and the last one is the number that
+matters:
+
+| pass | mutants | killed | compiler | survived |
+|---|---|---|---|---|
+| 1 | 333 | 198 | 26 | **109** |
+| 2 | 345 | 237 | 26 | **82** |
+| 3 | 345 | 267 | 26 | **52** |
+| 4 | 345 | 288 | 26 | **31** |
+| 5 | 345 | 297 | 26 | **22** |
+| 6 | 345 | 299 | 26 | **20** |
+
+`bt_hid.c`, `bt_mouse.c` and `bt_stack.c` are at zero. The twenty that remain
+each have a line in `docs/audits/bt-mutation-notes.md` saying which of four
+things they are — equivalent, defensive against a caller that cannot exist,
+unreachable behind a guard above, or undefined and unobservable here — with
+**one** recorded as real and currently harmless. The rule that file states is
+that an entry with no line is an entry nobody has read yet, which is what the
+whole list was.
+
+#### The two worth your time are both tests of mine that could not fail
+
+**An overflow that reaches the counter can forge the evidence that it did not
+happen.** `info.fields` is followed in its structure by `field_count` and
+`fields_truncated` — the two values that report an overflow. My first test for
+that bound used one-bit fields, so the thirty-third field written one past the
+end had `bit_offset` 32 and `bit_size` 1, which writes `field_count = 32` and
+`fields_truncated = true`: **the same answers the correct code gives.** The
+assertion checked exactly those two and passed against the broken parser.
+Eight-bit fields now, so the clobbered count is 256.
+
+**A refusal that does not write its output cannot be told from a mismatch.**
+`sdp_uint` refuses a non-integer without touching `*out`, and
+`sdp_find_attribute` initialises that to nought — so a version accepting
+everything still reports a UUID as attribute **0**, and searching for `0x0206`
+gets the same answer either way. It searches for attribute zero now.
+
+Both were found by applying the mutation **by hand** after reasoning had said
+they should already have been caught. Reasoning about why a test should have
+worked is not a substitute for running it broken, and I had two in a row.
+
+#### And one finding that is about the whole file rather than a line
+
+**Eighteen `return false` paths in `sdp.c`, and not one had ever executed.**
+Every fixture there was a well-formed record. That matters more in that file
+than anywhere else on this branch: a service record is the first thing a
+device sends that this kernel *walks*, and it arrives before any pairing
+decision — so all eighteen are reachable from a corrupt record by an unpaired
+device in range. Two of them returned an **unassigned `desc` pointer** into
+`hid_report.c`. BT-018.
+
+Filed: BT-015 the attach path, BT-016 `get_be32`, BT-017 the boundary class,
+BT-018 the SDP refusals, BT-019 the two array bounds. Nineteen `BT-` entries
+now, and **none of them has a GitHub issue** — creating nineteen on the public
+tracker is not something I will do unasked.
+
+#### Still yours, unchanged
+
+KF-248 with KF-252 and KF-256 as one piece of work, KF-249, and the firmware
+mechanism. **The tool is not Bluetooth-specific in anything but its file
+list** — pointing it at `xhci.c` or `usb_hid.c` is two lines, and on the
+evidence of `bt_hci_attach` and GX-010 the question worth asking first is
+which function in your layer is wired in and called by no test.
+
+76 self-tests pass, none reporting FAIL, on x86_64 and aarch64 at one and two
+processors, `check-portable` clean, at kernel 0.5.4.

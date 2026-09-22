@@ -1837,5 +1837,306 @@ bool hid_report_self_test(void)
 		ok = false;
 	}
 
+	/* --- the two arrays, at exactly the size they are ----------------
+	 *
+	 * Both `local.usages` and `info.fields` hold `HID_MAX_FIELDS`
+	 * entries, and both are guarded by a comparison that a mutation run
+	 * moved by one with nothing noticing. **Moved by one they write past
+	 * the end of the array**, which is the same class as BT-006 and
+	 * BT-007 and, like those, fails nowhere near where it happened: the
+	 * usage array is followed in its struct by the count that bounds it.
+	 *
+	 * A descriptor with more usages than the array holds is not exotic.
+	 * A keyboard's usage list is over a hundred entries.
+	 *
+	 * The two are separated deliberately -- one descriptor overflowing
+	 * both would leave it unclear which guard the assertion was about.
+	 */
+	{
+		static u8 many[128];
+		unsigned k, at = 0;
+
+		/* Thirty-three usages against thirty-two slots, with a single
+		 * field, so only the usage list can truncate. */
+		many[at++] = 0x05; many[at++] = 0x09;	/* Page (Button) */
+
+		for (k = 0; k < HID_MAX_FIELDS + 1; k++) {
+			many[at++] = 0x09;		/* Usage (k + 1) */
+			many[at++] = (u8)(k + 1);
+		}
+
+		many[at++] = 0x95; many[at++] = 0x01;	/* Report Count 1 */
+		many[at++] = 0x75; many[at++] = 0x01;	/* Report Size 1 */
+		many[at++] = 0x81; many[at++] = 0x02;	/* Input */
+
+		if (!hid_report_parse(many, at, &info)) {
+			kputs("  hidrep: a descriptor with a long usage list "
+			      "was refused outright\n");
+			ok = false;
+		} else if (!info.fields_truncated) {
+			kprintf("  hidrep: %u usages against %u slots was not "
+				"reported as truncated, so the thirty-third "
+				"went somewhere\n",
+				(unsigned)HID_MAX_FIELDS + 1u,
+				(unsigned)HID_MAX_FIELDS);
+			ok = false;
+		}
+
+		/* And thirty-three fields against thirty-two, from a usage
+		 * *range* rather than a list, so this time only the field
+		 * array can truncate.
+		 *
+		 * **The report size is eight rather than one, and that is the
+		 * whole point of this case.**
+		 *
+		 * `fields` is followed in its struct by `field_count` and
+		 * `fields_truncated`, so a thirty-third field written one
+		 * past the end lands on exactly the two values that report
+		 * the overflow. With one-bit fields the thirty-third field's
+		 * `bit_offset` is 32 and its `bit_size` is 1 -- which writes
+		 * `field_count = 32` and `fields_truncated = true`, the same
+		 * answers the correct code gives. **The overflow forges the
+		 * evidence that it did not happen**, and the first version of
+		 * this test asserted exactly those two values and passed
+		 * against the broken code.
+		 *
+		 * At eight bits the thirty-third offset is 256, so the
+		 * clobbered `field_count` is a number no descriptor here
+		 * could produce and the check below can see it. */
+		at = 0;
+		many[at++] = 0x05; many[at++] = 0x09;
+		many[at++] = 0x19; many[at++] = 0x01;	/* Usage Minimum 1 */
+		many[at++] = 0x29;
+		many[at++] = (u8)(HID_MAX_FIELDS + 1);	/* Usage Maximum */
+		many[at++] = 0x95;
+		many[at++] = (u8)(HID_MAX_FIELDS + 1);	/* Report Count */
+		many[at++] = 0x75; many[at++] = 0x08;	/* Report Size 8 */
+		many[at++] = 0x81; many[at++] = 0x02;
+
+		if (!hid_report_parse(many, at, &info)) {
+			kputs("  hidrep: a descriptor declaring more fields "
+			      "than the map holds was refused outright\n");
+			ok = false;
+		} else if (!info.fields_truncated) {
+			kprintf("  hidrep: %u fields against %u slots was not "
+				"reported as truncated\n",
+				(unsigned)HID_MAX_FIELDS + 1u,
+				(unsigned)HID_MAX_FIELDS);
+			ok = false;
+		} else if (info.field_count != HID_MAX_FIELDS) {
+			kprintf("  hidrep: the map holds %u fields and there "
+				"is room for %u -- a count that is neither is "
+				"a count something else wrote\n",
+				info.field_count, (unsigned)HID_MAX_FIELDS);
+			ok = false;
+		}
+	}
+
+	/* --- a usage list that runs out before the fields do -------------
+	 *
+	 * Two ways to ask for the usage of field `n`: a list, or a minimum
+	 * and a maximum. Both refuse when `n` is past the end, and the
+	 * caller withholds the whole map rather than inventing a usage --
+	 * because a field with the wrong usage is not a missing field, it is
+	 * a mouse whose buttons are somewhere else.
+	 *
+	 * Both refusals survived a mutation run. The real DualShock record
+	 * reaches the withholding, but with **far** fewer usages than
+	 * fields, so it never sits on the boundary: `n == usage_count` is
+	 * the only value where `<` and `<=` disagree, and no descriptor here
+	 * had exactly one field more than it had usages.
+	 */
+	{
+		static const u8 short_list[] = {
+			0xA1, 0x01,
+			0x05, 0x09,		/* Usage Page (Button) */
+			0x09, 0x01,		/* three usages */
+			0x09, 0x02,
+			0x09, 0x03,
+			0x95, 0x04,		/* and four fields */
+			0x75, 0x01,
+			0x81, 0x02,
+			0xC0
+		};
+		static const u8 short_range[] = {
+			0xA1, 0x01,
+			0x05, 0x09,
+			0x19, 0x01,		/* Usage Minimum 1 */
+			0x29, 0x03,		/* Usage Maximum 3 */
+			0x95, 0x04,		/* and four fields */
+			0x75, 0x01,
+			0x81, 0x02,
+			0xC0
+		};
+
+		if (!hid_report_parse(short_list, sizeof(short_list), &info)) {
+			kputs("  hidrep: a descriptor with three usages and "
+			      "four fields was refused outright\n");
+			ok = false;
+		} else if (info.fields_usable) {
+			kputs("  hidrep: four fields were given usages from "
+			      "a list of three, so the fourth took whatever "
+			      "was past the end of it\n");
+			ok = false;
+		}
+
+		if (!hid_report_parse(short_range, sizeof(short_range),
+				      &info)) {
+			kputs("  hidrep: a descriptor with a three-wide "
+			      "usage range and four fields was refused "
+			      "outright\n");
+			ok = false;
+		} else if (info.fields_usable) {
+			kputs("  hidrep: four fields were numbered from a "
+			      "usage range of three, so the fourth got a "
+			      "usage the descriptor never named\n");
+			ok = false;
+		}
+	}
+
+	/* --- a map that was withheld, with fields in it -------------------
+	 *
+	 * `if (!info->fields_usable || !info->field_count)` refuses both an
+	 * incomplete map and an empty one. Every test that reached it had
+	 * *neither* -- so with `&&` in place of `||` a withheld map goes
+	 * straight through and a layout is built from fields the parser has
+	 * already said it does not understand.
+	 */
+	{
+		struct hid_mouse_layout m;
+
+		/* The short-usage-list descriptor above: real fields, map
+		 * withheld. Re-parsed rather than relied on, because the
+		 * block above may be edited. */
+		static const u8 withheld[] = {
+			0xA1, 0x01,
+			0x05, 0x09,
+			0x09, 0x01,
+			0x95, 0x02,		/* two fields, one usage */
+			0x75, 0x01,
+			0x81, 0x02,
+			0x05, 0x01,		/* Generic Desktop */
+			0x09, 0x30, 0x09, 0x31,	/* X and Y */
+			0x95, 0x02,
+			0x75, 0x08,
+			0x81, 0x06,
+			0xC0
+		};
+
+		if (!hid_report_parse(withheld, sizeof(withheld), &info)) {
+			kputs("  hidrep: the withheld-map descriptor was "
+			      "refused outright\n");
+			ok = false;
+		} else if (info.fields_usable) {
+			kputs("  hidrep: a descriptor with more fields than "
+			      "usages kept its map, so this case proves "
+			      "nothing\n");
+			ok = false;
+		} else if (!info.field_count) {
+			kputs("  hidrep: the withheld map has no fields in "
+			      "it, so it cannot show that a withheld map "
+			      "with fields is refused\n");
+			ok = false;
+		} else if (hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: a layout was built from a map the "
+			      "parser had already withheld\n");
+			ok = false;
+		}
+	}
+
+	/* --- a long item cut off before its own header ------------------- */
+	{
+		static const u8 cut_long[] = { 0xFE, 0x00 };
+
+		if (hid_report_parse(cut_long, sizeof(cut_long), &info)) {
+			kputs("  hidrep: a long item with no tag byte was "
+			      "parsed as a whole descriptor\n");
+			ok = false;
+		}
+	}
+
+	/* --- a long item that ends exactly where the descriptor does -----
+	 *
+	 * Two guards, `at + 3 > len` and `at + 3 + dlen > len`, and both were
+	 * only ever tested with a long item followed by more descriptor. As
+	 * `>=` they refuse a descriptor whose last item is a long one --
+	 * legal, and thrown away whole.
+	 */
+	{
+		static const u8 bare_long[]  = { 0xFE, 0x00, 0x00 };
+		static const u8 flush_long[] = { 0xFE, 0x02, 0x00, 0xAA, 0xBB };
+
+		if (!hid_report_parse(bare_long, sizeof(bare_long), &info) ||
+		    info.long_items != 1) {
+			kprintf("  hidrep: a three-byte long item with no "
+				"data was refused (%u long items)\n",
+				info.long_items);
+			ok = false;
+		}
+
+		if (!hid_report_parse(flush_long, sizeof(flush_long), &info) ||
+		    info.long_items != 1) {
+			kprintf("  hidrep: a long item ending flush with the "
+				"descriptor was refused (%u long items)\n",
+				info.long_items);
+			ok = false;
+		}
+	}
+
+	/* --- a field of the full width the result holds ------------------
+	 *
+	 * `bit_size > 32` as `>=` refuses a 32-bit field, which is the
+	 * largest one `hid_field_extract` is written to return and therefore
+	 * the one nothing tried. A high-resolution wheel or an absolute
+	 * digitiser axis is exactly that wide.
+	 */
+	{
+		static const u8 four[4] = { 0x78, 0x56, 0x34, 0x12 };
+		i32 v = 0;
+
+		if (!hid_field_extract(four, sizeof(four), 0, 32, false, &v)) {
+			kputs("  hidrep: a 32-bit field was refused, though "
+			      "32 bits is exactly what the result holds\n");
+			ok = false;
+		} else if ((u32)v != 0x12345678u) {
+			kprintf("  hidrep: a 32-bit field read as %08x, "
+				"expected 12345678\n", (u32)v);
+			ok = false;
+		}
+	}
+
+	/* --- the bit after the last button -------------------------------
+	 *
+	 * `for (i = 0; i < m->buttons_count; i++)` as `<=` reads one bit too
+	 * many and ORs it into the button mask. On a boot mouse the bit after
+	 * the three buttons is padding, so the mask gains a button nobody
+	 * pressed -- from a bit the descriptor says means nothing.
+	 *
+	 * Every decode case here used a report whose padding was zero, which
+	 * is why nothing saw it.
+	 */
+	{
+		struct hid_mouse_layout m;
+		struct hid_mouse_state d;
+		static const u8 pad_set[3] = { 0x08, 0x00, 0x00 };
+
+		if (!hid_report_parse(boot_mouse, sizeof(boot_mouse), &info) ||
+		    !hid_report_mouse_layout(&info, &m)) {
+			kputs("  hidrep: the boot mouse would not produce a "
+			      "layout for the padding case\n");
+			ok = false;
+		} else if (!hid_mouse_decode(&m, pad_set, sizeof(pad_set),
+					     &d)) {
+			kputs("  hidrep: a report with only padding set did "
+			      "not decode\n");
+			ok = false;
+		} else if (d.buttons) {
+			kprintf("  hidrep: a report with three buttons up and "
+				"the padding bit set came back with buttons "
+				"%02x\n", d.buttons);
+			ok = false;
+		}
+	}
+
 	return ok;
 }
