@@ -40,6 +40,21 @@
 #   4. A row marked **built** or **unblocked** must cite no open id -- which is
 #      the reverse-proxy fault above, and the one that costs somebody a day.
 #
+# --- And it says what it read, not only what it found ------------------------
+#
+# The network session's, after their own checker reported "19 versions named, 0
+# not released" where both numbers came from the same pattern that decided what
+# to look at. 19 of 19, or 19 of 300? A reader could not tell, and neither
+# could they until they measured: it was extracting a version from 50 of 266
+# candidate lines, correctly skipping the rest, with nothing saying so.
+#
+# **The scope was never the fault. The fault was that nothing stated it.** So
+# this prints the denominators -- rows seen, rows with a status it understands,
+# rows it skipped -- and that doubles as the independent expectation this kind
+# of check otherwise lacks: a convention change that pushes rows out of the
+# pattern shows up as the fraction moving, where a bare count of citations
+# would not move at all.
+#
 # **What it deliberately does not check:** that a blocked row cites anything at
 # all. Plenty are blocked on this role's own unbuilt work -- there is no kernel
 # entry for "no TLS" -- and a checker that demanded a citation would be answered
@@ -89,12 +104,18 @@ def entries(text):
 
 
 def rows(text):
-    """(line number, status, [cited ids]) for every table row with a status."""
+    """(line number, status, [cited ids], subject) for every table row.
+
+    Also counts what it walked past, so the caller can report a denominator
+    rather than a bare number of findings.
+    """
     out = []
+    seen = 0
 
     for n, line in enumerate(text.split("\n"), 1):
         if not line.startswith("|"):
             continue
+        seen += 1
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) < 3:
             continue
@@ -125,7 +146,7 @@ def rows(text):
         # no citation at all: it looks like the row is being checked.
         out.append((n, status, cited, cells[0]))
 
-    return out
+    return out, seen
 
 
 def main():
@@ -142,10 +163,17 @@ def main():
 
     uncited = 0
     checked = 0
+    seen = 0
+    readable = 0
 
     for board in BOARDS:
-        for n, status, cited, subject in rows(read(root, board)):
+        found, board_seen = rows(read(root, board))
+        seen += board_seen
+        for n, status, cited, subject in found:
             where = "%s:%d  %s" % (board, n, subject[:40])
+
+            if status is not None:
+                readable += 1
 
             if status is None:
                 if cited:
@@ -188,12 +216,18 @@ def main():
         return 1
 
     answered = sum(1 for v in known.values() if v[0])
-    print("board: %d citations across %d kernel entries (%d answered, %d "
-          "open), and every row agrees with them"
-          % (checked, len(known), answered, len(known) - answered))
+    print("board: every row agrees with %d kernel entries (%d answered, %d "
+          "open)" % (len(known), answered, len(known) - answered))
+    print("  read  %d table rows, %d with a status this understands; %d of "
+          "those cite an entry" % (seen, readable, checked))
     if uncited:
         print("  note  %d blocked rows cite no kernel entry -- blocked on this "
               "role's own work, which this cannot check" % uncited)
+    print("  note  the rest are headers, separators, and rows whose status is "
+          "partial, spec or not started -- none of which this can check, "
+          "because a partial row is legitimately part-blocked")
+    print("        the fraction moving is the signal that a convention "
+          "changed; the count of findings alone would not move")
     return 0
 
 
