@@ -29,6 +29,39 @@ if ! flock -n 9; then
 	exit 2
 fi
 
+# A signing key left in the tree makes every loader refuse every unsigned
+# kernel, and a whole run then measures a machine that never started. (KF-166)
+#
+# **KF-166 already named this hazard** -- the signature tests are the only jobs
+# that write into the tree every other job builds from -- and they clean up
+# after themselves. What they cannot clean up after is a person, and on
+# 20 September that person was this session: `make-signing-key.sh` was run by
+# hand while measuring stage 2's headroom, wrote `boot/src/signing_key.h`
+# unconditionally, and the next six boots died at
+#
+#   reconboot: this kernel is not signed, and this loader only runs signed kernels.
+#
+# The cost was nearly an hour, and nearly a wrong attribution: the change under
+# test was reverted and the *unmodified* loader failed identically, which is the
+# only reason it was not filed against the change.
+#
+# **The entry was not enough and the comment would not have been either.** Four
+# faults this week were written down in the file being worked in and hit anyway;
+# the ones that got caught were caught by something that ran. So this runs.
+#
+# Refused rather than cleaned up: deleting somebody's key is not this script's
+# decision, and a run that silently repaired the tree would hide the fact that
+# a previous run died without unwinding.
+if [ -f boot/src/signing_key.h ]; then
+	echo "Refusing to start: boot/src/signing_key.h is in the tree."
+	echo "  Every loader built from it refuses an unsigned kernel, so the"
+	echo "  boots below would measure machines that never started. (KF-166)"
+	echo "  The signature tests remove it on exit; one that was killed does"
+	echo "  not. Delete it and run again:"
+	echo "      rm boot/src/signing_key.h"
+	exit 2
+fi
+
 WORK=$(mktemp -d)
 
 # --- running the slow tests at the same time ----------------------------------
@@ -543,6 +576,79 @@ check_acpi() {
 	passes=$((passes + 1))
 }
 
+# Does a thread that becomes runnable actually get the processor? (KF-258)
+#
+# Two assertions, and they are separate on purpose because they fail for
+# different reasons and the difference is the whole diagnosis:
+#
+#   1. **It starts.** The probe thread is created by the boot thread on the
+#      tick before that thread goes idle, so it should first run on that same
+#      tick. KF-258 was three seconds -- quantised to the one-second idle
+#      ceiling, because the only thing that ever offered it the processor was
+#      an idle wait timing out.
+#
+#   2. **Its sleeps return.** Eight of them, 50 ms apart. A sleep that does not
+#      come back is the symptom the entry was opened for; a thread that never
+#      started would also report zero returned, which is why the first
+#      assertion is asked first and separately.
+#
+# Run on the architecture whose idle path masks its own tick. `noinit` is
+# deliberately *not* passed: the fault was visible in both conditions and the
+# one with a user program running is the one it was found in.
+check_sleep_probe() {
+	printf '%-46s' "  a new thread gets the processor"
+
+	timeout 30 qemu-system-x86_64 -m 512M -nographic -no-reboot \
+		-kernel "$X64_ELF" -append sleepprobe \
+		>"$WORK/probe.log" 2>&1
+
+	local report
+	report=$(tr -d '\r' < "$WORK/probe.log" | grep -a "started      :")
+
+	if [ -z "$report" ]; then
+		echo "FAILED -- the probe never reported at all"
+		show_failure "$(tr -d '\r' < "$WORK/probe.log")" 6
+		failures=$((failures + 1))
+		FAILED_PATHS+=("sleep probe")
+		return
+	fi
+
+	# "started : tick 333, first ran on tick 333" -- the two numbers, read by
+	# position rather than by a pattern that assumes they differ.
+	local made ran
+	made=$(echo "$report" | sed 's/.*tick \([0-9]*\),.*/\1/')
+	ran=$(echo "$report" | sed 's/.*first ran on tick \([0-9]*\).*/\1/')
+
+	# One tick of slack and no more. The probe is created and the boot thread
+	# goes idle within a few instructions, so a thread that has to wait for
+	# anything at all shows up here immediately -- the fault this is for was
+	# three hundred ticks, so a threshold of one is not a fine judgement.
+	if [ "$((ran - made))" -gt 1 ]; then
+		echo "FAILED -- made on tick $made, first ran on $ran"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("sleep probe: start")
+		return
+	fi
+
+	echo "on the tick it was made"
+	passes=$((passes + 1))
+
+	printf '%-46s' "  and its sleeps all return"
+
+	if ! tr -d '\r' < "$WORK/probe.log" |
+	     grep -qa "verdict      : every sleep returned"; then
+		echo "FAILED"
+		show_failure "$(tr -d '\r' < "$WORK/probe.log" |
+				grep -a -A 12 'Sleep probe')" 14
+		failures=$((failures + 1))
+		FAILED_PATHS+=("sleep probe: sleeps")
+		return
+	fi
+
+	echo "8 of 8"
+	passes=$((passes + 1))
+}
+
 check_power_off() {
 	printf '%-46s' "  and can turn the machine off"
 
@@ -708,6 +814,42 @@ echo "Building."
 make -C kernel ARCH=x86_64  >/dev/null || { echo "x86_64 kernel build FAILED"; exit 1; }
 make -C kernel ARCH=aarch64 >/dev/null || { echo "aarch64 kernel build FAILED"; exit 1; }
 make -C kernel check-portable >/dev/null || { echo "core/ is no longer portable"; exit 1; }
+
+# Does the version still name this tree? (KF-259, KF-260)
+#
+# Beside check-portable rather than in make-issues, and for the same reason
+# check-portable is here: both are properties of the TREE asserted on every run,
+# not events that happen when somebody files something. The fault arrives in a
+# merge resolution, where nobody stops to decide a version -- they take what
+# resolved -- so there is no moment at which a person would be asked.
+#
+# **Exit 2 does not fail the run.** It means the question could not be answered
+# -- and a check that reddened there would teach people to ignore it. It says
+# so instead, which is the one thing a check that cannot answer must do rather
+# than report a pass.
+#
+# **And on this rig it exits 2 every time, which is worth knowing before anybody
+# reads a green run as having checked this.** The matrix is launched under WSL,
+# and this tree is a git worktree whose `.git` file names a Windows path that
+# git under WSL cannot follow -- so every git command here fails, while the
+# build and the boots work perfectly. That combination has cost this project a
+# run before: matrix 54 went green against a commit nobody intended.
+#
+# So the line below reads `cannot say` on this machine, on purpose and visibly.
+# The check is real in an ordinary clone and is run from Windows git before a
+# push. **A check that did not run is not a check that passed**, and printing
+# which of the two happened is the whole of the difference.
+version_moved=$(sh scripts/check-version-moved.sh 2>&1); version_rc=$?
+if [ "$version_rc" -eq 1 ]; then
+	echo "$version_moved"
+	echo "  Refusing to start: a run that cannot say which binary it tested"
+	echo "  is a run whose green nobody can quote."
+	exit 1
+elif [ "$version_rc" -eq 2 ]; then
+	echo "  version: NOT CHECKED --$(echo "$version_moved" | head -1 | sed 's/^ *//;s/^/ /')"
+else
+	echo "$version_moved"
+fi
 
 # The two system call lists, which are duplicated on purpose and checked here
 # because nothing else can check them. A call inserted anywhere but the end of
@@ -1267,6 +1409,7 @@ echo
 echo "the machine, described"
 
 check_acpi
+check_sleep_probe
 check_power_off
 check_restart "and can restart itself" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot \
@@ -1744,6 +1887,31 @@ fi
 # way they will boot it. On an emulated xHCI controller specifically -- a stick
 # appears on USB and the firmware reaches it through its own stack, so testing
 # with an IDE drive would exercise a path the medium never takes.
+
+# Does the kernel command line reach the kernel, on BOTH loaders? (NW-013, KF-262)
+#
+# Here rather than beside the other boot tests because it is the only assertion
+# in the run that compares the two loaders against each other on ONE medium.
+# Either alone is unfalsifiable: a BIOS boot showing no command line is equally
+# well explained by a file written to the wrong path, and that explanation fails
+# in the same direction as the fault.
+printf '%-46s' "  the command line reaches both loaders"
+
+cmdl_out=$(sh scripts/cmdline-test.sh 2>&1)
+cmdl_rc=$?
+
+if [ "$cmdl_rc" -eq 0 ]; then
+	echo "$(echo "$cmdl_out" | grep -oE '[0-9]+ of [0-9]+ checks passed' | head -1)"
+	passes=$((passes + 1))
+elif [ "$cmdl_rc" -eq 2 ]; then
+	echo "skipped, a tool or OVMF is missing"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	show_failure "$cmdl_out" 14
+	failures=$((failures + 1))
+	FAILED_PATHS+=("the command line")
+fi
 
 printf '%-46s' "  the install medium boots from a USB stick"
 

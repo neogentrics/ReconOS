@@ -223,6 +223,33 @@ AREA = {
     'KF-258': 'kernel',
     'KF-259': 'build',
     'KF-260': 'build',
+    'KF-261': 'build',
+    # A bootloader fault, like KF-215, KF-216, KF-230 and KF-233.
+    'KF-262': 'startup',
+    # The other two tracks' registers, which arrived with their branches and
+    # had no line here at all. Read off their own titles, 20 September 2026.
+    #
+    # **They were invisible until today**, and not to this table -- to the
+    # bug register page, which was matching `(?:BG|KF)` and summarising 337
+    # entries out of 356 (KF-261). Deriving that pattern made these nineteen
+    # appear, and the first thing they did was fail the check that says every
+    # entry has an area. That is the intended order: a thing that starts
+    # seeing more should immediately have more to say.
+    #
+    # All ten `GX-` are `display` including the three that are really about a
+    # test that could not fail. The fault in those is in the display's
+    # verification, and somebody filtering for display work wants them; filing
+    # them under `build` would hide them from the only person looking.
+    'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
+    'GX-004': 'display', 'GX-005': 'display', 'GX-006': 'display',
+    'GX-007': 'display', 'GX-008': 'display', 'GX-009': 'display',
+    'GX-010': 'display',
+    # And the network track's, where NW-009 is the exception for the opposite
+    # reason: it is a fault in a script that files issues, and has nothing to
+    # do with a network card.
+    'NW-001': 'network', 'NW-002': 'network', 'NW-003': 'network',
+    'NW-004': 'network', 'NW-005': 'network', 'NW-006': 'network',
+    'NW-007': 'network', 'NW-008': 'network', 'NW-009': 'build',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',

@@ -249,7 +249,6 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-252** — The command ring takes whatever completion arrives, and nothing serialises it
 - **KF-256** — One failed transfer wedges the endpoint for the rest of the boot
 - **KF-257** — The handshake completes on the wire and `connect` never hears about it
-- **KF-258** — A thread that sleeps once wakes; a thread that sleeps twice does not
 - **KF-250** — The network stack failed once, on the installed-disk boot, and has not failed since
 
 ---
@@ -4699,6 +4698,63 @@ passed with the bug present, which is not a test at all.
 
 [#389](https://github.com/neogentrics/ReconOS/issues/389)
 
+> ### Measured against KF-258's fix on 20 September 2026, and the measurement failed
+>
+> **Sixty boots a side, interleaved, two kernels differing by twenty-four
+> bytes. Zero stalls on both sides. That is not a pass; it is a run with no
+> power, and the control is how you can tell.**
+>
+> ```
+>   before (pre-KF-258)   0 stalled,  60 finished,  0 neither
+>   after  (post-KF-258)  0 stalled,  60 finished,  0 neither
+> ```
+>
+> **The pre-fix kernel did not stall either**, so this entry's fault was never
+> reproduced and nothing in the run bears on whether KF-258's fix addresses it.
+>
+> The arithmetic says so and is cheap enough that it should have been done
+> *before* the machine time rather than after. At one in sixty, the chance of a
+> clean sweep with the fault entirely present is `(59/60)^N`:
+>
+> ```
+>    60 boots   36.5%      180 boots    4.9%
+>   120 boots   13.3%      240 boots    1.8%
+> ```
+>
+> Sixty a side could never have distinguished anything. **This is KF-208's
+> shape, which this entry already cites** -- *the broken kernel passes twelve
+> boots in a row, so passing is what a fix and a non-fix both produce* -- and it
+> was walked into by the session that wrote the interleaving specifically to
+> avoid a different confound. Controlling for load and forgetting power is one
+> good habit crowding out another.
+>
+> **What the run does establish:** the harness works, both binaries boot, and
+> `scripts/kf150-rate.sh` now exits 2 with the arithmetic printed when the
+> control is clean, rather than presenting `0 vs 0` as a table somebody could
+> quote.
+>
+> **The prediction remains untested and is still worth testing.** This entry
+> names its own discriminator -- *a run that shows* `ready, 0 ticks` *is a
+> machine that never got to it* -- and that is word for word what KF-258 turned
+> out to be. A resemblance that precise deserves a measurement rather than a
+> closure.
+>
+> **This cost 0.5.14, and the check I wrote two hours ago is what noticed.**
+> `scripts/kf150-rate.sh` changed and the version line had not moved, which is
+> KF-200's ruling applied by a script rather than remembered: a script is a
+> thing that runs and can be wrong, and this one ran and produced a misleading
+> table. 0.5.13 is the network branch's, taken for their merge, so this is
+> 0.5.14 -- above their number without containing it, the same wart taken for
+> the same reason as 0.5.11 and 0.5.12.
+>
+> The guard catching its own author within two hours of being written is worth
+> more than the entry it caught.
+>
+> **And if the control is still clean at 180 a side, the conclusion is that the
+> rate is wrong, not that the fix is good.** One in sixty was measured on
+> 10 September against a tree that has moved a long way since.
+
+
 - **Found:** 10 September 2026, as the part of KF-148 that fixing KF-148 did not
   account for.
 - **Cost:** none yet. It is recorded because the alternative is rediscovering it.
@@ -8315,6 +8371,215 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-262 — A command line longer than the buffer was cut in half and reported as read
+
+[#551](https://github.com/neogentrics/ReconOS/issues/551)
+
+- **Found:** 20 September 2026, by the **network session**, while answering a
+  design question I had asked them about the *other* loader. I asked what a
+  BIOS loader should say when `\reconos\cmdline` is absent. Their answer was
+  that it is four states rather than two — and that the fourth one, truncation,
+  is a state the **UEFI** loader was already getting wrong.
+
+- **Was:** `read_cmdline` in `boot/src/main.c` asked for `sizeof(cmdline_buf)
+  - 1` bytes and checked only `EFI_ERROR(s)`.
+
+  ```c
+  UINTN size = sizeof(cmdline_buf) - 1;      /* 127 */
+  s = file->Read(file, &size, cmdline_buf);
+  if (EFI_ERROR(s)) { ... }
+  cmdline_buf[size] = '\0';
+  ```
+
+  **`EFI_FILE_PROTOCOL.Read` fills the buffer and returns `EFI_SUCCESS` when
+  the file is longer than the buffer.** A short read is not an error and is
+  indistinguishable from a complete one unless the size is checked separately.
+  So any command line past 127 bytes arrived silently cut.
+
+- **Why the cut is silent all the way down, which is the part that matters.**
+  `boot_cmdline_has` matches **whole tokens** — `(*q == '\0' || *q == ' ')` —
+  so a `logport` cut to `logpo` matches nothing at all. The switch simply does
+  not happen.
+
+  **It fails closed, which is the safe direction, and it fails silently, which
+  is the direction that costs a day.** The boot then prints
+
+  ```
+  command line : recovery verbose ... logpo
+  ```
+
+  which looks like a machine that was asked for something and did it. Nothing
+  anywhere says a word was lost.
+
+- **The rule was already written down in the same file, seventy lines away.**
+  `read_initrd` does it correctly and always has: `GetInfo` for the real size,
+  read, then `want != size` and *"the initrd would not read whole"* — under a
+  comment stating the principle in as many words:
+
+  > *An initrd that was present and could not be loaded is a different fact
+  > from one that was not there, and the kernel would otherwise boot looking
+  > identical to a machine that never had one.*
+
+  Two file readers, one file, one author, seventy lines apart, and only one of
+  them applies the rule the other spells out. **Same shape as KF-261**, where
+  the comment describing the fault sat directly above the line committing it,
+  and KF-200 before that.
+
+- **Cost:** no machine is known to have hit it, because no `\reconos\cmdline`
+  in this tree has ever been near 127 bytes. It is recorded at full weight
+  anyway: the cost of a fault is not how often it has fired, and this one is
+  arriving exactly as the project starts putting real switches on real
+  machines' command lines.
+
+- **Fixed in** kernel 0.5.12. Both loaders now handle the same four states, and
+  deliberately the same, because **two loaders that disagree about one medium
+  send the next person to whichever one is quiet**:
+
+  | the file is | what happens |
+  |---|---|
+  | absent | silent. The normal case — `make-medium.sh` omits it on purpose so an `install-onto=` cannot ride in on a stick |
+  | read whole | silent **here**. The kernel prints `command line : ...` itself, and that is the better report: it says what the kernel *received* rather than what the loader believed it sent. Two announcements of one fact is how they come to disagree |
+  | too long | **loud, and nothing is passed** |
+  | short read | **loud, and nothing is passed** |
+
+- **The version skips from 0.5.4 to 0.5.11, and the gap is deliberate.** The
+  network branch published **0.5.6** at `1a6a9c4` while this branch was about to
+  publish its own. A number that names two different trees is broken in a way a
+  register cannot paper over: the *binary* prints `ReconOS kernel 0.5.6`, and two
+  machines printing the same string would be running different kernels. A branch
+  qualifier in an entry fixes the register and not the machine.
+
+  So the two sequences are **laid end to end**, which is the precedent this
+  project already set when the desktop and kernel tracks had reached different
+  numbers independently. NW-013 takes **0.5.11** and this takes **0.5.12**,
+  above the network branch's 0.5.10. 0.5.5 to 0.5.10 are never used here and are
+  named by nothing. Found by the network session before either entry was
+  published, which is the only reason it cost a rename rather than a retraction.
+
+  **Nothing rather than a prefix.** Half of `recovery logport` is a different
+  instruction from either word, and a command line the person did not write is
+  worse than no command line. The size is compared against the *directory
+  entry* rather than against what was read, because what was read is the number
+  the fault used to hide behind.
+
+- **Measured, by the network session, after this was written.** The entry above
+  said no machine is known to have hit it. That is true and it is weaker than
+  two boots differing only in the length of one file:
+
+  | `\reconos\cmdline` | what the kernel reported | the log port |
+  |---|---|---|
+  | `logport`, 7 bytes | `command line : logport` | **listening** |
+  | 130 pad + ` logport`, 138 bytes | `command line : xxxxxxxx...` | **absent** |
+
+  Nothing anywhere said the line had been cut.
+
+- **And there is partial visibility, which in the ordinary case is worse than
+  none.** The boot echoes the truncated text, so 130 identical padding
+  characters are obviously wrong — but those were an artefact of the test rather
+  than the finding. **A real over-long command line echoes as a list of
+  plausible switches with one missing off the end, and that reads as correct.**
+  In the network session's words: *a truncation you can see and misread is
+  worse than one you cannot see at all.*
+
+- **Checked by** `scripts/cmdline-test.sh`, which asserts all four states on
+  **both** loaders against one medium — and the over-long case asserts on the
+  kernel's line being **absent**, not merely on the loader complaining, because
+  a loader that truncated instead of refusing would still pass `logport` and
+  still print a warning.
+
+- **Note:** the phrase that keeps the fourth state from being forgotten is the
+  network session's: *the loader is loud when the file exists and did not
+  entirely take effect.* "Unreadable" on its own does not obviously include
+  "read fine, just not all of it", and the first version of this fix would have
+  covered only the first.
+
+### KF-261 — The register page summarised 337 of 356 entries, and the comment explaining why sat directly above the line doing it
+
+[#545](https://github.com/neogentrics/ReconOS/issues/545)
+
+[#545](https://github.com/neogentrics/ReconOS/issues/545)
+
+- **Found:** 20 September 2026, regenerating the bug register after fixing
+  KF-258. `scripts/check-readme-badges.py` said **356 bugs** and
+  `scripts/make-bug-register.py` said **337 entries** about the same file, in
+  the same minute.
+
+- **Was:** `make-bug-register.py` matched entry headings with
+  `(?:BG|KF)-\d+`. Every `GX-` entry (the graphics session's ten) and every
+  `NW-` entry (the network session's nine) was invisible to it — not filtered
+  out, not counted as "other", simply absent from every figure, chart and list
+  on a page whose own docstring says *every figure on the page comes out of
+  `docs/BUGS.md`* and *a summary that drifts from its source is worse than no
+  summary: it is a number people quote*.
+
+- **The part that earns it a number is not the pattern. It is the comment.**
+  Directly above the line, in this file, was:
+
+  > Two prefixes since 12 September 2026: `BG-` is the desktop's, `KF-` the
+  > kernel's. Naming one of them here read 178 entries out of a file holding
+  > 251 and printed "highest 178" — a count produced by the same regex that
+  > missed them, so it could not disagree with itself. See KF-200.
+
+  **KF-200 was this exact fault, in this exact line, and the fix was to add the
+  second prefix to the list.** The lesson — that a list of prefixes is the bug —
+  was written down, accurately, immediately above the list, and then two more
+  prefixes arrived and the count went quietly back to being short. A comment
+  that describes a failure mode is not a defence against it.
+
+  `make-issues.py` learned the same thing as KF-247 on 18 September and derives
+  everything from `ENTRY_ID = r'[A-Z]{2}-\d+'`. This file was not given the
+  same treatment at the same time, because nothing connected them.
+
+- **Three sites, and fixing any one of them alone does nothing useful.**
+
+  | line | what it did | what fixing it alone produced |
+  |---|---|---|
+  | `ENTRY_RE` | read the entries | nineteen entries appear, all with no area |
+  | `recorded_areas()` | read the area table out of `make-issues.py` | the areas exist and nothing can see them |
+  | the printed per-prefix tally and its cross-check | counted the headings | two rows where there are four; harmless, and so the last to be found |
+
+  The third was harmless in itself, which is exactly why it outlived the first
+  two fixes. **A hard-coded assumption is rarely in one place**, and the
+  harmless copy is the one that survives.
+
+- **Cost:** nothing shipped wrong; the register page is a view. What it cost is
+  a number. The page has been publishing "337 entries" while the README badge
+  published "356", both derived from the same file, both correct about what
+  they counted and neither saying what it counted. Two of the four tracks'
+  registers were absent from the project's own summary of its own faults.
+
+- **Fixed in** kernel 0.5.4 — `scripts/make-bug-register.py`, three sites, all derived from one
+  `ENTRY_ID`. And the guard that makes a fourth site impossible to add
+  silently: `count_check()` counts the headings three ways — what the parser
+  read, a looser pattern that wants an identifier but no separator, and a
+  pattern that assumes nothing about prefixes at all — and stops the run on any
+  disagreement, naming the entries it could not see.
+
+  **The three counts are deliberately not built from each other.** KF-187 and
+  KF-247 are both *a counter produced by the thing being counted cannot
+  disagree with it*, and a second opinion that shares the assumption under test
+  is not a second opinion. The loosest of the three would see `GFX-1` or
+  `usb-07`.
+
+- **It costs a patch, and I argued otherwise for an hour.** This changes no
+  kernel instruction, and the first version of this entry said so and declined
+  to move the number. **KF-200 already settled that**, in this register, in as
+  many words: *"nothing it touched alters a kernel instruction, and raising
+  `VERSION` rebuilds the tree the last matrix ran against. That case was real.
+  It was still the wrong case, because the change does not feel large enough is
+  the reasoning the rule exists to rule out."* It cost 0.2.2 then and it costs
+  0.5.4 now. **The same argument, refused once and made again by the session
+  that has the entry in front of it**, which is the shape of KF-261 itself.
+
+- **Note:** the nineteen entries arriving brought their own missing data with
+  them — none had a line in `make-issues.py`'s `AREA` table, so the very next
+  run refused for a different reason. That is the intended order of events: a
+  thing that starts seeing more should immediately have more to complain about.
+  Areas were read off the entries' own titles and added. Seventeen of the
+  nineteen already record a fix; the two that do not are **NW-004** and
+  **NW-005**, which is exactly what the Open list at the top of this file says,
+  so the two independent accounts of what is open now agree.
+
 ### KF-260 — A fallback that rebuilt the exact wrong number it was written to replace
 
 [#544](https://github.com/neogentrics/ReconOS/issues/544)
@@ -8369,7 +8634,7 @@ boot log.
   -- `sgdisk` missing, a table damaged by the thing under test -- are exactly
   the conditions under which somebody would be reading the output most closely.
 
-- **Status:** fixed, kernel 0.5.0.
+- **Status:** fixed, kernel 0.5.2.
 
 ### KF-259 — Six paths failed about processors that had been preempted perfectly well
 
@@ -8434,12 +8699,120 @@ boot log.
   `running, ... , idle-for-this-cpu` line and the `ready` line beside it: it
   takes the first and ignores the second, which is what it always meant.
 
-- **Status:** fixed, kernel 0.5.0. No kernel code changed -- the kernel was
+- **Status:** fixed, kernel 0.5.1. No kernel code changed -- the kernel was
   right and its reader was not.
 
 ### KF-258 — A thread that sleeps once wakes; a thread that sleeps twice does not
 
 [#534](https://github.com/neogentrics/ReconOS/issues/534)
+
+> ### Fixed, 20 September 2026 — and it was never the sleep
+>
+> **Both idle loops halted the processor before asking the scheduler whether
+> anything had become runnable.** That is the whole fault, in one sentence, and
+> every symptom above follows from it.
+>
+> `power_idle_wait` suspends the calling processor's tick for the duration of
+> the halt — on x86_64 by masking the PIT's line, which is the only source of
+> preemption the boot processor has. So while a processor is idle, *nothing can
+> take the processor away from the idle thread*. The only thing that can hand it
+> to a ready thread is the idle thread itself, asking.
+>
+> `smp.c`'s `idle_loop` asked — after the halt. That bounded its version of the
+> fault at one idle ceiling and is why it had never been noticed.
+>
+> **`main.c`'s loop was `for (;;) power_idle_wait();` and did not ask at all.**
+> The boot thread marks itself idle at the end of the boot sequence and enters
+> that loop, so on the boot processor a thread could become runnable and have
+> nobody offer it a turn.
+>
+> #### What it measured, before and after
+>
+> A probe thread is created on the tick before the boot thread goes idle, then
+> sleeps 50 ms eight times. Same binary, one line different:
+>
+> ```
+>                     created   first ran     delay
+>   before              371        672        301 ticks
+>                       394        699        305 ticks
+>                       386        685        299 ticks
+>                       366        466        100 ticks
+>   after               391        391          0
+>                       377        377          0
+>                       404        404          0
+> ```
+>
+> **The delays are quantised to the one-second idle ceiling**, and that is the
+> tell rather than a curiosity: 100, 299, 301, 305. The thread did not start
+> when it became runnable, it started when a halt timed out. A fault whose
+> magnitude is a multiple of a constant is a fault about that constant.
+>
+> With a user program running — the condition the entry was narrowed to — the
+> probe did not complete eight sleeps in thirty seconds at all. Afterwards it
+> completes them in 0.56 s, every one of them on the tick it was due.
+>
+> #### Why the narrowing above was right and the conclusion drawn from it wrong
+>
+> The entry established that `recon-init` was READY, `off_cpu`, not idle, and
+> had never been given the processor, and concluded that the next place to look
+> was the program's **lifetime** — its teardown, its stack, its timer.
+>
+> The observation was exact. The inference added something not in it: that
+> because a program was the discriminator, the program was the cause. It was
+> not. A user program is simply a thread created late, and *any* thread created
+> after the boot thread went idle would have shown the same thing — which is
+> what the probe is, and it needs no user program to reproduce. `noinit`
+> appeared to fix it only because a machine with nothing to run has nobody
+> waiting to be starved.
+>
+> **"Adding a `kprintf` to `power_idle_wait` makes it go away" was the loudest
+> clue in the entry and it was read as noise.** A print there is not a
+> perturbation of a race — it is time spent *outside* the halt, with the tick
+> unmasked, which is exactly the window a preemption needs. The instrument was
+> describing the fault and it was filed under timing sensitivity.
+>
+> #### The fix
+>
+> Ask first, halt second, in both loops:
+>
+> ```c
+> for (;;) {
+>         sched_yield();
+>         power_idle_wait();
+> }
+> ```
+>
+> `sched_yield` returns immediately when nothing else wants the processor, so
+> the cost of asking is a walk of the thread ring on a machine that was about
+> to do nothing at all.
+>
+> **This does not make the idle path preemptible**, and that limit is stated
+> rather than left to be discovered: a thread woken by an interrupt during the
+> halt still waits for the halt to end, because the halt ends on the interrupt
+> that woke it. What is fixed is the case where the thread was *already*
+> runnable and nobody looked.
+>
+> #### What it is checked by
+>
+> `scripts/verify-kernel.sh` boots with `sleepprobe` and asserts two things
+> separately, because they fail for different reasons: that the probe thread
+> first runs on the tick it was created, and that all eight of its sleeps
+> return. Removing the `sched_yield()` fails the first with `made on tick 371,
+> first ran on 672` and leaves the second green — which is the diagnosis printed
+> as a test result.
+>
+> `kernel/core/logport.c` **sleeps again.** It had been yielding since 17
+> September as a stated workaround for this entry, at the stated cost of a
+> machine that could not idle while its log port was open. `scripts/logport-test.sh`
+> passes 7 of 7 with the sleep restored, which is the fix proved in the place
+> the fault was found.
+>
+> **KF-150** — *about one boot in sixty, a user program does not finish, and
+> nothing says why* — is left open deliberately. It is the same sentence as this
+> entry and it may well be the same fault, but "may well be" is not a
+> measurement, and closing it on this evidence would be closing it on a
+> resemblance. It should be re-measured against this tree.
+
 
 > ### Narrowed, 18 September 2026, and it is not the idle path
 >
@@ -8590,9 +8963,15 @@ boot log.
   off unless asked for, and it is **not** acceptable as a general answer — the
   general answer is this entry.
 
-- **Status:** open. Reproducible in one command on any machine:
-  `qemu-system-x86_64 -kernel ... -append logport` with a network, and watch the
-  accept loop stop.
+- **Status:** fixed in kernel 0.5.3. Both idle loops ask the scheduler
+  before they halt the processor rather than after; the fault was never in
+  the sleep. The reproduction the line below described still exists and is
+  now a check: `-append sleepprobe`, asserted by
+  `scripts/verify-kernel.sh` in two separate assertions.
+
+  Was, until 20 September: *open. Reproducible in one command on any
+  machine:* `qemu-system-x86_64 -kernel ... -append logport` *with a
+  network, and watch the accept loop stop.*
 
 ### KF-257 — The handshake completes on the wire and `connect` never hears about it
 
@@ -10678,6 +11057,43 @@ program instead, which is the same fight from the other side. That one belongs i
 
 [#462](https://github.com/neogentrics/ReconOS/issues/462)
 
+> ### Corrected 20 September 2026 — this named a version that never existed
+>
+> It read **kernel 0.2.32**. That number was never set: `git log --all -S"VERSION
+> := 0.2.32" -- kernel/Makefile` returns nothing, while its neighbour 0.2.31
+> returns `a519543`. **It is 0.2.34.**
+>
+> Found by the **network session**, who built this register's own rule into a
+> check — *no entry may name a version whose tree does not contain its fix* —
+> and then refused to guess the replacement, on the grounds that *plausible is
+> the confidence that produced the fault*. Derived instead, and both sessions
+> ran the derivation independently:
+>
+> ```
+> 3e058d9  introduced KF-227, KF-228 and KF-229 -- all three, one commit
+> 3e058d9  raised VERSION from 0.2.29 to 0.2.34 in that same commit
+> KF-229   already reads 0.2.34, and is the third of the three
+> ```
+>
+> **Three consecutive fixes were given three consecutive numbers in prose while
+> the line was raised once.** KF-228's own text says *"the shared mapping, like
+> its two neighbours"*, which is the sentence that gives it away. So one number
+> covers three fixes here, and saying so is better than inventing two releases
+> to make the arithmetic look tidy.
+>
+> #### The false trail, recorded because it is convincing
+>
+> `git log -S"inode_to_read"` finds `bb6052a`, and the kernel Makefile at that
+> commit reads **0.2.27** — which would put this fix five numbers *before* the
+> 0.2.29 the entry says it was found in.
+>
+> 0.2.27 is a real release; `7ed75ca` set it and `bb6052a` merely inherited the
+> line. **The reading is right about the bytes and wrong about the question.**
+> A version read at an arbitrary commit is not a release — only a commit that
+> *changes* the line is one, and the two tracks' sequences were laid end to end
+> rather than interleaved, so an inherited number from the other track's line
+> says nothing about this one's order.
+
 - **Found in** kernel 0.2.29, on the first boot that had both a mounted volume
   and a program asking what was on it. The first-boot screen said *no volume
   this kernel can read* on a machine that had created ten directories on that
@@ -10700,7 +11116,7 @@ program instead, which is the same fight from the other side. That one belongs i
 - **And it did not arrive as a listing fault.** It arrived as EIO — see
   KF-228 — so the screen reported no volume rather than a refused listing, and
   the two sentences on it contradicted each other.
-- **Fixed in** kernel 0.2.32. One helper, `inode_to_read`, used by both: a
+- **Fixed in** kernel 0.2.34. One helper, `inode_to_read`, used by both: a
   path that is nothing but slashes resolves to `fs->root_inode` and everything
   else walks as before. One helper rather than the same special case twice, so
   that the root cannot become listable and unownable, or the reverse — and
@@ -10711,6 +11127,43 @@ program instead, which is the same fight from the other side. That one belongs i
 ### KF-228 — Every refusal from a listing reached a program as "the disk failed"
 
 [#463](https://github.com/neogentrics/ReconOS/issues/463)
+
+> ### Corrected 20 September 2026 — this named a version that never existed
+>
+> It read **kernel 0.2.33**. That number was never set: `git log --all -S"VERSION
+> := 0.2.33" -- kernel/Makefile` returns nothing, while its neighbour 0.2.31
+> returns `a519543`. **It is 0.2.34.**
+>
+> Found by the **network session**, who built this register's own rule into a
+> check — *no entry may name a version whose tree does not contain its fix* —
+> and then refused to guess the replacement, on the grounds that *plausible is
+> the confidence that produced the fault*. Derived instead, and both sessions
+> ran the derivation independently:
+>
+> ```
+> 3e058d9  introduced KF-227, KF-228 and KF-229 -- all three, one commit
+> 3e058d9  raised VERSION from 0.2.29 to 0.2.34 in that same commit
+> KF-229   already reads 0.2.34, and is the third of the three
+> ```
+>
+> **Three consecutive fixes were given three consecutive numbers in prose while
+> the line was raised once.** KF-228's own text says *"the shared mapping, like
+> its two neighbours"*, which is the sentence that gives it away. So one number
+> covers three fixes here, and saying so is better than inventing two releases
+> to make the arithmetic look tidy.
+>
+> #### The false trail, recorded because it is convincing
+>
+> `git log -S"inode_to_read"` finds `bb6052a`, and the kernel Makefile at that
+> commit reads **0.2.27** — which would put this fix five numbers *before* the
+> 0.2.29 the entry says it was found in.
+>
+> 0.2.27 is a real release; `7ed75ca` set it and `bb6052a` merely inherited the
+> line. **The reading is right about the bytes and wrong about the question.**
+> A version read at an arbitrary commit is not a release — only a commit that
+> *changes* the line is one, and the two tracks' sequences were laid end to end
+> rather than interleaved, so an inherited number from the other track's line
+> says nothing about this one's order.
 
 - **Found in** kernel 0.2.29, while finding KF-227. The screen said EIO; the
   disk was fine.
@@ -10724,7 +11177,7 @@ program instead, which is the same fight from the other side. That one belongs i
   hold, a path too deep, a volume not mounted, and a path the walk refuses —
   four different things a caller would act on differently, delivered as one
   failure that says the hardware broke.
-- **Fixed in** kernel 0.2.33. The shared mapping, like its two neighbours.
+- **Fixed in** kernel 0.2.34. The shared mapping, like its two neighbours.
 
 ### KF-229 — Five self-tests pass exactly once per volume, inside the check written to catch that
 

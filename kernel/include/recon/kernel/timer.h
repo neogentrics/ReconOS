@@ -95,6 +95,26 @@ bool timer_next_deadline(u64 *when);
  * processor that stopped its tick owes on waking. */
 u64 timer_wheel_position(void);
 
+/* --- KF-258 -------------------------------------------------------------- */
+
+/* Starts a thread that sleeps repeatedly, and arms a single report.
+ *
+ * The fault being chased is a sleep that never returns, so the thread that
+ * would describe it is the thread that has stopped. These two exist so that
+ * somebody still running can answer the one question that divides the problem
+ * in half: *did the timer's callback run?* Filed-and-never-fired is a timer
+ * fault; fired-and-still-blocked is a scheduler fault. Nothing else needs to
+ * be guessed at until that bit is known.
+ *
+ * Armed only by `sleepprobe` on the command line. */
+void timer_sleep_probe_start(void);
+
+/* Prints the report, once, some time after the probe was started. Called from
+ * the idle loop, which is the one thread guaranteed to still be running --
+ * and *after* power_idle_wait rather than inside it, because a print inside
+ * that function is known to make the fault go away. */
+void timer_sleep_probe_report(void);
+
 void timer_print_summary(void);
 bool timer_self_test(void);
 
