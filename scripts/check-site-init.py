@@ -77,7 +77,12 @@ OPENS = re.compile(r"^\s*(?:typedef\s+)?struct\s+\w*\s*\{")
 
 
 def offenders(path):
+    """Return (bad declarations, how many `struct http_site` lines were seen).
+
+    The second number is the point of this function's shape. See `main`.
+    """
     found = []
+    seen = 0
     inside = 0
 
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -90,14 +95,18 @@ def offenders(path):
                 continue
             if inside:
                 continue
+            if "struct http_site" in line:
+                seen += 1
             match = DECL.match(line)
             if match:
                 found.append((number, match.group(1), line.rstrip()))
-    return found
+    return found, seen
 
 
 def main():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    files = 0
+    sites = 0
     bad = 0
 
     for root in ROOTS:
@@ -106,7 +115,10 @@ def main():
                 if not name.endswith((".c", ".h")):
                     continue
                 path = os.path.join(where, name)
-                for number, which, text in offenders(path):
+                files += 1
+                bad_here, seen_here = offenders(path)
+                sites += seen_here
+                for number, which, text in bad_here:
                     shown = os.path.relpath(path, here).replace(os.sep, "/")
                     print("%s:%d: `%s` is on the stack with no initializer"
                           % (shown, number, which))
@@ -119,6 +131,34 @@ def main():
         print()
         print("%d site(s) left holding whatever the stack had." % bad)
         return 1
+
+    #
+    # --- Saying nothing was the bug ----------------------------------------
+    #
+    # This printed **nothing at all** on success and returned 0. So a run that
+    # examined every file and a run that examined none looked identical, and
+    # the second is not hypothetical: point `ROOTS` at a directory that is not
+    # there, or move `server/`, and `os.walk` yields nothing, `bad` stays zero,
+    # and this reports success having read no code.
+    #
+    # It is the worst shape of the fault the network session named, because
+    # there is not even a sentence to doubt. Theirs at least claimed something.
+    #
+    # So it says what it read. And the zero case is an **error**, not a quiet
+    # pass: this repository certainly contains `struct http_site`, so a run
+    # that finds none has failed to read the tree rather than found it clean.
+    # That is the independent expectation -- it does not come from the
+    # traversal, it comes from knowing what is in the repository.
+    #
+    if sites == 0:
+        print("read %d file(s) and found no `struct http_site` anywhere."
+              % files)
+        print("This repository has several. The check did not read the tree --")
+        print("it has not passed, it has failed to run.")
+        return 1
+
+    print("site init: %d site declarations across %d files, all initialised"
+          % (sites, files))
     return 0
 
 
